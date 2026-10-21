@@ -1,0 +1,118 @@
+// Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+
+#pragma once
+
+#include "Runtime/AssetDocumentPrimitiveProvider.h"
+
+void AppendAssetDocumentAIBlackboardPrimitiveDescriptors(
+	TArray<FAssetDocumentPrimitiveDescriptor>& OutDescriptors);
+
+FAssetDocumentPrimitiveDescriptor MakeAssetDocumentAIBlackboardEntryRemoveV2Descriptor();
+FAssetDocumentPrimitiveDescriptor MakeAssetDocumentAIBlackboardLocalKeysReorderV2Descriptor();
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBlackboardKeyTypeInspect(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBlackboardEntryReadback(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBlackboardParentReadback(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBlackboardLocalKeysReadback(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBlackboardEntryUpdateExisting(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBlackboardEntryAdd(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBlackboardEntryReplaceClass(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBlackboardEntryRemove(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+ASSETDOCUMENTAI_API FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBlackboardLocalKeysReorder(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBlackboardParentSetV2(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBlackboardKeyTypeApplyProperties(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBlackboardParentSet(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBlackboardLocalKeysReplace(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+#if WITH_DEV_AUTOMATION_TESTS
+enum class EAssetDocumentAIBlackboardTestFailurePoint : uint8
+{
+	None,
+	AfterKeyTypeAuthoredAssignment,
+	AfterParentNativeRefresh,
+	AfterLocalKeyIdRefresh,
+	ParentSetV2BeforePropertyRows,
+	ParentSetV2MissingPropertyHandle,
+	ParentSetV2BeforeSetValue,
+	ParentSetV2AfterSetValue,
+	ParentSetV2AfterPropagation,
+	ParentSetV2BeforeReadback,
+	ParentSetV2ChangedSetMismatch,
+	EntryAddBeforeStaging,
+	EntryAddAfterStaging,
+	EntryAddAfterConfiguration,
+	EntryAddBeforePublication,
+	EntryAddPublicationRejected,
+	EntryAddAfterPublication,
+	EntryAddDerivedRefresh,
+	EntryAddBeforeReadback,
+	EntryAddChangedSetMismatch,
+	EntryReplaceClassBeforeStaging,
+	EntryReplaceClassAfterStaging,
+	EntryReplaceClassAfterConfiguration,
+	EntryReplaceClassBeforePublication,
+	EntryReplaceClassPublicationRejected,
+	EntryReplaceClassAfterPublication,
+	EntryReplaceClassDerivedRefresh,
+	EntryReplaceClassBeforeReadback,
+	EntryReplaceClassChangedSetMismatch,
+	EntryRemovePublicationRejected,
+	EntryRemoveBeforeReadback,
+	EntryRemoveChangedSetMismatch,
+	LocalKeysReorderPublicationRejected,
+	LocalKeysReorderBeforeReadback,
+	LocalKeysReorderChangedSetMismatch,
+};
+
+ASSETDOCUMENTAI_API void SetAssetDocumentAIBlackboardTestFailurePoint(
+	EAssetDocumentAIBlackboardTestFailurePoint FailurePoint);
+#endif

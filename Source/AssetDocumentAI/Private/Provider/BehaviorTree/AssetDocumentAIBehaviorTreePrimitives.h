@@ -1,0 +1,127 @@
+// Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+
+#pragma once
+
+#include "Runtime/AssetDocumentHandleRegistry.h"
+#include "Runtime/AssetDocumentPrimitiveProvider.h"
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeAuthorScratch(
+	const FAssetDocumentPrimitiveInvocation&, IAssetDocumentHandleResolver&, IAssetDocumentAtomicTransaction*);
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeNodeClassInspectV2(
+	const FAssetDocumentPrimitiveInvocation&, IAssetDocumentHandleResolver&, IAssetDocumentAtomicTransaction*);
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeSelectorInventory(
+	const FAssetDocumentPrimitiveInvocation&, IAssetDocumentHandleResolver&, IAssetDocumentAtomicTransaction*);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeGraphInstall(
+ const FAssetDocumentPrimitiveInvocation& Invocation, IAssetDocumentHandleResolver& Handles,
+ IAssetDocumentAtomicTransaction* ActiveTransaction);
+TOptional<FAssetDocumentPrimitiveOutcome> RejectAssetDocumentAIBehaviorTreeGraphInstallInvocation(
+ const FAssetDocumentPrimitiveInvocation& Invocation, IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+class UBehaviorTreeGraph;
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeBlackboardReadback(
+	const FAssetDocumentPrimitiveInvocation&, IAssetDocumentHandleResolver&,
+	IAssetDocumentAtomicTransaction*);
+
+struct FAssetDocumentAIBehaviorTreeGraphLeaseView
+{
+	TUniquePtr<IAssetDocumentVerifiedHandleLease> Lease;
+	UBehaviorTreeGraph* Graph = nullptr;
+	FString LiveBehaviorTreePath;
+};
+
+void AppendAssetDocumentAIBehaviorTreePrimitiveDescriptors(
+	TArray<FAssetDocumentPrimitiveDescriptor>& OutDescriptors);
+ASSETDOCUMENTAI_API bool EnsureAssetDocumentAIBehaviorTreeEditorAuthority();
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeNodeClassInspect(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeInstanceValidateProperties(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeAuthoredGraphReadback(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeGraphCreate(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeGraphCreateDefaults(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeNodeCreateAction(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeSubnodeCreateAction(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeCommentCreateAction(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeGraphConnect(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+ASSETDOCUMENTAI_API bool AcquireAssetDocumentAIBehaviorTreeGraphLease(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	FStringView ArgumentName,
+	FAssetDocumentAIBehaviorTreeGraphLeaseView& OutLease,
+	TArray<FAssetDocumentRuntimeDiagnostic>& OutDiagnostics);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeSelectorResolve(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeRuntimeMirrorRebuild(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeBlackboardSet(
+	const FAssetDocumentPrimitiveInvocation& Invocation,
+	IAssetDocumentHandleResolver& Handles,
+	IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeDecoratorRefresh(
+ const FAssetDocumentPrimitiveInvocation& Invocation,
+ IAssetDocumentHandleResolver& Handles,
+ IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeSelectorBatchResolve(
+ const FAssetDocumentPrimitiveInvocation&, IAssetDocumentHandleResolver&, IAssetDocumentAtomicTransaction*);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeValueOrKeyRefresh(
+ const FAssetDocumentPrimitiveInvocation& Invocation,
+ IAssetDocumentHandleResolver& Handles,
+ IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+// Shared private admission preserves context -> shape -> transaction -> handle
+// before the generic invocation validator can replace the row's diagnostics.
+TOptional<FAssetDocumentPrimitiveOutcome> RejectAssetDocumentAIBehaviorTreeValueOrKeyInvocation(
+ const FAssetDocumentPrimitiveInvocation& Invocation,
+ IAssetDocumentAtomicTransaction* ActiveTransaction);
+
+FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeDecoratorEnsureInputCount(
+ const FAssetDocumentPrimitiveInvocation& Invocation,
+ IAssetDocumentHandleResolver& Handles,
+ IAssetDocumentAtomicTransaction* ActiveTransaction);

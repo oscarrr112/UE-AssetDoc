@@ -1,0 +1,12 @@
+{
+	"Description": "A rejected generic create leaves no package behind.",
+	"Class": "/Script/AssetDocumentTests.TestDataAsset",
+	"Steps": [
+		{
+			"Name": "InvalidCreate",
+			"Action": "Create",
+			"Properties": { "TestInt": "three" },
+			"ExpectFailure": "PropertyPreflight.DecodeFailed"
+		}
+	]
+}

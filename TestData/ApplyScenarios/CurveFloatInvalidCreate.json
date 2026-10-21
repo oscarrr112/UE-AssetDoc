@@ -1,0 +1,12 @@
+{
+	"Description": "A CurveFloat create with an invalid key fails before anything is created and leaves no package behind.",
+	"Class": "/Script/Engine.CurveFloat",
+	"Steps": [
+		{
+			"Name": "InvalidKeyValue",
+			"Action": "Create",
+			"Properties": { "FloatCurve": { "Keys": [ { "Time": 0.0, "Value": "high" } ] } },
+			"ExpectFailure": "CurveFloat.InvalidNumber"
+		}
+	]
+}

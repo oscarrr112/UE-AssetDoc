@@ -1,0 +1,9 @@
+# UE generated folders
+Binaries/
+Intermediate/
+
+# Migration script (not needed in repo)
+migrate_uecopilot.ps1
+
+__pycache__/
+*.pyc

@@ -1,0 +1,21 @@
+// Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Runtime/AssetDocumentPrimitiveProvider.h"
+
+TConstArrayView<FAssetDocumentPrimitiveDescriptor>
+GetAssetDocumentAIPrimitiveDescriptors();
+
+struct FAssetDocumentAIDecisionProjectionRow
+{
+	FString DecisionId;
+	EAssetDocumentPrimitiveDisposition Disposition =
+		EAssetDocumentPrimitiveDisposition::StableBlocker;
+	FString DecisionConsumerId;
+	FString StableDiagnosticCode;
+};
+
+TConstArrayView<FAssetDocumentAIDecisionProjectionRow>
+GetAssetDocumentAIDecisionProjectionRows();

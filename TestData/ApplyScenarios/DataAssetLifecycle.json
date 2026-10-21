@@ -1,0 +1,24 @@
+{
+	"Description": "Generic reflected-property lifecycle: create, update, unchanged re-apply and a rejected update that leaves the asset unchanged.",
+	"Class": "/Script/AssetDocumentTests.TestDataAsset",
+	"Steps": [
+		{
+			"Name": "Create",
+			"Action": "Create",
+			"Properties": { "TestInt": 3, "TestFloat": 1.5, "TestString": "one" },
+			"ReapplyExtract": true
+		},
+		{
+			"Name": "Update",
+			"Action": "Update",
+			"Properties": { "TestInt": 4, "TestFloat": 2.0, "bTestBool": true },
+			"ReapplyExtract": true
+		},
+		{
+			"Name": "InvalidUpdate",
+			"Action": "Update",
+			"Properties": { "TestInt": "four" },
+			"ExpectFailure": "PropertyPreflight.DecodeFailed"
+		}
+	]
+}

@@ -1,0 +1,53 @@
+{
+	"Description": "CurveFloat authored from Python only: keys with interpolation, tangent modes, tangents and weights, pre/post infinity and default value are created in one apply and updated in a second; re-applying an extract is a no-op; invalid curves leave the asset unchanged.",
+	"Class": "/Script/Engine.CurveFloat",
+	"Steps": [
+		{
+			"Name": "Create",
+			"Action": "Create",
+			"Properties": {
+				"FloatCurve": {
+					"Keys": [
+						{ "Time": 0.0, "Value": 0.1, "InterpMode": "Cubic", "TangentMode": "User", "TangentWeightMode": "None", "ArriveTangent": 0.0, "ArriveTangentWeight": 0.0, "LeaveTangent": 1.25, "LeaveTangentWeight": 0.0 },
+						{ "Time": 0.5, "Value": -2.0, "InterpMode": "Cubic", "TangentMode": "Break", "TangentWeightMode": "Both", "ArriveTangent": -0.5, "ArriveTangentWeight": 0.3, "LeaveTangent": 0.75, "LeaveTangentWeight": 0.6 },
+						{ "Time": 1.5, "Value": 3.0, "InterpMode": "Constant", "TangentMode": "Auto", "TangentWeightMode": "None", "ArriveTangent": 0.0, "ArriveTangentWeight": 0.0, "LeaveTangent": 0.0, "LeaveTangentWeight": 0.0 },
+						{ "Time": 2.0, "Value": 4.5, "InterpMode": "Linear", "TangentMode": "Auto", "TangentWeightMode": "None", "ArriveTangent": 0.0, "ArriveTangentWeight": 0.0, "LeaveTangent": 0.0, "LeaveTangentWeight": 0.0 }
+					],
+					"PreInfinityExtrap": "Cycle",
+					"PostInfinityExtrap": "Oscillate",
+					"DefaultValue": 7.5
+				},
+				"bIsEventCurve": true
+			},
+			"ReapplyExtract": true
+		},
+		{
+			"Name": "UpdateKeys",
+			"Action": "Update",
+			"Properties": {
+				"FloatCurve": {
+					"Keys": [
+						{ "Time": -1.0, "Value": 10.0, "InterpMode": "Linear", "TangentMode": "Auto", "TangentWeightMode": "None", "ArriveTangent": 0.0, "ArriveTangentWeight": 0.0, "LeaveTangent": 0.0, "LeaveTangentWeight": 0.0 },
+						{ "Time": 3.25, "Value": 0.2, "InterpMode": "Cubic", "TangentMode": "SmartAuto", "TangentWeightMode": "Arrive", "ArriveTangent": 2.5, "ArriveTangentWeight": 1.5, "LeaveTangent": 2.5, "LeaveTangentWeight": 0.0 }
+					],
+					"PreInfinityExtrap": "Linear",
+					"PostInfinityExtrap": "CycleWithOffset"
+				},
+				"bIsEventCurve": false
+			},
+			"ReapplyExtract": true
+		},
+		{
+			"Name": "KeysOutOfOrder",
+			"Action": "Update",
+			"Properties": { "FloatCurve": { "Keys": [ { "Time": 2.0, "Value": 0.0 }, { "Time": 1.0, "Value": 1.0 } ] } },
+			"ExpectFailure": "CurveFloat.KeysNotAscending"
+		},
+		{
+			"Name": "UnknownInterpMode",
+			"Action": "Update",
+			"Properties": { "FloatCurve": { "Keys": [ { "Time": 0.0, "Value": 0.0, "InterpMode": "Bezier" } ] } },
+			"ExpectFailure": "CurveFloat.UnknownEnumName"
+		}
+	]
+}

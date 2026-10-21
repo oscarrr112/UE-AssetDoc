@@ -1,0 +1,41 @@
+{
+  "name": "ue-assetdoc",
+  "version": "1.0.0",
+  "description": "MCP stdio bridge to the UEAssetDoc Unreal Engine plugin, whose editor serves the MCP tools itself: AssetDocument authoring and editor tools",
+  "main": "dist/index.js",
+  "type": "module",
+  "bin": {
+    "ue-assetdoc": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "watch": "node --watch dist/index.js",
+    "dev": "tsc && node dist/index.js",
+    "pretest": "node -e \"require('fs').rmSync('dist/bridge',{recursive:true,force:true});require('fs').rmSync('dist/broker',{recursive:true,force:true})\"",
+    "test": "npm run build && node --test dist/bridge/*.test.js"
+  },
+  "keywords": [
+    "mcp",
+    "unreal-engine",
+    "ai",
+    "asset-document"
+  ],
+  "author": "Oscar Peng",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oscarrr112/UE-AssetDoc.git"
+  },
+  "homepage": "https://github.com/oscarrr112/UE-AssetDoc#readme",
+  "bugs": {
+    "url": "https://github.com/oscarrr112/UE-AssetDoc/issues"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.1",
+    "typescript": "^5.9.3"
+  }
+}

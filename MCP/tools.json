@@ -1,0 +1,1452 @@
+{
+  "server": {
+    "name": "ue-assetdoc",
+    "version": "1.0.0"
+  },
+  "tools": [
+    {
+      "name": "get_asset_document_schema",
+      "description": "Read the AssetDocument authoring guide (workflow, document header, omitted-vs-empty rule, validate and diff, results and diagnostics, compile status, sidecar files) before authoring. Without profile: the guide and the list of profile sections; with profile: that section (the profile's Body shapes, its list_types kinds and tools).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "profile": {
+            "type": "string",
+            "description": "Class path (e.g. /Script/AIModule.BehaviorTree; a class without a section gets Generic), section name (e.g. DataTable) or \"all\"."
+          },
+          "part": {
+            "type": "string",
+            "description": "A reference part of the section (its last line lists them)."
+          }
+        }
+      },
+      "call": {
+        "guide": "asset_document"
+      }
+    },
+    {
+      "name": "find_assets",
+      "description": "Find assets in the Asset Registry (project, engine and plugin content) as the Content Browser filters them: package path prefix, class (subclasses included), name, and uses (what their graphs use or reference; syntax and result rows in the Blueprint section of get_asset_document_schema). Read-only, paged, sorted by path: {Total, Offset, Assets[{ObjectPath, Class}], NextOffset?}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Package path prefix, recursive (e.g. /Game/AI)."
+          },
+          "class": {
+            "type": "string",
+            "description": "Class path or name (e.g. /Script/Engine.Skeleton, MaterialInterface)."
+          },
+          "exact_class": {
+            "type": "boolean",
+            "description": "No subclasses."
+          },
+          "name": {
+            "type": "string",
+            "description": "Case-insensitive substring, or wildcard with * and ? (e.g. BB_*)."
+          },
+          "uses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Terms that must all match; | separates alternatives. A term is an action key (K2:CallArrayFunction), node class, function, or asset path (assets referencing it). E.g. [\"K2:PromotableOperator\", \"K2:CallArrayFunction|/Script/Engine.BlueprintSetLibrary\"]."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Default 50, max 500."
+          },
+          "offset": {
+            "type": "number"
+          }
+        }
+      },
+      "call": {
+        "method": "GET",
+        "route": "/assetdocument/find-assets",
+        "query": [
+          "path",
+          "class",
+          "exact_class",
+          "name",
+          "uses",
+          "limit",
+          "offset"
+        ],
+        "response": "document"
+      }
+    },
+    {
+      "name": "list_types",
+      "description": "List the types the editor's pickers offer: kind class, struct or enum (classes include unloaded Blueprint classes; structs with base /Script/Engine.TableRowBase include User Defined Structs; enums include User Defined Enums), or a profile's catalog: MetaSound nodes / data types / interfaces, IK Rig solvers and retarget ops, Control Rig nodes / types / modules, Sequencer tracks / sections / bindings, Sound Cue nodes, EQS generators / tests, Blueprint actions (each profile section explains its kinds). Read-only, paged: {Total, Offset, Types[{Path, ...}], NextOffset?}. inspect_asset_document_target on a /Script struct or enum path shows its fields or values.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "class",
+              "struct",
+              "enum",
+              "metasound_node",
+              "metasound_datatype",
+              "metasound_interface",
+              "ikrig_solver",
+              "ikretarget_op",
+              "rigvm_node",
+              "rigvm_type",
+              "controlrig_module",
+              "sequencer_track",
+              "sequencer_section",
+              "sequencer_binding",
+              "sound_node",
+              "env_query_generator",
+              "env_query_test",
+              "blueprint_node"
+            ]
+          },
+          "base": {
+            "type": "string",
+            "description": "Only subclasses of this class or struct; blueprint_node: the Blueprint or class giving the context."
+          },
+          "name": {
+            "type": "string",
+            "description": "Case-insensitive substring, or wildcard with * and ? (spaces allowed)."
+          },
+          "path": {
+            "type": "string",
+            "description": "Type path prefix (e.g. /Script/Engine, /Game)."
+          },
+          "include_abstract": {
+            "type": "boolean",
+            "description": "Classes: also abstract ones."
+          },
+          "schema": {
+            "type": "string",
+            "description": "StateTree: only the node types this schema offers; sequencer_track: the sequence class (default LevelSequence)."
+          },
+          "graph": {
+            "type": "string",
+            "description": "blueprint_node: a function graph of base (default its event graph)."
+          },
+          "target": {
+            "type": "string",
+            "description": "blueprint_node: functions callable on this class (its interfaces' included), as when dragging off a pin of it."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Default 50, max 500."
+          },
+          "offset": {
+            "type": "number"
+          },
+          "detail": {
+            "type": "boolean",
+            "description": "controlrig_module: full rows."
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "call": {
+        "method": "GET",
+        "route": "/assetdocument/list-types",
+        "required": [
+          "kind"
+        ],
+        "query": [
+          "kind",
+          "base",
+          "name",
+          "path",
+          "include_abstract",
+          "schema",
+          "graph",
+          "target",
+          "limit",
+          "offset",
+          "detail"
+        ],
+        "response": "document"
+      }
+    },
+    {
+      "name": "inspect_asset_document_target",
+      "description": "Inspect a class, asset or type. A class or asset: the properties a document can author (type, value, default, writability; skipped ones with the reason) and facts to build on (skeleton slots, sockets, bones; mesh Bounds in cm and MaterialSlots; an Actor Blueprint's MeshComponents with their mesh and its slots; animation length, root motion, notifies; sound duration; material parameters; compile status; row schema; profile details). A /Script struct or enum: its fields or values. Engine and plugin assets: read_only. A bare User Defined Enum / Struct name finds that asset; a path naming no asset resolves to the only asset of that name under its mount, else lists candidates. Abstract classes: Abstract: true (not a document Class).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "class_or_asset": {
+            "type": "string",
+            "description": "E.g. /Script/Engine.CurveFloat, /Game/AI/BT_Enemy, /Script/GameplayTags.GameplayTagTableRow, ENiagara_ScaleSpriteSize."
+          },
+          "detail": {
+            "type": "boolean",
+            "description": "true: the whole. Default: summarized (payload Summary says what): large nested struct / instanced values as type and size, skipped grouped by reason."
+          }
+        },
+        "required": [
+          "class_or_asset"
+        ]
+      },
+      "call": {
+        "method": "GET",
+        "route": "/assetdocument/inspect",
+        "required": [
+          "class_or_asset"
+        ],
+        "query": [
+          "class_or_asset"
+        ],
+        "query_flags": [
+          "detail"
+        ],
+        "response": "document"
+      }
+    },
+    {
+      "name": "inspect_asset_document_profile",
+      "description": "Show which AssetDocument profile owns a class or asset and what it accepts: BodySections, fragment kinds, region policies (a class without an exact profile: the generic profile, Properties only). get_asset_document_schema with profile has the Body shapes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "class_or_asset": {
+            "type": "string",
+            "description": "E.g. /Script/AIModule.BehaviorTree, /Game/AI/BT_Enemy."
+          },
+          "debug": {
+            "type": "boolean",
+            "description": "Also the runtime registration (runtime debugging only)."
+          }
+        },
+        "required": [
+          "class_or_asset"
+        ]
+      },
+      "call": {
+        "method": "GET",
+        "route": "/assetdocument/profile",
+        "required": [
+          "class_or_asset"
+        ],
+        "query": [
+          "class_or_asset"
+        ],
+        "query_flags": [
+          "debug"
+        ],
+        "response": "document"
+      }
+    },
+    {
+      "name": "create_asset_document_template",
+      "description": "Create a starting AssetDocument for an exact class path and a target path, following the class's profile (exact profiles: their Body skeleton; generic: Properties only). For an existing asset use extract_asset_document.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "class": {
+            "type": "string",
+            "description": "E.g. /Script/AIModule.BlackboardData."
+          },
+          "target": {
+            "type": "string",
+            "description": "E.g. /Game/Data/DA_Test."
+          }
+        },
+        "required": [
+          "class",
+          "target"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/assetdocument/template",
+        "required": [
+          "class",
+          "target"
+        ],
+        "body": {
+          "Class": {
+            "argument": "class"
+          },
+          "Target": {
+            "argument": "target"
+          }
+        },
+        "response": "document"
+      }
+    },
+    {
+      "name": "extract_asset_document",
+      "description": "Extract an asset as its canonical AssetDocument (payload), the starting point for edits; Blueprint-family results carry compile. Engine and plugin assets extract read-only (read_only: true): for an editable copy set Target to a new /Game path (and replace the source's own path elsewhere), Action Create, and apply it, or use duplicate_asset (preferred for Blueprints).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "E.g. /Game/Data/DA_Test, /Engine/EngineMaterials/WorldGridMaterial."
+          },
+          "diff_only": {
+            "type": "boolean",
+            "description": "Default true: omit values equal to their defaults (applying the result is still a no-op); false lists every writable value."
+          },
+          "include_all_writable": {
+            "type": "boolean",
+            "description": "As diff_only false."
+          }
+        },
+        "required": [
+          "asset_path"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/assetdocument/extract",
+        "required": [
+          "asset_path"
+        ],
+        "body": {
+          "asset_path": {
+            "argument": "asset_path"
+          },
+          "diff_only": {
+            "argument": "diff_only",
+            "default": true
+          },
+          "include_all_writable": {
+            "argument": "include_all_writable",
+            "default": false
+          }
+        },
+        "response": "document"
+      }
+    },
+    {
+      "name": "validate_asset_document",
+      "description": "Validate one AssetDocument (document or sidecar file_path) without changing anything: apply's checks and diagnostics; on success the message says what apply would do ('would create', 'would change N value(s)', 'would change nothing'). What it cannot check: core guide, Validate And Diff.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "document": {
+            "type": "object",
+            "description": "Inline AssetDocument JSON.",
+            "additionalProperties": true
+          },
+          "file_path": {
+            "type": "string",
+            "description": "Absolute sidecar file path (instead of document)."
+          }
+        }
+      },
+      "call": {
+        "method": "POST",
+        "route": "/assetdocument/validate",
+        "body": "document_or_file",
+        "response": "document"
+      }
+    },
+    {
+      "name": "diff_asset_document",
+      "description": "Diff one AssetDocument (document or sidecar file_path) against the asset without changing it: what apply would change, as entries {path (JSON Pointer into the document), kind (Add: only the document has it; Remove: only the asset; Replace), before (asset), after (document)}. A missing asset diffs as would_create.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "document": {
+            "type": "object",
+            "description": "Inline AssetDocument JSON.",
+            "additionalProperties": true
+          },
+          "file_path": {
+            "type": "string",
+            "description": "Absolute sidecar file path (instead of document)."
+          }
+        }
+      },
+      "call": {
+        "method": "POST",
+        "route": "/assetdocument/diff",
+        "body": "document_or_file",
+        "response": "document"
+      }
+    },
+    {
+      "name": "apply_asset_document_file",
+      "description": "Apply an AssetDocument sidecar file (<Content dir>/<path>/<Asset>.assetdoc.json, health_check gives contentDir; Target must match that path), written first. If the editor's file watcher already applied it, the result says applied_by: 'file_watcher'. A failed create keeps the sidecar (sidecar_kept: true). If the call returns no result (connection error, timeout), do not retry blindly: health_check, then diff_asset_document (empty: applied). Blueprint-family results carry compile.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "Absolute sidecar file path."
+          },
+          "save_asset": {
+            "type": "boolean",
+            "description": "Default true."
+          }
+        },
+        "required": [
+          "file_path"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/assetdocument/apply-file",
+        "required": [
+          "file_path"
+        ],
+        "body": {
+          "file_path": {
+            "argument": "file_path"
+          },
+          "save_asset": {
+            "argument": "save_asset",
+            "default": true
+          }
+        },
+        "response": "document"
+      }
+    },
+    {
+      "name": "duplicate_asset",
+      "description": "Copy an asset into /Game as the Content Browser's Duplicate does, and save the copy: the editable copy of an engine or plugin asset (find_assets lists them). Only that asset is copied; the copy references what the source references. A map is copied with its actor files (payload.external_packages); a World Partition map open in the editor is refused (open another map first). Errors: Duplicate.SourceNotFound, UnsupportedSource, InvalidTarget, TargetExists.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "Package or object path of any asset."
+          },
+          "target": {
+            "type": "string",
+            "description": "New /Game package path, e.g. /Game/Characters/SK_Tutorial."
+          }
+        },
+        "required": [
+          "source",
+          "target"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/assetdocument/duplicate",
+        "required": [
+          "source",
+          "target"
+        ],
+        "body": {
+          "source": {
+            "argument": "source"
+          },
+          "target": {
+            "argument": "target"
+          }
+        },
+        "response": "document"
+      }
+    },
+    {
+      "name": "sample_animation_bones",
+      "description": "Read where bones or sockets of an AnimSequence, AnimComposite or AnimMontage are at given times, evaluated as the editor does (read-only): Location, Rotation (and Speed) per bone and time. Options, result, limits and errors: AnimSequence section of get_asset_document_schema.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "bones": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "times": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Seconds on the asset's timeline."
+          },
+          "start": {
+            "type": "number"
+          },
+          "end": {
+            "type": "number"
+          },
+          "step": {
+            "type": "number"
+          },
+          "space": {
+            "type": "string",
+            "enum": [
+              "component",
+              "local",
+              "root"
+            ]
+          },
+          "root": {
+            "type": "string",
+            "enum": [
+              "pose",
+              "extracted"
+            ]
+          },
+          "speed": {
+            "type": "boolean",
+            "description": "Add Speed (cm/s)."
+          },
+          "mesh": {
+            "type": "string"
+          },
+          "slot": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset",
+          "bones"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/animation/sample-bones",
+        "body": "arguments",
+        "response": "document"
+      }
+    },
+    {
+      "name": "retarget_animations",
+      "description": "Duplicate and retarget animations through an IK Retargeter, as its Export Selected Animations / the Content Browser's Retarget Animations does, and save the new assets. Naming, existing outputs, result and errors: IKRig section of get_asset_document_schema.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "retargeter": {
+            "type": "string"
+          },
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Animation assets on the source skeleton."
+          },
+          "folder": {
+            "type": "string",
+            "description": "Instead of assets: a /Game folder."
+          },
+          "recursive": {
+            "type": "boolean"
+          },
+          "source_mesh": {
+            "type": "string"
+          },
+          "target_mesh": {
+            "type": "string"
+          },
+          "target_folder": {
+            "type": "string",
+            "description": "Default: next to each source."
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "suffix": {
+            "type": "string"
+          },
+          "search": {
+            "type": "string"
+          },
+          "replace": {
+            "type": "string"
+          },
+          "existing": {
+            "type": "string",
+            "enum": [
+              "error",
+              "overwrite",
+              "unique"
+            ]
+          },
+          "include_referenced": {
+            "type": "boolean"
+          },
+          "save": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "retargeter"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/animation/retarget",
+        "body": "arguments",
+        "response": "document"
+      }
+    },
+    {
+      "name": "health_check",
+      "description": "Check that the Unreal Editor's HTTP server is running; reports its port, the project directory and contentDir (where .assetdoc.json sidecars go).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "call": {
+        "method": "GET",
+        "route": "/health",
+        "response": "plain"
+      }
+    },
+    {
+      "name": "get_editor_context",
+      "description": "The editor's current state: selected actors (with transform) and Content Browser assets, current level, open asset editors, PIE status and editor modes: what the user is working on. pendingNotices lists problems from work the editor did on its own that are still open, e.g. a sidecar the file watcher applied and that failed (file, code, message); a tool result also reports a new one once.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "call": {
+        "method": "GET",
+        "route": "/context",
+        "response": "plain"
+      }
+    },
+    {
+      "name": "query_level",
+      "description": "Read the level open in the editor (read-only). what \"world\": the summary (levels, World Partition, folders, layers, actor counts, dirty_packages). Default: actors, filtered and paged, each with its path (the stable reference), guid, label, class, level, folder, tags, transform; detail components / properties (= full) add more; properties reads value paths into values. Refused during Play In Editor (query_play reads the game). Fields: get_level_editing_guide (read it first).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "what": {
+            "type": "string",
+            "enum": [
+              "actors",
+              "world"
+            ]
+          },
+          "actors": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "class": {
+            "type": "string"
+          },
+          "exact_class": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string",
+            "description": "Wildcard over label and object name."
+          },
+          "folder": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "layer": {
+            "type": "string"
+          },
+          "data_layer": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string"
+          },
+          "near": {
+            "type": "object"
+          },
+          "bounds": {
+            "type": "object"
+          },
+          "selected_only": {
+            "type": "boolean"
+          },
+          "include_unloaded": {
+            "type": "boolean"
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "components",
+              "properties",
+              "full"
+            ]
+          },
+          "diff_only": {
+            "type": "boolean",
+            "description": "Default true."
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "call": {
+        "method": "POST",
+        "route": "/level/query",
+        "body": "arguments",
+        "response": "document"
+      }
+    },
+    {
+      "name": "edit_level",
+      "description": "Edit the level open in the editor: a batch of ops (spawn, duplicate, set, delete, components, attachment, folders, World Partition pins) applied as ONE transaction, i.e. one Edit > Undo entry titled by description. Everything is checked before anything changes; a failure rolls the whole batch back (rolled_back: true). dry_run: true checks and describes only. Actors by path (query_level) or \"@id\" of an earlier spawn / duplicate; values in AssetDocument value forms. Not saved unless save: true. Refused during Play In Editor. Op fields: get_level_editing_guide (read it first).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Undo entry title, e.g. \"AI: build lit room\"."
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "save": {
+            "type": "boolean",
+            "description": "Save the packages this batch dirtied."
+          },
+          "ops": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "spawn",
+                    "delete",
+                    "duplicate",
+                    "set",
+                    "add_component",
+                    "remove_component",
+                    "reparent_component",
+                    "attach",
+                    "detach",
+                    "create_folder",
+                    "rename_folder",
+                    "delete_folder",
+                    "pin",
+                    "unpin"
+                  ]
+                }
+              },
+              "required": [
+                "op"
+              ]
+            }
+          },
+          "after": {
+            "type": "object",
+            "description": "{select: [refs], focus: [refs]} after success."
+          }
+        },
+        "required": [
+          "ops"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/level/edit",
+        "body": "arguments",
+        "response": "document"
+      }
+    },
+    {
+      "name": "undo_editor",
+      "description": "Edit > Undo (or Redo) of one entry a result of yours named: edit_level transaction.title / id, execute_python undo_title / undo_id. Only that entry: when the newest entry is another one (e.g. the user's edit), nothing changes and the result is Undo.EntryMismatch naming it. Result: the entry, can_undo, can_redo, next_undo, next_redo. Refused during Play In Editor.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "direction": {
+            "type": "string",
+            "enum": [
+              "undo",
+              "redo"
+            ],
+            "description": "Default undo."
+          },
+          "expect_title": {
+            "type": "string"
+          },
+          "expect_id": {
+            "type": "string"
+          }
+        }
+      },
+      "call": {
+        "method": "POST",
+        "route": "/editor/undo",
+        "body": "arguments",
+        "response": "document"
+      }
+    },
+    {
+      "name": "open_level",
+      "description": "File > Open Level: open the map at path. Unsaved changes of the open level are never discarded: refused (Level.UnsavedChangesWouldBeLost, listing them) unless save_first: true saves them first. Clears the Undo history; returns the world summary. Refused during Play In Editor.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "E.g. /Game/Maps/Room."
+          },
+          "save_first": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/level/open",
+        "body": "arguments",
+        "response": "document"
+      }
+    },
+    {
+      "name": "new_level",
+      "description": "File > New Level: create a map from a template (\"empty\" default, \"empty_open_world\", \"basic\", \"open_world\"), save it at path and open it. Unsaved changes as open_level; Level.MapExists when path is taken.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "E.g. /Game/Maps/Arena."
+          },
+          "template": {
+            "type": "string"
+          },
+          "save_first": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/level/new",
+        "body": "arguments",
+        "response": "document"
+      }
+    },
+    {
+      "name": "get_level_editing_guide",
+      "description": "Read a guide for the editor tools (not asset documents). Default topic \"level\": query_level, edit_level, undo_editor, open_level / new_level and the Level.* codes. \"playtest\": play, query_play, get_viewport_screenshot. \"import_settings\": import_assets, settings, save_assets, reload_assets, asset_editor, export_assets.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "type": "string",
+            "enum": [
+              "level",
+              "playtest",
+              "import_settings"
+            ]
+          }
+        }
+      },
+      "call": {
+        "guide": "editor",
+        "argument": "topic",
+        "topics": {
+          "playtest": "Playtest.md",
+          "import_settings": "ImportAndSettings.md"
+        },
+        "default": "LevelEditing.md"
+      }
+    },
+    {
+      "name": "play",
+      "description": "Playtest in Play In Editor as a human tester would, without execute_python: start (paused: true recommended: the game advances only during wait and input), stop, status, pause, resume, wait (game seconds and/or until a condition), input (Enhanced Input actions or keys), console, call (a function on a game actor), set (values, teleport). One call is one finished operation; results carry the session state and the errors, warnings and Print String lines logged meanwhile. Only the running game changes. Read it with query_play. Fields and errors: get_level_editing_guide topic \"playtest\" (read it first).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "start",
+              "stop",
+              "status",
+              "pause",
+              "resume",
+              "wait",
+              "input",
+              "console",
+              "call",
+              "set",
+              "reset_input_settings",
+              "poll"
+            ],
+            "description": "poll (with id): a result still pending. reset_input_settings: delete the saved Enhanced Input user settings."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "window",
+              "viewport",
+              "simulate"
+            ]
+          },
+          "map": {
+            "type": "string"
+          },
+          "save_first": {
+            "type": "boolean"
+          },
+          "allow_blueprint_errors": {
+            "type": "boolean"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "console": {
+            "description": "start: a command or an array, run before the first frame."
+          },
+          "seconds": {
+            "type": "number",
+            "description": "wait: game seconds (max 600)."
+          },
+          "until": {
+            "description": "wait: a condition or an array (any ends the wait)."
+          },
+          "inputs": {
+            "type": "array",
+            "description": "[{input_action | key, value?, duration?, at?, state?: \"tap\" | \"down\" | \"up\"}].",
+            "items": {
+              "type": "object"
+            }
+          },
+          "settle": {
+            "type": "number"
+          },
+          "command": {
+            "type": "string",
+            "description": "Several separated by |."
+          },
+          "actor": {
+            "description": "\"player\", \"controller\", \"game_mode\", a name, label or path."
+          },
+          "function": {
+            "type": "string"
+          },
+          "args": {},
+          "values": {
+            "type": "object"
+          },
+          "location": {
+            "type": "object"
+          },
+          "rotation": {
+            "type": "object"
+          },
+          "timeout": {
+            "type": "number",
+            "description": "Real seconds (max 60)."
+          },
+          "id": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/play",
+        "body": "arguments",
+        "response": "document",
+        "result": "poll"
+      }
+    },
+    {
+      "name": "query_play",
+      "description": "Read the running Play In Editor game (read-only). what actors (default): filter by class, name, tag, near, or name actors (\"player\", \"controller\", \"game_mode\", a name, label or editor path); each with location, velocity, controller, vitals, playing montage, AI state and the values named in properties. what effects: active Niagara / Cascade components. what audio: playing audio components and the sounds started (since a seq). what log: the session's log, since a seq, by category, verbosity, text. what input: the player's active mapping contexts, effective keys and saved user settings. Refused without a session (Play.NoSession), except the log. Fields: get_level_editing_guide topic \"playtest\".",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "what": {
+            "type": "string",
+            "enum": [
+              "actors",
+              "log",
+              "effects",
+              "audio",
+              "input"
+            ]
+          },
+          "actors": {
+            "type": "array",
+            "items": {}
+          },
+          "class": {
+            "type": "string"
+          },
+          "exact_class": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "near": {
+            "type": "object",
+            "description": "{location | actor, radius}."
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "components",
+              "properties",
+              "full"
+            ]
+          },
+          "diff_only": {
+            "type": "boolean"
+          },
+          "limit": {
+            "type": "number"
+          },
+          "offset": {
+            "type": "number"
+          },
+          "since": {
+            "description": "log, audio: a seq, \"session\" (default) or \"all\"."
+          },
+          "category": {},
+          "verbosity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning",
+              "display",
+              "log",
+              "verbose"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "include_inactive": {
+            "type": "boolean"
+          }
+        }
+      },
+      "call": {
+        "method": "POST",
+        "route": "/play/query",
+        "body": "arguments",
+        "response": "document"
+      }
+    },
+    {
+      "name": "execute_python",
+      "description": "Run Python in the editor, only for what no tool covers. Do not use it for saving, reloading, editor windows, exporting or level edits: those have their own tools (save_assets, reload_assets, asset_editor, export_assets; query_level and edit_level for the level). One transaction: on success one Edit > Undo entry titled by description (undo_title / undo_id for undo_editor); if it raises, what it recorded is undone (rolled_back: true, rolled_back_objects), earlier entries untouched. Work Undo cannot take back (assets created, renamed, deleted or saved, a map opened) is listed in not_undoable; a raising script that did such work is kept (rollback: \"Kept\", rollback_note). Only a code that is exactly one .py file path (optionally with arguments) runs that file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "description": "Undo entry title."
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/execute",
+        "body": {
+          "Code": {
+            "argument": "code"
+          },
+          "Description": {
+            "argument": "description"
+          }
+        },
+        "response": "plain",
+        "result": "execute_python",
+        "setting": "execute_python"
+      }
+    },
+    {
+      "name": "get_viewport_screenshot",
+      "description": "Capture an image: during Play In Editor the game as the player sees it, otherwise (or view \"editor\") the active Level Editor viewport. Default a JPEG of quality 70, at most 1024 px wide.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "view": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "game",
+              "editor"
+            ]
+          },
+          "hud": {
+            "type": "boolean",
+            "description": "Game view: include UMG widgets (default true)."
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "jpeg",
+              "png"
+            ],
+            "description": "png: lossless, several times larger."
+          },
+          "quality": {
+            "type": "number",
+            "description": "JPEG quality 1-100 (default 70)."
+          },
+          "max_width": {
+            "type": "number",
+            "description": "Scaled down to this width (64-3840, default 1024)."
+          }
+        }
+      },
+      "call": {
+        "method": "POST",
+        "route": "/play/screenshot",
+        "body": "arguments",
+        "response": "document",
+        "result": "screenshot"
+      }
+    },
+    {
+      "name": "delete_assets",
+      "description": "Delete assets as the editor's Delete Assets dialog does (never forced); references among the assets of one call do not block. Result: {success, total, succeeded, failed, results[{asset, status, error?, referencers?[{kind: package|object|subobject, referencer, properties?}], undo_cleared?}]}. A failed asset makes it a tool error: referencers name what still uses it from outside the call (a referencer with refused_in_batch: true was in the call but refused itself). When only the editor's Undo history referenced an asset, the history is cleared (undo_cleared).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "E.g. /Game/Blueprints/BP_Old."
+          }
+        },
+        "required": [
+          "assets"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/delete",
+        "body": {
+          "Assets": {
+            "argument": "assets"
+          }
+        },
+        "response": "plain",
+        "result": "delete_assets",
+        "setting": "delete_assets"
+      }
+    },
+    {
+      "name": "import_assets",
+      "description": "Import local source files as the Content Browser's Import does, without dialogs: meshes (.fbx, .gltf/.glb, .obj), textures (.png, .jpg, .tga, .exr, ...) and sounds (.wav), with the project's default import settings; or reimport assets (action reimport), or list a file's import settings (action options). Only files the user named, as absolute paths. Options, results and errors: get_level_editing_guide topic \"import_settings\".",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "import",
+              "reimport",
+              "options"
+            ],
+            "description": "Default import."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Absolute local file paths."
+          },
+          "destination": {
+            "type": "string",
+            "description": "A /Game folder."
+          },
+          "name": {
+            "type": "string",
+            "description": "Asset name for a single file."
+          },
+          "options": {
+            "type": "object",
+            "description": "Common dialog settings (skeleton, mesh_type, collision, uniform_scale, srgb, compression, ...)."
+          },
+          "pipeline": {
+            "type": "object",
+            "description": "Any other dialog setting by property name, nested by sub-pipeline."
+          },
+          "replace_existing": {
+            "type": "boolean"
+          },
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "reimport: the assets."
+          },
+          "source": {
+            "type": "string",
+            "description": "reimport: another source file."
+          },
+          "save": {
+            "type": "boolean",
+            "description": "Default true."
+          }
+        }
+      },
+      "call": {
+        "method": "POST",
+        "route": "/import",
+        "body": "arguments",
+        "response": "document"
+      }
+    },
+    {
+      "name": "settings",
+      "description": "Read or write editor settings: section \"world\" is the open level's World Settings panel (a write is one Undo entry; the map stays dirty unless save: true); other sections are Project Settings sections, written to their default config file in the project (e.g. Config/DefaultEngine.ini), never to engine, plugin or user config. action list lists sections. Refused during Play In Editor. Guide: get_level_editing_guide topic \"import_settings\".",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "list"
+            ],
+            "description": "Default read."
+          },
+          "section": {
+            "type": "string",
+            "description": "\"world\", or a display name (\"Maps & Modes\"), Category/Section or settings class."
+          },
+          "properties": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "object"
+              }
+            ],
+            "description": "read: names (world without names: what differs from the defaults); write: {name: value} in AssetDocument value forms."
+          },
+          "diff_only": {
+            "type": "boolean",
+            "description": "read: only values that differ from the defaults."
+          },
+          "description": {
+            "type": "string",
+            "description": "world write: the Undo entry title."
+          },
+          "save": {
+            "type": "boolean",
+            "description": "world write: save the map."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "write: check and return the planned changes only."
+          }
+        }
+      },
+      "call": {
+        "method": "POST",
+        "route": "/settings",
+        "body": "arguments",
+        "response": "document"
+      }
+    },
+    {
+      "name": "save_assets",
+      "description": "File > Save for assets, without dialogs: those with unsaved changes are saved, clean ones are listed in clean (force: true re-saves them). all_dirty: true is Save All (only: maps or content). Result: {saved[], clean[], not_saved[], refused[]}. Refused during Play In Editor.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Package or object paths."
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "all_dirty": {
+            "type": "boolean"
+          },
+          "only": {
+            "type": "string",
+            "enum": [
+              "all",
+              "maps",
+              "content"
+            ]
+          }
+        }
+      },
+      "call": {
+        "method": "POST",
+        "route": "/assets/save",
+        "body": "arguments",
+        "response": "document"
+      }
+    },
+    {
+      "name": "reload_assets",
+      "description": "Asset Actions > Reload: replace assets in memory with their files on disk, without dialogs. Unsaved changes are refused (Assets.UnsavedChanges) unless force: true discards them; assets of the open map are refused (Assets.OpenMap). Result: {reloaded[], not_loaded[], refused[]}. Refused during Play In Editor.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Package or object paths."
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Discard their unsaved changes."
+          }
+        },
+        "required": [
+          "assets"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/assets/reload",
+        "body": "arguments",
+        "response": "document"
+      }
+    },
+    {
+      "name": "asset_editor",
+      "description": "Open or close the editor window of assets (as double-clicking them in the Content Browser, or closing their tab), or list the assets that have one open. A document profile whose guide says so refuses an asset while its editor is open; close it first. An editor holding edits not yet applied to its asset (Material, Niagara: its Apply button is enabled) asks before closing: close refuses it (Assets.EditorNotClosed) unless discard_unapplied: true drops them; apply_editor presses the editor's Apply instead (the asset then has unsaved changes: save_assets, then extract it again). Result: {opened[] | closed[] (discarded_unapplied[]) | applied[], not_open[], open[]}; Assets.EditorNotOpened when the editor opened none.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "open",
+              "close",
+              "apply_editor",
+              "list"
+            ]
+          },
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "open / close / apply_editor: package or object paths."
+          },
+          "discard_unapplied": {
+            "type": "boolean",
+            "description": "close: close without the editor's unapplied edits (its close prompt's No)."
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/assets/editor",
+        "body": "arguments",
+        "response": "document"
+      }
+    },
+    {
+      "name": "export_assets",
+      "description": "Asset Actions > Export, without dialogs: writes <folder>/<AssetName>.<format> per asset (default wav for sounds, png for textures; Assets.NoExporter lists the formats of other classes). folder: inside the project (default Saved/Exports). Existing files need overwrite: true. Result: {folder, exported[{asset, file, exporter, bytes}], refused[]}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Package or object paths."
+          },
+          "folder": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "description": "File extension, e.g. fbx."
+          },
+          "overwrite": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "assets"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/assets/export",
+        "body": "arguments",
+        "response": "document"
+      }
+    }
+  ]
+}

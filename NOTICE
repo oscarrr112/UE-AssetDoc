@@ -1,0 +1,13 @@
+UE-AssetDoc
+Copyright 2026 Oscar Peng
+
+Portions copyright 2026 Houyu
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+You may not use these files except in compliance with the License. Unless
+required by applicable law or agreed to in writing, the software is
+distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied.
+
+Third-party components used by the MCP stdio bridge, and the relationship to
+Unreal Engine, are listed in THIRD_PARTY_NOTICES.md.

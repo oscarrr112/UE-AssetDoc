@@ -1,0 +1,3 @@
+# Keep working-tree line endings LF on every platform: several automation tests scan
+# product source text with LF patterns, and Windows autocrlf would otherwise break them.
+* text=auto eol=lf

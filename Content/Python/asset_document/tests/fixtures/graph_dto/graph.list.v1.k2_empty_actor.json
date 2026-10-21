@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "graphs": [
+    {
+      "graph_guid": "A0000000000000000000000000000001",
+      "name": "EventGraph",
+      "path": "EventGraph",
+      "role": "ubergraph",
+      "schema_class": "/Script/BlueprintGraph.EdGraphSchema_K2",
+      "schema_tag": "K2",
+      "parent_graph_guid": null,
+      "owner_node_guid": null,
+      "caps": {
+        "spawn": true,
+        "rename": false,
+        "remove": false
+      }
+    },
+    {
+      "graph_guid": "A0000000000000000000000000000002",
+      "name": "UserConstructionScript",
+      "path": "UserConstructionScript",
+      "role": "function",
+      "schema_class": "/Script/BlueprintGraph.EdGraphSchema_K2",
+      "schema_tag": "K2",
+      "parent_graph_guid": null,
+      "owner_node_guid": null,
+      "caps": {
+        "spawn": true,
+        "rename": false,
+        "remove": false
+      }
+    }
+  ],
+  "class_chain": [
+    "/Script/Engine.Actor",
+    "/Script/CoreUObject.Object"
+  ]
+}

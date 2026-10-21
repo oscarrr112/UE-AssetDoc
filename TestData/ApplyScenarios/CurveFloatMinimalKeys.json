@@ -1,0 +1,22 @@
+{
+	"Description": "Only Time and Value are required per key; the extract shows every key field with its engine default and omits an unset DefaultValue.",
+	"Class": "/Script/Engine.CurveFloat",
+	"Steps": [
+		{
+			"Name": "CreateMinimal",
+			"Action": "Create",
+			"Properties": { "FloatCurve": { "Keys": [ { "Time": 0, "Value": 1 }, { "Time": 2, "Value": 0.5 } ] } },
+			"ExpectProperties": {
+				"FloatCurve": {
+					"Keys": [
+						{ "Time": 0.0, "Value": 1.0, "InterpMode": "Linear", "TangentMode": "Auto", "TangentWeightMode": "None", "ArriveTangent": 0.0, "ArriveTangentWeight": 0.0, "LeaveTangent": 0.0, "LeaveTangentWeight": 0.0 },
+						{ "Time": 2.0, "Value": 0.5, "InterpMode": "Linear", "TangentMode": "Auto", "TangentWeightMode": "None", "ArriveTangent": 0.0, "ArriveTangentWeight": 0.0, "LeaveTangent": 0.0, "LeaveTangentWeight": 0.0 }
+					],
+					"PreInfinityExtrap": "Constant",
+					"PostInfinityExtrap": "Constant"
+				}
+			},
+			"ReapplyExtract": true
+		}
+	]
+}
