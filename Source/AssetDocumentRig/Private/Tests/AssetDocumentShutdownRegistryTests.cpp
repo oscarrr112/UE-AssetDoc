@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.Shutdown.ClassPathRegistries: the class-keyed registries modules fill at startup (trial
 //   target makers, exact Blueprint classes, hosted Blueprints) are keyed by class path, so ShutdownModule unregisters

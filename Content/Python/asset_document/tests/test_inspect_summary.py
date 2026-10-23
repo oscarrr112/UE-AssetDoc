@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """The shared summarized inspect: inspect over HTTP outlines a large document Body and leaves out the bulk facts
 unless detail is true, with one Summary line."""
 from __future__ import annotations

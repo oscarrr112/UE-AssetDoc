@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // A Blueprint document the editor accepts and stores must verify, whatever order its items are
 // written in and whatever default-valued fields it states or omits:

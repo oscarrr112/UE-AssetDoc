@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentGenericMutationPreparation.h"
 #include "AssetDocumentDirtyTargetMessage.h"
@@ -300,7 +301,7 @@ FAssetDocumentGenericMutationPreparation::Prepare(
 	using namespace GenericMutationPreparationLocal;
 	FAssetDocumentGenericMutationPreparationResult Result;
 	const bool bBlackboardApply = TargetActivation == nullptr && IsExactBlackboardApply(RuntimeRequest);
-	// Legacy Generic/L1 preflight has no canonical payload; BB owns its separate
+	// Legacy Generic factory preflight has no canonical payload; BB owns its separate
  // closed projection. Any new payload must validate, including a missing marker.
  const bool bMutationProjection = !bBlackboardApply && PreflightResult.CanonicalValue.IsSet();
  FAssetDocumentMutationIntentProjection MutationProjection;
@@ -342,7 +343,7 @@ FAssetDocumentGenericMutationPreparation::Prepare(
 		}
 		Intent.bCreateByFactory = Result.TargetDecision->bCreate;
 		Intent.FactoryId = Intent.bCreateByFactory ? Lifecycle->FactoryId : TEXT("");
-		// L1 owns target acquisition/creation. Future domain Body mutation owns its own footprint.
+		// The factory lifecycle owns target acquisition/creation. Future domain Body mutation owns its own footprint.
 		Intent.bWriteAdmittedProperties = false;
 	}
 	if (bMutationProjection) Intent.bWriteAdmittedProperties = false;

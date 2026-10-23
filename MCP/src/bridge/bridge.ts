@@ -1,3 +1,6 @@
+// Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
+
 import { resolveEditorTarget } from "./discovery.js";
 import { EditorConnection, EditorRefusedError, EditorUnreachableError, type JsonRpcMessage } from "./editorConnection.js";
 import { listedTools, type Manifest } from "./manifest.js";

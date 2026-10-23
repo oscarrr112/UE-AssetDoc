@@ -1,10 +1,12 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetOps/EditorAssetOps.h"
 
 #include "AssetDocumentEditorNonInteractiveScope.h"
 #include "AssetExportTask.h"
 #include "AssetDocumentAssetCompilation.h"
+#include "AssetDocumentPaths.h"
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Dom/JsonValue.h"
@@ -20,6 +22,7 @@
 #include "LevelQuery.h"
 #include "Misc/App.h"
 #include "Misc/PackageName.h"
+#include "Misc/ScopeExit.h"
 #include "Misc/Paths.h"
 #include "PackageTools.h"
 #include "Runtime/AssetDocumentOpenEditor.h"
@@ -808,7 +811,8 @@ FString DefaultExportFormat(const UObject& Object)
 	return FString();
 }
 
-// The export folder: inside the project directory (relative paths are relative to it).
+// The export folder: inside the project directory (relative paths are relative to it), judged by the
+// directory the files land in: no '..' segment, and no link that leads out of the project.
 bool ResolveExportFolder(const FString& Requested, FString& OutFolder, TArray<FAssetDocumentDiagnostic>& Diagnostics)
 {
 	const FString Project = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
@@ -816,17 +820,40 @@ bool ResolveExportFolder(const FString& Requested, FString& OutFolder, TArray<FA
 		: FPaths::IsRelative(Requested) ? Project / Requested : Requested;
 	Folder = FPaths::ConvertRelativePathToFull(Folder);
 	FPaths::NormalizeDirectoryName(Folder);
-	FPaths::CollapseRelativeDirectories(Folder);
 	FString ProjectRoot = Project;
 	FPaths::NormalizeDirectoryName(ProjectRoot);
-	if (!FPaths::IsUnderDirectory(Folder, ProjectRoot) || Folder.Contains(TEXT("..")))
+	FString RequestedSegments = Requested;
+	FPaths::NormalizeFilename(RequestedSegments);
+	TArray<FString> Segments;
+	RequestedSegments.ParseIntoArray(Segments, TEXT("/"));
+	if (Segments.Contains(TEXT("..")) || !AssetDocumentPaths::IsWithin(ProjectRoot, Folder))
 	{
 		Diagnostics.Add(MakeInvalidRequest(TEXT("/folder"), FString::Printf(TEXT("'folder' must be inside the project (%s), like "
-			"\"Saved/Exports/Audio\"; '%s' is not."), *ProjectRoot, *Requested)));
+			"\"Saved/Exports/Audio\", without '..' and not through a link that leads out of the project; '%s' is not."),
+			*ProjectRoot, *Requested)));
 		return false;
 	}
 	OutFolder = Folder;
 	return true;
+}
+
+// The files an export task wrote below Staging, as paths relative to it.
+TArray<FString> StagedExportFiles(const FString& Staging)
+{
+	TArray<FString> Found;
+	IFileManager::Get().FindFilesRecursive(Found, *Staging, TEXT("*"), /*Files*/ true, /*Directories*/ false);
+	const FString Prefix = Staging + TEXT("/");
+	TArray<FString> Relative;
+	for (FString& File : Found)
+	{
+		FPaths::NormalizeFilename(File);
+		if (File.StartsWith(Prefix, ESearchCase::CaseSensitive))
+		{
+			Relative.Add(File.RightChop(Prefix.Len()));
+		}
+	}
+	Relative.Sort();
+	return Relative;
 }
 }
 
@@ -853,6 +880,8 @@ FLevelToolResult RunExportAssets(const TSharedPtr<FJsonObject>& RequestJson)
 	}
 	Format = Format.ToLower();
 	Format.RemoveFromStart(TEXT("."));
+	FString ProjectRoot = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+	FPaths::NormalizeDirectoryName(ProjectRoot);
 
 	FRefusals Refusals;
 	TArray<TSharedPtr<FJsonValue>> Exported;
@@ -878,7 +907,20 @@ FLevelToolResult RunExportAssets(const TSharedPtr<FJsonObject>& RequestJson)
 					*FString::Join(Formats, TEXT(", "))), &Formats);
 			continue;
 		}
-		const FString File = Folder / Asset->GetName() + TEXT(".") + AssetFormat;
+		// Every file of the export is checked before it is written: the file named for the asset, and the files an
+		// exporter writes beside it (an OBJ's material library or lightmap UVs, an FBX's baked textures). The exporter
+		// writes into a new folder of its own; each file is then moved to the file its place in the export folder
+		// resolves to, once that place is known to be in the project. A place that is a link out of the project is
+		// refused, also with "overwrite": nothing is written through it.
+		const FString CleanName = Asset->GetName() + TEXT(".") + AssetFormat;
+		const FString File = Folder / CleanName;
+		FString RealFile;
+		if (!AssetDocumentPaths::ResolveForAccess(ProjectRoot, File, RealFile))
+		{
+			Refusals.Add(Target, TEXT("Assets.FileOutsideProject"), FString::Printf(TEXT("%s is a link that leads out of the "
+				"project (%s); nothing is written through it"), *File, *ProjectRoot));
+			continue;
+		}
 		if (Files.Contains(File) || (!bOverwrite && IFileManager::Get().FileExists(*File)))
 		{
 			Refusals.Add(Target, TEXT("Assets.FileExists"), Files.Contains(File)
@@ -886,11 +928,22 @@ FLevelToolResult RunExportAssets(const TSharedPtr<FJsonObject>& RequestJson)
 				: FString::Printf(TEXT("%s exists; pass \"overwrite\": true or another folder"), *File));
 			continue;
 		}
-		IFileManager::Get().MakeDirectory(*Folder, /*Tree*/ true);
+		const FString Staging = Folder / FString::Printf(TEXT(".export-%s"), *FGuid::NewGuid().ToString(EGuidFormats::Digits));
+		FString RealStaging;
+		if (!AssetDocumentPaths::ResolveForAccess(ProjectRoot, Staging, RealStaging) || IFileManager::Get().DirectoryExists(*RealStaging)
+			|| !IFileManager::Get().MakeDirectory(*RealStaging, /*Tree*/ true))
+		{
+			Refusals.Add(Target, TEXT("Assets.ExportFailed"), FString::Printf(TEXT("cannot make the folder %s to export into"), *Staging));
+			continue;
+		}
+		ON_SCOPE_EXIT
+		{
+			IFileManager::Get().DeleteDirectory(*RealStaging, /*RequireExists*/ false, /*Tree*/ true);
+		};
 		TStrongObjectPtr<UAssetExportTask> Task(NewObject<UAssetExportTask>());
 		Task->Object = Asset;
 		Task->Exporter = Exporter;
-		Task->Filename = File;
+		Task->Filename = RealStaging / CleanName;
 		Task->bSelected = false;
 		Task->bReplaceIdentical = true;
 		Task->bPrompt = false;
@@ -901,17 +954,76 @@ FLevelToolResult RunExportAssets(const TSharedPtr<FJsonObject>& RequestJson)
 			TGuardValue<bool> Unattended(GIsRunningUnattendedScript, true);
 			bExported = UExporter::RunAssetExportTask(Task.Get());
 		}
-		if (!bExported || !IFileManager::Get().FileExists(*File))
+		if (!bExported || !IFileManager::Get().FileExists(*Task->Filename))
 		{
 			Refusals.Add(Target, TEXT("Assets.ExportFailed"), Task->Errors.IsEmpty()
 				? FString::Printf(TEXT("the %s exporter wrote nothing (see the editor log)"), *Exporter->GetClass()->GetName())
 				: FString::Join(Task->Errors, TEXT("; ")));
 			continue;
 		}
-		Files.Add(File);
+
+		// The main file first, then the files written beside it.
+		TArray<FString> Written = StagedExportFiles(RealStaging);
+		Written.Remove(CleanName);
+		Written.Insert(CleanName, 0);
+		TArray<TPair<FString, FString>> Moves;
+		FString Refusal;
+		const TCHAR* RefusalCode = nullptr;
+		for (const FString& Relative : Written)
+		{
+			const FString Destination = Folder / Relative;
+			FString RealDestination;
+			if (!AssetDocumentPaths::ResolveForAccess(ProjectRoot, Destination, RealDestination))
+			{
+				RefusalCode = TEXT("Assets.FileOutsideProject");
+				Refusal = FString::Printf(TEXT("the exporter also writes %s, which is a link that leads out of the project (%s); "
+					"nothing is written"), *Destination, *ProjectRoot);
+				break;
+			}
+			if (Relative != CleanName && (Files.Contains(Destination) || (!bOverwrite && IFileManager::Get().FileExists(*Destination))))
+			{
+				RefusalCode = TEXT("Assets.FileExists");
+				Refusal = FString::Printf(TEXT("the exporter also writes %s, which exists; pass \"overwrite\": true or another "
+					"folder"), *Destination);
+				break;
+			}
+			Moves.Emplace(Destination, RealDestination);
+		}
+		if (RefusalCode != nullptr)
+		{
+			Refusals.Add(Target, RefusalCode, Refusal);
+			continue;
+		}
+		TArray<FString> Placed;
+		for (int32 Index = 0; Index < Moves.Num(); ++Index)
+		{
+			if (!IFileManager::Get().Move(*Moves[Index].Value, *(RealStaging / Written[Index]), /*Replace*/ true,
+				/*EvenIfReadOnly*/ false, /*Attributes*/ false, /*bDoNotRetryOrError*/ true))
+			{
+				break;
+			}
+			Placed.Add(Moves[Index].Key);
+		}
+		// Every file reported as written is still a file inside the project.
+		const bool bAllInside = !Placed.ContainsByPredicate([&ProjectRoot](const FString& Path)
+		{
+			FString RealPath;
+			return !AssetDocumentPaths::ResolveForAccess(ProjectRoot, Path, RealPath);
+		});
+		Files.Append(Placed);
+		if (Placed.Num() != Moves.Num() || !bAllInside)
+		{
+			Refusals.Add(Target, TEXT("Assets.ExportFailed"), FString::Printf(TEXT("%d of %d exported file(s) could not be "
+				"placed in %s"), Moves.Num() - Placed.Num(), Moves.Num(), *Folder));
+			continue;
+		}
 		TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
 		Row->SetStringField(TEXT("asset"), Asset->GetPathName());
 		Row->SetStringField(TEXT("file"), File);
+		if (Placed.Num() > 1)
+		{
+			Row->SetArrayField(TEXT("files"), StringValues(Placed));
+		}
 		Row->SetStringField(TEXT("exporter"), Exporter->GetClass()->GetName());
 		Row->SetNumberField(TEXT("bytes"), static_cast<double>(IFileManager::Get().FileSize(*File)));
 		Exported.Add(MakeShared<FJsonValueObject>(Row));

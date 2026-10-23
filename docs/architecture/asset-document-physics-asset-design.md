@@ -1,14 +1,14 @@
 # AssetDocument Physics Asset profile: design
 
-Status: design 2026-10-06; P0-P2 implemented (results in [asset-document-physics-asset-matrix.md](asset-document-physics-asset-matrix.md)). P3 open-editor apply done 2026-10-18: close, apply, reopen (test `PhysicsAsset.OpenEditorApply`).
+Status: implemented, including apply on an asset open in its editor (close, apply, reopen; test `PhysicsAsset.OpenEditorApply`). Results: [asset-document-physics-asset-matrix.md](asset-document-physics-asset-matrix.md).
 Governing rules: [design rules](asset-document-design-rules.md) §3 (rollback = functional
 equivalence), §3.1 (Undo history), §3.2 (dependent assets), §4 (editor-equivalent code; raw paths only where the
 editor does the same, in their own file with a behaviour test; no private headers, no unexported symbols) and §5
 (support matrix). The reference is the **Physics Asset Editor** of UE 5.7 (`Engine/Source/Editor/PhysicsAssetEditor`,
 mostly `FPhysicsAssetEditorSharedData` and `FPhysicsAssetDetailsCustomization`), the Content Browser's
 "Create > Physics Asset" on a skeletal mesh, and `FPhysicsAssetUtils` (`Engine/Source/Developer/PhysicsUtilities`,
-public `PHYSICSUTILITIES_API`). Legacy generators are not a reference. Acceptance is editor fidelity on real content,
-free edits, and an AI writing physics assets from scratch.
+public `PHYSICSUTILITIES_API`). Acceptance is editor fidelity on real content, free edits, and an AI writing physics
+assets from scratch.
 
 Paths: `RT` = `Engine/Source/Runtime/Engine`, `PAE` = `Engine/Source/Editor/PhysicsAssetEditor/Private`,
 `PU` = `Engine/Source/Developer/PhysicsUtilities`.
@@ -17,7 +17,7 @@ Paths: `RT` = `Engine/Source/Runtime/Engine`, `PAE` = `Engine/Source/Editor/Phys
 
 | Class | Scope | Reason |
 |---|---|---|
-| `/Script/Engine.PhysicsAsset` | **Exact profile** `profile.physics_asset.v1` | Bodies and constraints are instanced subobject arrays whose identity is a bone; the collision table is not a UPROPERTY; constraint profiles live in a non-editable `ProfileHandles` array; creation needs a mesh and opens a modal dialog. The generic route cannot express or create any of it (coverage audit row 4). |
+| `/Script/Engine.PhysicsAsset` | **Exact profile** `profile.physics_asset.v1` | Bodies and constraints are instanced subobject arrays whose identity is a bone; the collision table is not a UPROPERTY; constraint profiles live in a non-editable `ProfileHandles` array; creation needs a mesh and opens a modal dialog. The generic route cannot express or create any of it. |
 | `USkeletalBodySetup` (in `SkeletalBodySetups`) | Same profile, `Bodies` | One per simulated bone. |
 | `UPhysicsConstraintTemplate` (in `ConstraintSetup`) | Same profile, `Constraints` | One per joint. |
 | Shape elements: sphere, box, capsule (sphyl), tapered capsule, convex | Same profile, body `Shapes` | All reflected (`FKAggregateGeom`); convex by its `VertexData`. |
@@ -255,7 +255,7 @@ Profile create, editor-equivalent without the dialog:
   project's `UPhysicsAssetGenerationSettings` defaults or a create-only `Generation` key holding
   `FPhysAssetCreateParams` overrides (`GeomType`, `MinBoneSize`, `bBodyForAll`, `AngularConstraintMode`, ...). The
   result then gets the document's other regions. `Generation` is never emitted.
-- Mesh assignment (`bSetToMesh`): decision §8.2. Recommendation: **do not** assign (the mesh is another package the
+- Mesh assignment (`bSetToMesh`): decision §8.2. The asset is **not** assigned (the mesh is another package the
   document did not name); Inspect reports "mesh X uses physics asset Y", and the AI can set the mesh's
   `PhysicsAsset` through the mesh's own document.
 - `FAssetRegistryModule::AssetCreated`; failure → factory rollback deletes the package.
@@ -300,7 +300,7 @@ roll back; pre-existing errors return as `PhysicsAsset.ValidationError` warnings
 - Dependents (§3.2): skeletal meshes, skeletal mesh components and anim graphs (RigidBody node) reference the asset by
   pointer and resolve bodies by bone name at runtime; nothing is compiled from it. `RefreshPhysicsAssetChange`
   recreates physics state of live components, as the editor does. No dependent package changes.
-- Open editor (P3, done): an asset open in the Physics Asset Editor is closed for the apply and reopened on the result
+- Open editor: an asset open in the Physics Asset Editor is closed for the apply and reopened on the result
   (Info `PhysicsAsset.EditorReopened`): the editor keeps selection by index, a running simulation and preview
   component state that index shifts would break, and its refresh (`FPhysicsAssetEditor`, SharedData) is private.
 
@@ -355,21 +355,16 @@ Undo test: human edit in the Physics Asset Editor, save, close, AI apply, Ctrl+Z
 
 ### 6.4 AI from scratch
 
-- **Python test:** one `Create` on `TutorialTPP` with a ragdoll document written by hand (pelvis, spine, head, arms,
+- **Flow test:** one `Create` on `TutorialTPP` with a ragdoll document written by hand (pelvis, spine, head, arms,
   legs: 11 bodies, 10 constraints with cone / twist limits, collision disabled between neighbours), status
   `UpToDate`, a component with the asset simulates for 60 frames without NaNs. Second document: omit `Bodies`, give
   `Generation: {"GeomType": "Box", "MinBoneSize": 10}`, then edit two bodies. Error cases at paths with rollback:
   unknown bone, constraint to a missing body, empty `Shapes` on a simulated body, collision pair with a missing body,
   profile entry for an undeclared profile, no mesh on create.
-- **Black-box trial** (MCP tools + schema section only): "make a ragdoll for TutorialTPP with limited elbows and
-  knees", "add a hit-react physical animation profile to the upper body", "make the ponytail bones simulated with a
-  soft drive".
 
-## 7. Risks, unknowns and phases
+## 7. Risks
 
-### 7.1 Risks
-
-| Risk | Effect | Answer |
+| Risk | Effect | Mitigation |
 |---|---|---|
 | Editor operations live in private `FPhysicsAssetEditorSharedData` | same result needed | one raw file using the public calls (`FPhysicsAssetUtils`, `UPhysicsAsset`, `FConstraintInstance`); behaviour test against the real SharedData operation in an automation editor session |
 | Index-keyed, non-reflected `CollisionDisableTable` | index drift on delete; generic tools blind to it | only `DestroyBody` / `EnableCollision` / `DisableCollision` touch it; document uses bone pairs; snapshot covers it (custom `Serialize`) |
@@ -382,50 +377,26 @@ Undo test: human edit in the Physics Asset Editor, save, close, AI apply, Ctrl+Z
 | Thin default-mounted corpus (one engine asset) | coverage | template copies and fixtures; optional plugins (§8.3) |
 | `PhysicsUtilities` is a Developer module | editor-only dependency | fine for an Editor module (UnrealEd already depends on it) |
 
-### 7.2 Phases (each independently mergeable)
+## 8. Decisions
 
-| Phase | Content | Acceptance |
-|---|---|---|
-| **P0 read** | provider (module per §8.1), `physics.asset.read.v1`, `physics.status.v1`, Python Extract / Inspect / Diff (Apply refused `PhysicsAsset.ReadOnly`), compile-status describer | extract stable (twice equal, equal after reload) on #1–#4 and the fixtures; collision pairs match the editor's "No Collision" display |
-| **P1 apply on existing assets** | `physics.asset.edit.v1` ops (body add / remove / shapes / settings / physical animation, constraint add / remove / rename / bones / frames / settings / profiles, collision pairs, preview mesh), raw editor-equivalent file + behaviour tests, rebuilder, open-editor refusal | §6.2 on #1–#4 and fixtures (apply onto an emptied duplicate); §6.3 edits; rollback after a failed validation; save-reload gotcha test; Undo test |
-| **P2 create** | create with mesh (`FactoryContext` / `PreviewMesh`), document bodies or `Generation`, `Fit`, `Inspect.Generation` suggestion | §6.2 as written (create from extract); §6.4 Python test |
-| **P3 AI surface** (open-editor apply done 2026-10-18) | `MCP/schemas/assetdocument/PhysicsAsset.md`, open-editor apply if decided, black-box trial | §6.4 trial; matrix approved |
+1. **Module / owner.** Own module `AssetDocumentPhysics` (owner `Physics` = **13**, provider `physics`, depends on
+   `PhysicsUtilities`, `PhysicsCore`, `UnrealEd`, `AssetDocumentEditor`), not folded into `AssetDocumentAnimation`:
+   physics assets are used by meshes, vehicles and props, not only animation, and the dependency set is different.
+2. **Mesh assignment on create:** none. The editor's factory assigns the new asset to the mesh (`bSetToMesh = true`);
+   here the mesh is a different package the document did not name (design rules §3.2), so create never assigns it.
+   Inspect `MeshUsers` shows which meshes use the asset (asset registry referencers, and whether a loaded mesh's
+   `PhysicsAsset` is this asset); the AI sets the assignment through the mesh's own document.
+3. **Corpus.** Only one physics asset is mounted by default, so the template copies (#2–#4, copied into
+   `/Game/<pack>` by the tests as project creation does) are the main corpus; `MoverExamples` is enabled in the test
+   sandboxes; MetaHuman, ChaosModularVehicle examples and ProceduralVegetation are optional (the tests skip them with
+   a note).
+4. **Generation keys:** `Generation` (create) and `Fit` (per body) are allowed create-time keys, never emitted.
+   "Create Physics Asset" without generation is not an editor path at all (the editor always generates), and per-body
+   fit is the editor's normal "Add Body" path. `Generation` is also an Inspect suggestion.
+5. **Constraint identity:** `JointName`, renames with `RenamedFrom`. The alternative, the child / parent bone pair
+   (`FindConstraintIndex(Bone1, Bone2)`), breaks for user constraints between the same pair and for reparenting.
 
-## 8. Decisions needed (with recommendations)
-
-1. **Module / owner.** New module `AssetDocumentPhysics` (owner `Physics`, new value 12, provider `physics`,
-   depends on `PhysicsUtilities`, `PhysicsCore`, `UnrealEd`, `AssetDocumentEditor`) versus folding into
-   `AssetDocumentAnimation`. Recommendation: own module; physics assets are used by meshes, vehicles and props, not
-   only animation, and the dependency set is different.
-2. **Assign the new asset to the mesh on create** (the editor's factory does, `bSetToMesh = true`). Recommendation:
-   no; the mesh is a different package the document did not name (§3.2 of the reset). Inspect shows the
-   assignment; the AI sets it through the mesh's document. Alternative: follow the editor and report the mesh as an
-   updated dependent.
-3. **Corpus plugins.** Only one physics asset is mounted by default. Recommendation: use the template copies (#2–#4)
-   as the main corpus, enable `MoverExamples` (already proposed for IK Rig) in the test sandbox, keep MetaHuman,
-   ChaosModularVehicle examples and ProceduralVegetation optional.
-4. **Generation as document keys** (`Generation` on create, `Fit` per body) versus suggestion-only (as IK Rig's
-   auto-characterize). Recommendation: allow both create-time keys, never emitted, because "Create Physics Asset"
-   without generation is not an editor path at all (the editor always generates), and per-body fit is the editor's
-   normal "Add Body" path; also offer the `Generation` suggestion in Inspect.
-5. **Constraint identity = `JointName`** with `RenamedFrom` for renames (recommended) versus the child / parent bone
-   pair (`FindConstraintIndex(Bone1, Bone2)`), which breaks for user constraints between the same pair and for
-   reparenting.
-
-### Decisions (Root, 2026-10-07; recorded with P0 + P1)
-
-1. **Module / owner:** own module `AssetDocumentPhysics`, owner `Physics` = **13** (12 is reserved for Cinematics),
-   provider `physics`.
-2. **Mesh assignment on create:** no. Create never assigns the new asset to the mesh; Inspect `MeshUsers` shows which
-   meshes use the asset (asset registry referencers, and whether a loaded mesh's `PhysicsAsset` is this asset).
-3. **Corpus:** the template copies (#2–#4, copied into `/Game/<pack>` by the tests as project creation does) are the
-   main corpus; `MoverExamples` is enabled in the test sandboxes; MetaHuman, ChaosModularVehicle examples and
-   ProceduralVegetation are optional (the tests skip them with a note).
-4. **Generation keys:** `Generation` (create) and `Fit` (per body) are allowed create-time keys, never emitted;
-   `Generation` is also an Inspect suggestion. Both arrived with P2 (see "P2 create" below).
-5. **Constraint identity:** `JointName`, renames with `RenamedFrom`.
-
-Semantics settled while implementing P0/P1 (they refine §3.2 / §3.4 / §4):
+Further semantics (they refine §3.2 / §3.4 / §4):
 
 - **Inside a body / constraint entry every key is sparse with defaults**: omitted `Properties`, `PhysicalAnimation`,
   `Profiles` mean "a new body's / constraint's values" (not "keep"); extract omits them when they equal the
@@ -449,7 +420,7 @@ Semantics settled while implementing P0/P1 (they refine §3.2 / §3.4 / §4):
   document-only rename (`constraint.rename`); the editor has no rename command.
 - New bodies use the project's generation settings flags (`bDisableCollisionsByDefault`, `bCreateConstraints`), as
   the editor's Add Body does.
-- **P2 create (2026-10-08):** the generic factory route creates the asset.
+- **Create:** the generic factory route creates the asset.
   `UPhysicsAssetFactory` always opens its modal dialog, so the integration's dialog-factory seam
   (`AssetDocumentEditorDialogFactory.h`) replaces `FactoryCreateNew` by `IAssetTools::CreateAsset` without a factory
   plus a registered initializer that does what the factory does before its dialog (`PreviewSkeletalMesh =

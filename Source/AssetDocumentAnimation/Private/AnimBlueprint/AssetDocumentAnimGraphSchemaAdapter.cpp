@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Anim graph schema adapter (UAnimationGraphSchema and the K2-derived rule-graph
 // schemas). Anim graph nodes (UAnimGraphNode_Base) are keyed "Anim:<Kind>[:<Arg>]":

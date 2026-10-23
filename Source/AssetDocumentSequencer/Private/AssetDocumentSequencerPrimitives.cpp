@@ -1,7 +1,8 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Sequencer primitives (provider "seq", owner Cinematics) of the Level Sequence profile
-// (docs/architecture/asset-document-sequencer-design.md §4.4). Phases S1 (read) and S2 (core authoring):
+// (docs/architecture/asset-document-sequencer-design.md §4.4). Read and core authoring:
 //   seq.read.v1     the authored state of a sequence as Sequencer shows it (AssetDocumentSequencerRead.cpp)
 //   seq.status.v1   the read checks of design §5.1 as a compile status (AssetDocumentSequencerStatus.cpp)
 //   seq.edit.v1     Sequencer's edits without an open Sequencer (AssetDocumentSequencerEdit*.cpp, mutating)
@@ -60,7 +61,7 @@ FAssetDocumentPrimitiveDescriptor MakeDescriptor(const TCHAR* PrimitiveId, bool 
 		TEXT("Sequencer.TrackNotSupported"), TEXT("Sequencer.UnknownTrack"), TEXT("Sequencer.UnknownSection"),
 		TEXT("Sequencer.InvalidSectionClass"), TEXT("Sequencer.SectionClassChanged"), TEXT("Sequencer.SectionRangeRequired"),
 		TEXT("Sequencer.CircularSubsequence"), TEXT("Sequencer.UnknownChannel"), TEXT("Sequencer.InvalidKey"), TEXT("Sequencer.InvalidFolder"),
-		// director, events, groups, remote references (S5)
+		// director, events, groups, remote references
 		TEXT("Sequencer.DirectorRequired"), TEXT("Sequencer.UnknownEventEndpoint"), TEXT("Sequencer.UnknownEventPin"),
 		TEXT("Sequencer.DirectorInUse"), TEXT("Sequencer.DirectorUnsupported"), TEXT("Sequencer.DirectorCreateFailed"),
 		TEXT("Sequencer.UnknownSequence"),

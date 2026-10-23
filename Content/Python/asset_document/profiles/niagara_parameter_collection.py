@@ -1,4 +1,7 @@
-"""Apply planner of profile.niagara_parameter_collection.v1 (N5): the collection editor's parameter list.
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Apply planner of profile.niagara_parameter_collection.v1: the collection editor's parameter list.
 
 Body ``Parameters`` is complete when present: ``[{Name, Type, Value?, RenamedFrom?}]`` with the names the collection
 editor shows (without the ``NPC.<Namespace>.`` prefix; systems link them as ``NPC.<Namespace>.<Name>``).  A parameter

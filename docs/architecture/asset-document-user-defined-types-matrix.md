@@ -1,6 +1,6 @@
 # User Defined Struct / Enum support matrix
 
-Status: 2026-10-04. Governing rules:
+Governing rules:
 [design rules](asset-document-design-rules.md) §3 (rollback = functional
 equivalence), §3.2 (dependents of a changed type), §4 (editor-equivalent code) and §5 (support matrix).
 

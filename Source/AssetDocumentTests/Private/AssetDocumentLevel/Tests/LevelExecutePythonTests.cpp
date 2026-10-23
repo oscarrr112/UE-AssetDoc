@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // execute_python's editor transaction (design doc §3.3, phase L0): a failing script is
 // rolled back, the user's previous Undo entry is never touched, no transaction stays

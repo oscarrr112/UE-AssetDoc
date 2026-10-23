@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Unregistered BehaviorTree Profile candidate for A-BT."""
 
 import re
@@ -32,10 +35,10 @@ REQUIRED_PRIMITIVES = (
 )
 _REQUIREMENT_BY_ID = {requirement.primitive_id: requirement for requirement in REQUIRED_PRIMITIVES}
 _TREE_BLOCKERS = {
-    "InstallGraph": "AD.G1.BLOCK.AI.GRAPH_INSTALL_AUTHORITY",
-    "EnsureDecoratorInputCount": "AD.G1.BLOCK.AI.DECORATOR_INPUT_AUTHORITY",
-    "RefreshValueOrKey": "AD.G1.BLOCK.AI.VALUE_OR_KEY_REFRESH_AUTHORITY",
-    "RefreshDecorators": "AD.G1.BLOCK.AI.DECORATOR_REFRESH_AUTHORITY",
+    "InstallGraph": "AD.BLOCK.AI.GRAPH_INSTALL_AUTHORITY",
+    "EnsureDecoratorInputCount": "AD.BLOCK.AI.DECORATOR_INPUT_AUTHORITY",
+    "RefreshValueOrKey": "AD.BLOCK.AI.VALUE_OR_KEY_REFRESH_AUTHORITY",
+    "RefreshDecorators": "AD.BLOCK.AI.DECORATOR_REFRESH_AUTHORITY",
 }
 _TREE_KEYS = frozenset(("Nodes", "Comments", *_TREE_BLOCKERS))
 _NODE_KEYS = frozenset(("Id", "Kind", "Class", "Position", "Children", "Decorators", "Services"))

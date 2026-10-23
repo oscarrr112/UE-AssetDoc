@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // SoundCue profile, apply side (docs/architecture/asset-document-soundcue-design.md):
 // UEAssetDoc.SoundCue.FreeEdits: design §6.3. The same edit made by a document on one duplicate and by

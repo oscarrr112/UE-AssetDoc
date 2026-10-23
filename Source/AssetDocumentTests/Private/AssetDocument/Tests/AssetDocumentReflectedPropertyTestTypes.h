@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -95,7 +96,7 @@ public:
 };
 
 /**
- * Concrete Task 6 fixture whose constructor-owned selector filters must survive
+ * Concrete fixture whose constructor-owned selector filters must survive
  * transient graph materialization. It intentionally covers direct, nested,
  * container, and FInstancedStruct selector locations on one UBTNode instance.
  */

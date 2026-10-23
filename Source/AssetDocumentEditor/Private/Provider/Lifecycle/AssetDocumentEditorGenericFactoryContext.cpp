@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Raw reflected factory configuration kept in its own file. Editor scripting
 // configures a New-asset factory the same way before IAssetTools::CreateAsset,

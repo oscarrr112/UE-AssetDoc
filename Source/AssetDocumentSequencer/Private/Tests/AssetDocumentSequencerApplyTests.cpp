@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Sequencer apply (design §6, phase S2):
+// Sequencer apply (design §6):
 // UEAssetDoc.Sequencer.Apply.CorpusRoundTrip: §6.2 (1) on the built fixture and corpus #1-#12 (#12 DMX:
 //   plugin tracks, parameter sets, node groups): extract, Create a new sequence from the document, extract equal and
 //   equal status; unchanged re-apply is a no-op; equal after reload; per-asset timings.
@@ -20,7 +21,7 @@
 //   section, shows it.
 // UEAssetDoc.Sequencer.Apply.Undo: the undo-history rule around a human edit, an AI apply and a failed
 //   apply.
-// UEAssetDoc.Sequencer.Apply.TrackKinds: phase S3 (§7.2): CVar, level visibility, data layer, slomo,
+// UEAssetDoc.Sequencer.Apply.TrackKinds (§7.2): CVar, level visibility, data layer, slomo,
 //   time warp (play-rate curve), parameter sections (MPC, material, custom primitive data, particle parameters),
 //   primitive material, particle, camera shake family, conditions (section, track group, row) and dense channels with
 //   stated tangents (a 1000-key slomo curve and a 400-key MPC parameter, several channel.append chunks) as an editor
@@ -1597,7 +1598,7 @@ void SetInvert(UMovieSceneCondition& Condition)
 	}
 }
 
-// The S3 track kinds, made with the calls the track editors and the Details panel make.
+// The extra track kinds, made with the calls the track editors and the Details panel make.
 bool AddTrackKinds(ULevelSequence& Sequence, const FBuilt& Built)
 {
 	UMovieScene& MovieScene = *Sequence.GetMovieScene();
@@ -1786,11 +1787,11 @@ bool FAssetDocumentSequencerTrackKindsTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	const FString BasePath = Base->GetPathName();
-	Twin(*this, Fixtures, LoadQuiet(BasePath), TEXT("S3 track kinds"), [&Built](ULevelSequence& Sequence) { return AddTrackKinds(Sequence, Built); },
+	Twin(*this, Fixtures, LoadQuiet(BasePath), TEXT("extra track kinds"), [&Built](ULevelSequence& Sequence) { return AddTrackKinds(Sequence, Built); },
 		[this](ULevelSequence& Editor, ULevelSequence& Document)
 		{
-			const int32 Curves = EvaluatesEqualAll(*this, TEXT("S3 track kinds"), Editor, Document);
-			TestTrue(*FString::Printf(TEXT("S3 track kinds: curves evaluate equal (%d)"), Curves), Curves > 0);
+			const int32 Curves = EvaluatesEqualAll(*this, TEXT("extra track kinds"), Editor, Document);
+			TestTrue(*FString::Printf(TEXT("extra track kinds: curves evaluate equal (%d)"), Curves), Curves > 0);
 			const UMovieSceneSlomoTrack* SlomoA = GlobalTrackOf<UMovieSceneSlomoTrack>(Editor);
 			const UMovieSceneSlomoTrack* SlomoB = GlobalTrackOf<UMovieSceneSlomoTrack>(Document);
 			if (TestTrue(TEXT("slomo on both sides"), SlomoA != nullptr && SlomoB != nullptr))

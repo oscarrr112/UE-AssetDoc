@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.HttpServer.Mcp.Json: the MCP endpoint writes tool results as a JavaScript MCP server
 //   would (JSON.stringify of the route's JSON), so the text an MCP client reads is the same whichever path served it:

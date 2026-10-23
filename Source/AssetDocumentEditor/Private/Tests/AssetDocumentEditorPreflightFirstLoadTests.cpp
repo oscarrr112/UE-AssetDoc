@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The first validate of a modular Control Rig made from the engine's module library
 // failed with 8 x PreflightIsolation.PackageNotRestored for the module and function library packages

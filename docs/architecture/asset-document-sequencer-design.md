@@ -1,43 +1,44 @@
 # AssetDocument Sequencer profiles (Level Sequence, Template Sequence, Camera Animation Sequence): design
 
-Status: design (2026-10-07); decisions in §8; S1 (read) implemented (support matrix: [asset-document-sequencer-matrix.md](asset-document-sequencer-matrix.md)). S6 open-editor apply done 2026-10-18 (test `Sequencer.OpenEditorApply`). The design text below was written before any product
-code. Governing rules: [design rules](asset-document-design-rules.md) §3 (rollback = functional
+Status: implemented, including apply on a sequence open in Sequencer (test `Sequencer.OpenEditorApply`). Decisions in §8; support matrix: [asset-document-sequencer-matrix.md](asset-document-sequencer-matrix.md).
+
+Governing rules: [design rules](asset-document-design-rules.md) §3 (rollback = functional
 equivalence), §3.1 (Undo history), §3.2 (dependent assets), §4 (editor-equivalent code; raw paths allowed when the
 editor does it that way, in their own file with a behaviour test; no private headers, no unexported symbols) and §5
 (support matrix). Reference editor: **Sequencer** as the Level Sequence editor and the Template Sequence editor host
 it (`Engine/Source/Editor/Sequencer`, track editors in `Engine/Source/Editor/MovieSceneTools`), the Content Browser
 actions, and the editor scripting layer that ships with it (`Engine/Plugins/MovieScene/SequencerScripting`,
-`ULevelSequenceEditorSubsystem` in `Engine/Plugins/MovieScene/LevelSequenceEditor`). The legacy generators are not a
-reference. Acceptance is fidelity on real content, free edits, and an AI writing a sequence from scratch.
+`ULevelSequenceEditorSubsystem` in `Engine/Plugins/MovieScene/LevelSequenceEditor`). Acceptance is fidelity on real
+content, free edits, and an AI writing a sequence from scratch.
 
-Engine source read (read only): `/Users/Shared/Epic Games/UE_5.7`. Paths are relative to `Engine/` unless stated.
+Engine source read (read only): the UE 5.7 install, `<UE_ROOT>`. Paths are relative to `Engine/` unless stated.
 Runtime modules: `Source/Runtime/MovieScene` (data model, channels, compiler), `Source/Runtime/MovieSceneTracks`
 (built-in tracks / sections / custom bindings), `Source/Runtime/LevelSequence`, `Source/Runtime/UniversalObjectLocator`.
 Plugins: `Plugins/MovieScene/TemplateSequence` (Template + Camera Animation Sequence; off by default but pulled in by
 the default-on `GameplayCameras` / `EngineCameras` plugins), `Plugins/MovieScene/SequencerScripting` (pulled in by the
 default-on `LevelSequenceEditor`), `Plugins/MovieScene/SequenceValidator` (default on, experimental).
 
-Scope boundary (user, 2026-10-07): **World / Level editing is not an asset document.** A sequence binds to level
+Scope boundary: **World / Level editing is not an asset document.** A sequence binds to level
 actors through *binding references*; the document stores those references as data and never edits, spawns, moves or
 saves anything in a level. Level-side work (placing a `LevelSequenceActor`, its binding overrides, picking actors) is
-the job of the separate structured level/actor tool set (design p30); §3.5 says what crosses that line.
+the job of the separate structured level/actor tool set ([level-editing-tools-design.md](level-editing-tools-design.md)); §3.5 says what crosses that line.
 
 ## 1. Classes in scope
 
-| Class | Decision | Profile | Phase | Reason |
-|---|---|---|---|---|
-| `/Script/LevelSequence.LevelSequence` | **exact profile** | `profile.level_sequence.v1` | S1–S5 | The cinematic asset. All content (bindings, tracks, sections, channels, folders, markers, the Director Blueprint) lives in the `UMovieScene` subobject graph; the generic route emits nothing (coverage audit §3 row 8). |
-| `/Script/TemplateSequence.TemplateSequence` | **exact profile**, same movie-scene body | `profile.template_sequence.v1` | S4 | A reusable sequence animating one root actor of a class (`BoundActorClass`), played by `UTemplateSequencePlayer` or as a Template track in a Level Sequence. Same component as the Level Sequence body plus a root-binding rule. |
-| `/Script/TemplateSequence.CameraAnimationSequence` | **exact profile** (Template Sequence body, class fixed to a cine camera) | `profile.template_sequence.v1` (variant) | S4 | Camera animations played as camera shakes (`UCameraAnimationCameraModifier`, Sequence Camera Shake pattern). It is a `UTemplateSequence` whose factory always binds `ACineCameraActor`. |
-| Director Blueprint (`ULevelSequence::DirectorBlueprint`, parent `ULevelSequenceDirector`, an inner `UBlueprint` of the sequence package) | **in scope as a Body region** | Blueprint graph component hosted in the sequence | S5 | Event tracks call its functions and custom events; dynamic / director bindings call its functions. Authoring event keys without it is impossible. Reuses the Blueprint profile's member and graph components; it is not a separate asset. |
-| `/Script/LevelSequence.LegacyLevelSequenceDirectorBlueprint` | out | — | — | Pre-4.26 director class; `PostLoad` already upgrades. The coverage audit routes it to the Blueprint lifecycle. |
-| `/Script/ActorSequence.ActorSequence` | out | — | — | Not an asset: it is owned by a `UActorSequenceComponent` inside a Blueprint or a level actor. The movie-scene component of this design could later be hosted by the Blueprint profile (components region) the way the Director Blueprint is hosted here. |
-| `/Script/UMG.WidgetAnimation` | stays in the WidgetBlueprint profile | — | later | Already authored by `Body.Animations` (one-section property tracks). §7.3 proposes moving its tracks onto this design's shared movie-scene component so UMG gains sections, events and the same key forms; separate decision. |
-| `/Script/CineAssemblyTools.CineAssembly` (experimental plugin, subclass of LevelSequence) | out (generic route) | — | — | Experimental "Cinematic Assembly" product layer (schemas, naming tokens) on top of a Level Sequence. Its movie scene would work with the Level Sequence profile; registering the subclass is a one-line follow-up once the plugin leaves experimental. |
-| `/Script/DaySequence.DaySequence` (experimental plugin) | out | — | — | Day/night cycle sequences bound through `DaySequenceBindingReferences` to a `DaySequenceActor`. Same movie-scene component would apply; plugin is experimental and off by default. Revisit on request. |
-| `NiagaraSequence`, `ContextualAnimMovieSceneSequence`, MetaHuman sequences, `AnimSequencerDataModel`, Avalanche `AvaSequence` | out | — | — | Transient or tool-internal sequences (no standalone assets), or owned by other asset types. |
-| Movie Render Queue / Movie Render Graph configs (`MoviePipelinePrimaryConfig`, `MovieGraphConfig`) | out here | — | — | Different assets (render settings / a graph); not Sequencer content. They reference sequences, not the other way round. |
-| `LevelSequenceActor`, `ALevelSequenceActor` binding overrides, `LevelSequencePlayer` settings | out (level tool set p30) | — | — | Level content. |
+| Class | Decision | Profile | Reason |
+|---|---|---|---|
+| `/Script/LevelSequence.LevelSequence` | **exact profile** | `profile.level_sequence.v1` | The cinematic asset. All content (bindings, tracks, sections, channels, folders, markers, the Director Blueprint) lives in the `UMovieScene` subobject graph; the generic route emits nothing. |
+| `/Script/TemplateSequence.TemplateSequence` | **exact profile**, same movie-scene body | `profile.template_sequence.v1` | A reusable sequence animating one root actor of a class (`BoundActorClass`), played by `UTemplateSequencePlayer` or as a Template track in a Level Sequence. Same component as the Level Sequence body plus a root-binding rule. |
+| `/Script/TemplateSequence.CameraAnimationSequence` | **exact profile** (Template Sequence body, class fixed to a cine camera) | `profile.template_sequence.v1` (variant) | Camera animations played as camera shakes (`UCameraAnimationCameraModifier`, Sequence Camera Shake pattern). It is a `UTemplateSequence` whose factory always binds `ACineCameraActor`. |
+| Director Blueprint (`ULevelSequence::DirectorBlueprint`, parent `ULevelSequenceDirector`, an inner `UBlueprint` of the sequence package) | **in scope as a Body region** | Blueprint graph component hosted in the sequence | Event tracks call its functions and custom events; dynamic / director bindings call its functions. Authoring event keys without it is impossible. Reuses the Blueprint profile's member and graph components; it is not a separate asset. |
+| `/Script/LevelSequence.LegacyLevelSequenceDirectorBlueprint` | out | — | Pre-4.26 director class; `PostLoad` already upgrades. It goes through the Blueprint lifecycle. |
+| `/Script/ActorSequence.ActorSequence` | out | — | Not an asset: it is owned by a `UActorSequenceComponent` inside a Blueprint or a level actor. The movie-scene component of this design could be hosted by the Blueprint profile (components region) the way the Director Blueprint is hosted here. |
+| `/Script/UMG.WidgetAnimation` | stays in the WidgetBlueprint profile | — | Already authored by `Body.Animations` (one-section property tracks). §7.1 describes moving its tracks onto this design's shared movie-scene component so UMG gains sections, events and the same key forms; a separate decision. |
+| `/Script/CineAssemblyTools.CineAssembly` (experimental plugin, subclass of LevelSequence) | out (generic route) | — | Experimental "Cinematic Assembly" product layer (schemas, naming tokens) on top of a Level Sequence. Its movie scene would work with the Level Sequence profile; registering the subclass is a one-line change once the plugin leaves experimental. |
+| `/Script/DaySequence.DaySequence` (experimental plugin) | out | — | Day/night cycle sequences bound through `DaySequenceBindingReferences` to a `DaySequenceActor`. Same movie-scene component would apply; plugin is experimental and off by default. |
+| `NiagaraSequence`, `ContextualAnimMovieSceneSequence`, MetaHuman sequences, `AnimSequencerDataModel`, Avalanche `AvaSequence` | out | — | Transient or tool-internal sequences (no standalone assets), or owned by other asset types. |
+| Movie Render Queue / Movie Render Graph configs (`MoviePipelinePrimaryConfig`, `MovieGraphConfig`) | out here | — | Different assets (render settings / a graph); not Sequencer content. They reference sequences, not the other way round. |
+| `LevelSequenceActor`, `ALevelSequenceActor` binding overrides, `LevelSequencePlayer` settings | out (level tool set) | — | Level content. |
 
 Editor state that is **not** content (kept as is, never written, Body-owned): `UMovieScene::EditorData` (view / work
 range, expansion states, pinned nodes), `NavigationToolState`, transient solo / mute nodes, the Sequencer's selection
@@ -183,23 +184,23 @@ frame 60 through a Director event; a fade in; a marker; the camera and door are 
     ],
     "Markers": [{"Frame": 60, "Label": "Door opens"}],
     "Director": {
-      "Functions": [
+      "FunctionGraphs": [
         {"Name": "PlayDoorCreak",
-         "Inputs": [{"Name": "Door", "Type": {"Category": "object", "SubCategoryObject": "/Script/Engine.Actor"}}],
-         "Graph": {"Nodes": [
+         "Signature": {"Inputs": [{"Name": "Door", "Type": "object:/Script/Engine.Actor"}]},
+         "Nodes": [
             {"Id": "Entry", "Action": "K2:FunctionEntry"},
             {"Id": "Play", "Action": "K2:CallFunction:/Script/Engine.GameplayStatics:PlaySoundAtLocation",
              "Pins": {"Sound": "/Game/Audio/S_DoorCreak.S_DoorCreak"}},
             {"Id": "Loc", "Action": "K2:CallFunction:/Script/Engine.Actor:K2_GetActorLocation"}],
-          "Links": [{"From": "Entry:then", "To": "Play:execute"}, {"From": "Entry:Door", "To": "Loc:self"},
-                    {"From": "Loc:ReturnValue", "To": "Play:Location"}]}}]
+         "Links": [{"From": "Entry:then", "To": "Play:execute"}, {"From": "Entry:Door", "To": "Loc:self"},
+                   {"From": "Loc:ReturnValue", "To": "Play:Location"}]}]
     },
     "MetaData": {"Notes": "Door reveal for the lobby intro."}
   }
 }
 ```
 
-(Director function, pin and action names follow the Blueprint profile's graph shape; the exact action keys are those
+(Director graph, pin and action names follow the Blueprint profile's graph shape; the exact action keys are those
 `graph.actions.enumerate.v1` lists for the director Blueprint, read from Inspect, §3.8.)
 
 ### 3.2 Body regions (Level Sequence)
@@ -211,9 +212,9 @@ frame 60 through a Director event; a fade in; a marker; the camera and door are 
 | `Tracks` | global tracks (camera cut, shots, subsequences, fade, audio, level visibility, data layers, slomo, CVars, MPC, events, ...) (§3.5) | complete, ordered |
 | `Folders` | `[{Path, Color?}]` every folder, `Path` = `Parent/Child`; membership is the `Folder` field of root bindings and global tracks | complete, ordered (order = sorting order among siblings) |
 | `Markers` | `[{Frame, Label?, Comment?, Color?, DeterminismFence?, Inclusive?}]` | complete; sorted by frame (the editor keeps them sorted) |
-| `Director` | the Director Blueprint's members and graphs: the Blueprint profile's `Variables`, `Functions`, `Macros`, `EventGraphs`/`UbergraphPages` shapes (§3.6) | the Blueprint profile's region rules; `null` = no Director Blueprint (only allowed when no event / director binding uses it) |
+| `Director` | the Director Blueprint's members and graphs, in the Blueprint profile's keys (`ImplementedInterfaces`, `Variables`, `ClassDefaults`, `EventDispatchers`, `UbergraphPages`, `FunctionGraphs`, `MacroGraphs`; §3.6) | the Blueprint profile's region rules; `null` = no Director Blueprint (only allowed when no event / director binding uses it) |
 | `MetaData` | `{Author?, Notes?}` | sparse |
-| `Groups` | Sequencer node groups `[{Name, Members: [<node path>]}]` (S5) | complete |
+| `Groups` | Sequencer node groups `[{Name, Members: [<node path>]}]` | complete |
 
 Template / Camera Animation Sequence `Body`: `Settings`, `Root` (§3.4.3), `Tracks`, `Folders`, `Markers` (no
 `Director`, no level bindings: a Template Sequence binds only its root spawnable (legacy `FMovieSceneSpawnable`,
@@ -268,8 +269,8 @@ reflected sequence flags. Everything in §2 is Body-owned.
 - **Binding references inside values.** Any `FMovieSceneObjectBindingID` value (camera cut, attach, path, actor
   reference keys, constraint targets, event bound objects) is written as `{"Binding": "<binding path>"}` (§3.4.2),
   resolved by the profile to the binding GUID in the local sequence space. A reference into a subsequence's binding
-  is `{"Binding": "<path inside that sequence>", "Sequence": "<document path of the sub / shot section>"}` (S5;
-  before that, extracted raw and preserved, §3.9).
+  is `{"Binding": "<path inside that sequence>", "Sequence": "<document path of the sub / shot section>"}`; a
+  reference into a sequence ID no sub / shot section reaches stays raw and is preserved (§3.9).
 
 ### 3.4 Bindings
 
@@ -407,7 +408,7 @@ supports (`UMovieSceneSequence::IsTrackSupported`); unsupported ones are refused
 - Sections: by position in `Sections`. Extract order is the track's `Sections` array order (which Sequencer keeps
   sorted by row, then start). An edit to section `i` edits that section object in place; inserting a section in
   the middle edits the following ones in place and adds the last one (functional equivalence: sections are not
-  referenced from outside their track except by `SectionGroups`, which S5 rewrites).
+  referenced from outside their track except by `SectionGroups`, which the apply rewrites).
 - Keys: the channel is compared as a whole; a differing channel is rewritten with the editor's channel data
   interface (§4). Key handles are transient and never authored.
 
@@ -422,14 +423,14 @@ channel sets created per parameter (`UMovieSceneParameterSection::AddScalarParam
                {"Type": "Color", "Name": "Tint", "Channels": {"RedCurve": {...}, "GreenCurve": {...}, ...}}]
 ```
 
-As built (S3, §8.3): the sets are found by reflection (every stored array of a struct holding channels), so plugin
+Implementation (§8.3): the sets are found by reflection (every stored array of a struct holding channels), so plugin
 sections of the same shape need no code. `Type` is the array name without its `ParameterNamesAndCurves` /
 `ParameterInfosAndCurves` suffix (`Bool`, `Scalar`, `Vector2D`, `Vector`, `Color`, `Transform`, ...; omitted when the
 class has one set); `Name` is the parameter name (`ParameterInfo.Name` for component material parameters; custom
 primitive data names the first float index, `"0"` ... `"35"`); `Properties` holds the element's other fields
 (sparse); `Channels` its channel members by field name; `Parameters` the element's own sets (DMX: fixture patch →
 function channels). Entries are listed set by set in the class's order. Section catalog rows describe the sets.
-Control Rig parameter sections are the same idea but belong to the Control Rig design (p29; §7.3).
+Control Rig parameter sections are the same idea but belong to the Control Rig design ([asset-document-controlrig-design.md](asset-document-controlrig-design.md)).
 
 #### 3.5.4 Sub and shot sections
 
@@ -443,8 +444,8 @@ where frames are not the outer display rate, stated in the profile doc and check
 ### 3.6 The Director Blueprint (`Director`)
 
 The director is a normal Blueprint (parent `ULevelSequenceDirector`) stored inside the sequence package. The region
-uses the Blueprint profile's own regions and shapes for members and graphs (`Variables`, `Functions`, `Macros`,
-`EventDispatchers`, `UbergraphPages`/event graphs), through a **hosted-Blueprint adapter**: the existing
+uses the Blueprint profile's own keys for members and graphs (`ImplementedInterfaces`, `Variables`, `ClassDefaults`,
+`EventDispatchers`, `UbergraphPages`, `FunctionGraphs`, `MacroGraphs`), through a **hosted-Blueprint adapter**: the existing
 `ublueprint_*` Python components and `blueprint.*` / `graph.*` primitives get a target object path
 (`/Game/Cinematics/LS_DoorReveal.LS_DoorReveal:LS_DoorReveal_DirectorBP`) instead of a package. Rules:
 
@@ -488,7 +489,7 @@ Per the core guide: an omitted region keeps everything; a present region is comp
 - `Compile` (§5) and the `Validation` findings.
 - `References`: assets it references (subsequences, animations, sounds, materials) with existence checks.
 
-`inspect_asset_document_target` on a level actor path is the level tool set's business (p30); this profile only
+`inspect_asset_document_target` on a level actor path is the level tool set's business; this profile only
 reports how a locator resolves. `list_types` kinds: `sequencer.track` (supported track classes for a sequence
 class), `sequencer.section`, `sequencer.binding` (custom binding types).
 
@@ -497,10 +498,10 @@ class), `sequencer.section`, `sequencer.binding` (custom binding types).
 | Content | Diagnostic | Behaviour |
 |---|---|---|
 | Channel override registry (procedural channels) | `Sequencer.UnsupportedChannelOverride` | extracted as `{"Unsupported": ...}` on the section; must be listed unchanged |
-| Cross-sequence binding references the document cannot name (a sequence ID no sub / shot section of this sequence has) | `Sequencer.UnsupportedRemoteBinding` | raw `{"Guid", "SequenceID", "ParentIndex"}` (`FMovieSceneObjectBindingID`) extracted and preserved; references into a sub / shot section are authored since S5 (`{"Binding", "Sequence"}`) |
+| Cross-sequence binding references the document cannot name (a sequence ID no sub / shot section of this sequence has) | `Sequencer.UnsupportedRemoteBinding` | raw `{"Guid", "SequenceID", "ParentIndex"}` (`FMovieSceneObjectBindingID`) extracted and preserved; references into a sub / shot section are authored (`{"Binding", "Sequence"}`) |
 | Mixed binding references (locator + custom binding on one binding) | `Sequencer.UnsupportedBindingShape` | preserved |
 | Channel types with no reflected key arrays | `Sequencer.UnsupportedChannel` | preserved |
-| Control Rig parameter sections | `Sequencer.ControlRigTrack` (owned by p29) | read via the generic channel proxy (S2); authoring per p29 decision |
+| Control Rig parameter sections | `Sequencer.ControlRigTrack` (owned by the Control Rig design) | read via the generic channel proxy; authoring belongs to the Control Rig design |
 
 
 ## 4. Editor-equivalent operations
@@ -537,7 +538,7 @@ The profile uses the data-model calls of layers 2 and 3 (all exported: `UMovieSc
 what layer 1 adds around them: one `FScopedTransaction` per op, `Modify()` on every touched object, `MarkAsChanged()`
 on the movie scene (so compiled data and parent sequences see the change), `AutoSetTangents` after key writes. That
 is the UI's effect without the UI. `NotifyMovieSceneDataChanged` is not reproduced because no Sequencer is open
-(open sequences are refused, §5.4). The few UI-only operations become isolated raw files (B1 rule, §4.4).
+(open sequences refresh after the apply, §5.4). The few UI-only operations become isolated raw files (B1 rule, §4.4).
 
 ### 4.2 Mapping
 
@@ -571,7 +572,7 @@ is the UI's effect without the UI. `NotifyMovieSceneDataChanged` is not reproduc
 | Director members and graphs | Director Blueprint editor | the Blueprint profile's existing `blueprint.*` / `graph.*` primitives on the hosted Blueprint (§3.6) | adapter |
 | Event endpoints and keys | event key "Create Event Endpoint" / "Create Quick Binding", key Details | `FMovieSceneEventUtils::SetEndpoint(Event, Section, Node, BoundObjectPin)` to the named function entry / custom event; `BindEventSectionToBlueprint` (event section ↔ director) when the section is new; `PayloadVariables` writes. Creating a missing endpoint is a Director graph edit in the same document (the AI writes the function), not an implicit side effect | op |
 | Director bindings | binding → "Dynamic binding" picker | `CustomBinding` class `UMovieScene*DirectorBlueprintBinding` with `DynamicBinding` endpoint set like events | op |
-| Folders of nodes, groups (S5) | "Group" / node groups panel | `GroupSections` / `UngroupSection`, `UMovieSceneNodeGroupCollection` adds | op |
+| Folders of nodes, groups | "Group" / node groups panel | `GroupSections` / `UngroupSection`, `UMovieSceneNodeGroupCollection` adds | op |
 
 ### 4.3 Planning order (Python)
 
@@ -587,7 +588,7 @@ errors come back as `/ops/<n>` and are mapped back (as Material / IK Rig).
 ### 4.4 Primitives and module
 
 New module **`AssetDocumentSequencer`** (Editor, PostDefault), owner `EAssetDocumentPrimitiveOwner::Cinematics`
-(new value, 12 if p29 does not take it first — Root assigns), provider id `seq`. Dependencies: `MovieScene`,
+(value 12; a new owner is appended at the end of the enum), provider id `seq`. Dependencies: `MovieScene`,
 `MovieSceneTracks`, `LevelSequence`, `UniversalObjectLocator`, `Sequencer` (`FMovieSceneSequenceEditor`,
 `FSequencerUtilities`), `MovieSceneTools` (`FMovieSceneEventUtils`, `MovieSceneToolHelpers`), `TemplateSequence`,
 `LevelSequenceEditor` (module load only: it registers the Level Sequence's `FMovieSceneSequenceEditor`),
@@ -618,7 +619,7 @@ plugins (all already enabled in a default editor through `GameplayCameras` / `En
 Python: `profiles/level_sequence.py` (header, regions, apply plan), `profiles/template_sequence.py`,
 `profiles/sequencer_bindings.py` (identity, paths, locators, templates), `profiles/sequencer_tracks.py` (type tokens,
 track / section identity, section headers), `profiles/sequencer_channels.py` (frame conversion rules, key forms,
-diff that ignores derived auto tangents — shared with a later UMG migration), `profiles/sequencer_director.py`
+diff that ignores derived auto tangents — shareable with the UMG profile), `profiles/sequencer_director.py`
 (hosted Blueprint adapter onto `ublueprint_*`).
 
 ## 5. Compile, validation, rollback
@@ -685,7 +686,7 @@ compile errors fail with `Graph.FinalizeFailed` exactly as the Blueprint profile
   scene (re-caches channel proxies, `MarkAsChanged`), `UMovieSceneCompiledDataManager::GetPrecompiledData()->Reset
   (Sequence)`, and, when the director was touched, the Blueprint rebuilder (recompile, `DirectorClass`).
 - Created asset: factory rollback deletes the package (the director and templates are inner objects).
-- Dependents (direction reset §3.2): a sequence is referenced by parent sequences (sub / shot sections, camera cuts
+- Dependents ([design rules](asset-document-design-rules.md) §3.2): a sequence is referenced by parent sequences (sub / shot sections, camera cuts
   into shots), Blueprints (`K2Node_GetSequenceBinding` pins storing binding GUIDs), Template tracks and level actors
   (binding overrides). None of them is edited. Renaming keeps GUIDs, so nothing breaks; **deleting** a binding or
   re-creating it (`Sequencer.BindingRecreated`) changes what those references find, so the apply lists the
@@ -697,9 +698,9 @@ compile errors fail with `Graph.FinalizeFailed` exactly as the Blueprint profile
 ### 5.4 Open editors and environment
 
 - A sequence open in a Sequencer (Level Sequence editor toolkit, Template Sequence editor, or as the focused / any
-  sub-sequence of an open Sequencer) was refused until S6. S6 (done): the apply lands in place and every open
-  Sequencer whose root reaches the sequence is refreshed as after its own Undo
-  (`NotifyMovieSceneDataChanged(Unknown)`, then `ForceEvaluate`), after a success and after a rollback.
+  sub-sequence of an open Sequencer): the apply lands in place and every open Sequencer whose root reaches the
+  sequence is refreshed as after its own Undo (`NotifyMovieSceneDataChanged(Unknown)`, then `ForceEvaluate`), after a
+  success and after a rollback.
 - Spawnable templates and director compiles run inside `FAssetDocumentEditorNonInteractiveScope`. Nothing in the
   paths above opens dialogs; the Blueprint compile path is already used by the Blueprint profile.
 - No level is loaded, saved or dirtied by any primitive. Inspect's locator resolution only looks at the world already
@@ -710,7 +711,7 @@ compile errors fail with `Graph.FinalizeFailed` exactly as the Blueprint profile
 
 ### 6.1 Corpus (real content in the UE 5.7 install)
 
-An inventory on 2026-10-07 of all `.uasset` / `.umap` files under `/Users/Shared/Epic Games/UE_5.7` found **21 real
+An inventory of all `.uasset` / `.umap` files under `<UE_ROOT>` finds **21 real
 sequence assets** (19 Level Sequences, 2 Day Sequences) and **no** Template Sequence, Camera Animation Sequence,
 Actor Sequence or Director Blueprint asset. Most live in template projects (`Templates/*/Content`, i.e. `/Game` in
 those projects) and are copied into the sandbox under `/Game/AssetDocumentTests/Sequencer/<Template>/...` together
@@ -773,7 +774,7 @@ For each corpus asset and fixture, two round trips: (1) extract → apply as a n
 4. **Not compared**: signatures, compiled data blobs, key handles, editor view state, metadata `Created` / `Author`
    (duplicate resets them), thumbnails.
 
-Pass bar per phase: 100 % of its corpus tier, or a listed `Unsupported` code per asset. A smoke run extracts all 21
+Pass bar: 100 % of the corpus, or a listed `Unsupported` code per asset. A smoke run extracts all 21
 sequences (with the optional plugins on) headless, with no crash and no unknown diagnostic, and records the time.
 
 ### 6.3 Free-edit scenarios (on duplicates)
@@ -804,11 +805,11 @@ sequences (with the optional plugins on) headless, with no crash and no unknown 
   (`Sequencer.InvalidLocator`) — each fails before or rolls back after the change; Extract afterwards equals the
   document before.
 - **Dependents**: delete a binding that a Blueprint `Get Sequence Binding` node references → `DependentsAffected`.
-- **Open editor**: apply while the sequence is open in Sequencer → `Sequencer.OpenInEditor` (lifted in S6).
+- **Open editor**: apply while the sequence is open in Sequencer lands in place and the open Sequencers refresh (`OpenEditorApply`).
 
 ### 6.4 AI from scratch
 
-A fresh AI session with only the MCP tools, `MCP/schemas/assetdocument/Sequencer.md` and the level tool set (p30)
+A fresh AI session with only the MCP tools, `MCP/schemas/assetdocument/Sequencer.md` and the level tool set
 for finding actors writes, in the copied Archvis map:
 
 - a 12-second intro `LS_Intro` at 24 fps: a spawned cine camera on a slow dolly with a focus pull, a second camera
@@ -821,118 +822,97 @@ then three follow-ups: "make the dolly ease out", "add a camera shake on the rev
 two seconds later". It applies, fixes its own diagnostics, and the result plays in the editor (human check in
 Sequencer, plus the evaluation facts). Recorded (calls, failed calls, diagnostics, wall time).
 
-## 7. Risks, unknowns, phases
-
-### 7.1 Risks and unknowns
+## 7. Risks and unknowns
 
 - **Bindings live outside the asset's world.** A possessable is only data (a locator) until a world resolves it;
-  the editor's own add path needs a live actor. Answer: author locators as strings (§3.4.3) through exported
+  the editor's own add path needs a live actor. Mitigation: author locators as strings (§3.4.3) through exported
   `FUniversalObjectLocator::TryParseString` + `FMovieSceneBindingReferences::AddBinding`; Inspect resolves in the
-  open world read-only; the level tool set (p30) gives an AI the actor paths. Unknown: World Partition external
+  open world read-only; the level tool set gives an AI the actor paths. Unknown: World Partition external
   actors and level instances produce locator strings with container IDs / streaming parameters — the corpus #13
   (`Lvl_IntroRoom`) covers it; if a form cannot be parsed back exactly, those bindings are extracted with the raw
   string and kept (`Sequencer.UnsupportedLocator`).
 - **UI-only operations.** Convert To..., Create Camera, Fix Actor References, Copy/Paste Bindings, Template "change
-  bound class" need an `ISequencer`. Answer: the data steps in two isolated raw files with behaviour tests (§4.4);
+  bound class" need an `ISequencer`. Mitigation: the data steps in two isolated raw files with behaviour tests (§4.4);
   Create Camera = a spawnable of `ACineCameraActor` plus a camera cut (document content, no special op); Fix Actor
   References (rebinding by actor label) is a level-tool feature, not a document key.
-- **No transactions / notifications in the scripting layer; no cycle guard in the compiler.** Answer: the primitive
+- **No transactions / notifications in the scripting layer; no cycle guard in the compiler.** Mitigation: the primitive
   owns transactions, `Modify`, `MarkAsChanged`, `AutoSetTangents`; the cycle DFS runs before any sub-section write.
 - **Time exactness.** Display frames vs ticks, non-integer ratios (29.97), sub-frame keys, frame-number properties
-  whose rate is not the outer display rate (sub-section offsets). Answer: rational conversion in C++, shortest
+  whose rate is not the outer display rate (sub-section offsets). Mitigation: rational conversion in C++, shortest
   round-tripping decimals, an explicit per-property rate table, and the evaluation comparison in 6.2. Unknown:
   `FMovieSceneTimeWarpVariant` (play rate / time scale) is custom-serialised; the typed value codec needs a small
   adapter (`{"PlayRate": 1.5}` for the fixed form, reflected payload otherwise).
 - **Generic reflection over ~45 built-in + plugin track classes.** Section properties include instanced objects
-  (easing functions, conditions, constraint containers), interface pointers and custom structs. Answer: typed value
+  (easing functions, conditions, constraint containers), interface pointers and custom structs. Mitigation: typed value
   codec + per-type adapters for `FMovieSceneObjectBindingID`, `FMovieSceneTimeWarpVariant`, `FFrameNumber`,
   easing / condition instanced objects; anything else is reported `Unsupported` and preserved, never dropped.
 - **Dense data.** Baked or recorded sequences (Take Recorder, mocap, #9) have thousands of keys per channel;
-  extract size and diff time grow. Answer: paged read (`seq.read.v1`), C++ channel comparison (hash per channel,
+  extract size and diff time grow. Mitigation: paged read (`seq.read.v1`), C++ channel comparison (hash per channel,
   details only for differing channels), and the dense key form of decision §8.1.
 - **Director Blueprint hosting.** The Blueprint profile assumes the Blueprint is the asset. Unknown: package /
   target assumptions in `ublueprint_runtime` (target paths, compile status, rebuilder, sidecar) for an inner
-  Blueprint. Answer: S5 starts with a spike: run the Blueprint member / graph primitives on `LS_X.LS_X:LS_X_DirectorBP`
-  in a test; adapt the target resolution in one place.
+  Blueprint. Mitigation: the Blueprint member / graph primitives run on `LS_X.LS_X:LS_X_DirectorBP` (tested); the target
+  resolution is adapted in one place.
 - **Load-time conversions.** `ConvertOldSpawnables`, dynamic-binding conversion, `ObjectReferences_DEPRECATED` and
   `FLevelSequenceBindingReferences` upgrades run in `PostLoad` and dirty nothing; the extract shows the converted
   state and applying it writes the new form. That is the editor's behaviour (it saves the new form on next save);
   fidelity #4 and #11 check it.
 - **Version-specific APIs.** Custom bindings (5.4+), `FUniversalObjectLocator` (5.4+), time-warp variants, decorations
-  (5.6+), track row metadata / conditions (5.5+) are recent and still moving. Answer: one module; `ENGINE_MINOR_VERSION`
+  (5.6+), track row metadata / conditions (5.5+) are recent and still moving. Mitigation: one module; `ENGINE_MINOR_VERSION`
   gates; the corpus test catches drift.
 - **Editor-only data.** Folders, markers' comments / colours, metadata, display names, sorting order and the director
   are `WITH_EDITORONLY_DATA`; they are authored content for an editor tool and exist in every editor build.
-- **Performance of the compile check.** Compiling a large shot hierarchy loads every subsequence. Answer: compile
+- **Performance of the compile check.** Compiling a large shot hierarchy loads every subsequence. Mitigation: compile
   only when sub / shot sections or bindings changed, otherwise reuse; record time on #6 / #7.
 
-### 7.2 Phases (each independently mergeable)
+### 7.1 Relations to other work
 
-| Phase | Scope | Acceptance |
-|---|---|---|
-| **S1 read** | module `AssetDocumentSequencer`, owner, `seq.read.v1`, `seq.inspect.v1`, `seq.catalog.v1`; Level Sequence profile registered read-only (apply = `Sequencer.ReadOnlyPhase`); full Extract (all regions incl. director endpoints as facts), Inspect with locator resolution, status checks (read) | Extract of every corpus asset with no unknown diagnostic; smoke run timed; Inspect resolves #8 / #1 locators in the copied maps; the read part of `Sequencer.md` |
-| **S2 core authoring** | `seq.edit.v1`, `seq.status.v1`; create; `Settings` (incl. tick-resolution migration); bindings (possessable + locators, spawnable + template, custom binding by reflection, rename, tags, delete, order, conversion raw file); tracks of the common kinds (transform, all property types, spawn, visibility, fade, camera cut, skeletal animation, audio, attach, path, actor reference, sub, shot, event tracks without endpoints); sections and channels (all key forms); folders; markers; metadata; rollback, rebuilder, dependents warnings, open-editor refusal | Round trip of corpus #1–#11 (director-free); free edits of 6.3 except director / template / groups; failure scenarios roll back |
-| **S3 remaining tracks** | parameter sections (material, MPC, primitive material, custom primitive data, Niagara / particle parameters), CVar, level visibility, data layer, slomo, camera shake family, time-warp track, conditions, plugin tracks through reflection (DMX), dense channel form | #12 round-trips (or exact `Unsupported` list); fixture tracks round-trip; evaluation facts equal |
-| **S4 Template + Camera Animation** | `profile.template_sequence.v1`: factory with class, root spawnable, component bindings by name, change bound class raw file | template fixtures round-trip; change-class scenario; a Camera Animation Sequence played as a camera shake in a behaviour test |
-| **S5 Director, events, groups** | hosted director Blueprint, event endpoints / payloads / bound pins, director bindings, section groups, node groups, remote binding references (camera cut into a shot) | director fixtures round-trip; director / event free edits; AI-from-scratch run (6.4) |
-| **S6 open editor** (optional; done 2026-10-18) | apply while the sequence is open: push the change through the open `ISequencer` (`NotifyMovieSceneDataChanged`, restore pre-animated state) | editor Undo works after an apply; no stale preview actors |
-
-`Sequencer.md` grows with each phase; results go to `asset-document-sequencer-matrix.md` as for Material / StateTree.
-
-### 7.3 Relations to other work
-
-- **UMG Widget animations** use the same `UMovieScene` data. Once S3 lands, `widget_blueprint_animation.py` can use
-  `sequencer_channels.py` (key forms, sections) and lift its "one section, plain keys" limit. Its current key default
+- **UMG Widget animations** use the same `UMovieScene` data. `widget_blueprint_animation.py` could use
+  `sequencer_channels.py` (key forms, sections) and lift its "one section, plain keys" limit. Its key default
   (`Interp` Linear, `Tangent.Mode`) differs from this design's Sequencer key menu tokens; decision §8.2.
-- **Control Rig (p29)**: Control Rig tracks in sequences (`MovieSceneControlRigParameterTrack`) store per-control
+- **Control Rig ([asset-document-controlrig-design.md](asset-document-controlrig-design.md))**: Control Rig tracks in sequences (`MovieSceneControlRigParameterTrack`) store per-control
   channels in a parameter-section-like layout; this design reads them through the generic channel proxy and leaves
   authoring to the Control Rig design, which should reuse §3.3 / §3.5.3 (decision §8.6).
-- **Level / actor tool set (p30)**: provides actor queries that return locator strings and the place / bind
+- **Level / actor tool set ([level-editing-tools-design.md](level-editing-tools-design.md))**: provides actor queries that return locator strings and the place / bind
   operations on `ALevelSequenceActor`; this profile never edits levels.
 - **Generic Blueprint profile**: hosts nothing new; the director adapter is the first "Blueprint inside another
-  asset", which Actor Sequences (Blueprint components) could reuse later.
+  asset", which Actor Sequences (Blueprint components) could reuse.
 
 ## 8. Decisions
 
-The user accepted all eleven recommendations on 2026-10-07. They are binding for S1-S6.
-
 1. **Dense channels: two key forms.** A channel is extracted as key objects up to 64 keys, and in the columnar form
    `{"Frames": [...], "Values": [...], "Interp": <token or list>, "Arrive"?, "Leave"?, ...}` when it has more than 64
-   keys. Apply (S2+) accepts both; both canonicalise to the same data and nothing is elided.
-   S1 note: `Interp` is one token when every key has it, a list otherwise, and omitted when every key is `SmartAuto`.
+   keys. Apply accepts both; both canonicalise to the same data and nothing is elided.
+   Note: `Interp` is one token when every key has it, a list otherwise, and omitted when every key is `SmartAuto`.
    Tangent / weight columns hold `null` for keys without explicit tangents. The read emits the columns in chunks of
    400 keys, and the profile joins them.
 2. **Key interpolation tokens.** The Sequencer key menu tokens are used, with `SmartAuto` as the omitted default:
    `SmartAuto`, `Auto`, `User`, `Break`, `Linear`, `Constant`. Reading also yields `Cubic` (a cubic key with an
-   unlisted tangent mode) and `None`. The UMG profile moves to the shared channel component later, as a separate
-   change: it will accept both forms and extract this one.
+   unlisted tangent mode) and `None`. The UMG profile has its own key form (§7.1).
 3. **Corpus plugins.** The test sandbox `.uproject` enables MovieRenderPipeline, DMXEngine + DMXProtocol and
-   SunPosition, and Root added AnimatorKit with them. Tests that need a plugin skip with a note when it is off.
+   SunPosition, and AnimatorKit. Tests that need a plugin skip with a note when it is off.
    UEAssetDoc itself depends only on modules that are on by default.
-4. **Template and Camera Animation Sequences: in scope, phase S4**, after S2, with fixtures as their corpus.
-5. **Director Blueprint: editable (S5)** by hosting the Blueprint profile's components inside the sequence.
-   Until then (S1), `Body.Director` is read as facts, `{Blueprint, Endpoints[{Name, Kind: Function | CustomEvent,
-   Inputs[{Name, Type}]}]}`, or omitted when there is no director. S5 replaces this shape with the hosted Blueprint
-   regions.
+4. **Template and Camera Animation Sequences: in scope**, with fixtures as their corpus.
+5. **Director Blueprint: editable**, by hosting the Blueprint profile's components inside the sequence.
 6. **Control Rig tracks.** Sequences read and preserve them through the generic channel proxy
-   (`Sequencer.ControlRigTrack` read warning). Authoring belongs to the Control Rig design (p29), on top of this
+   (`Sequencer.ControlRigTrack` read warning). Authoring belongs to the Control Rig design, on top of this
    design's channel codec.
 7. **Binding identity.** A binding is identified by its `Name` among its siblings. `Id` (the GUID digits) is emitted
-   only where siblings share a name. In S1 it is also emitted for a name containing `/` or starting with `#`, because
+   only where siblings share a name. It is also emitted for a name containing `/` or starting with `#`, because
    binding paths could not express such a name.
 8. **Dependents: warn only.** Deleting or recreating a binding that other packages reference reports
    `Sequencer.DependentsAffected` and never edits the other package.
-9. **Apply while the sequence is open in Sequencer: refused** with `Sequencer.OpenInEditor` until the optional S6. S6 done 2026-10-18.
+9. **Apply while the sequence is open in Sequencer: applied in place** (§5.4), not refused: the open Sequencers refresh
+   after a success and after a rollback.
 10. **Module / owner.** The new module is `AssetDocumentSequencer`, provider `seq`, with owner
-    `EAssetDocumentPrimitiveOwner::Cinematics` = **12**. S1 needs only engine modules (MovieScene, MovieSceneTracks,
-    LevelSequence, UniversalObjectLocator, Sequencer, BlueprintGraph, CinematicCamera). The plugin dependencies
-    TemplateSequence, LevelSequenceEditor and SequencerScripting are added to `UEAssetDoc.uplugin` in the phase that
-    first uses them (S2 / S4).
-11. **Unresolvable locators.** A locator that does not resolve in the open world is only reported: in S1, Inspect
-    shows `Resolved: false`, and S2 will report it as `Info`. A syntactically invalid locator is an error at apply,
-    `Sequencer.InvalidLocator` (S2).
+    `EAssetDocumentPrimitiveOwner::Cinematics` = **12**. Its core dependencies are engine modules (MovieScene, MovieSceneTracks,
+    LevelSequence, UniversalObjectLocator, Sequencer, BlueprintGraph, CinematicCamera); the plugin dependencies
+    TemplateSequence, LevelSequenceEditor and SequencerScripting are listed in `UEAssetDoc.uplugin`.
+11. **Unresolvable locators.** A locator that does not resolve in the open world is only reported: Inspect
+    shows `Resolved: false`, and status reports it as `Info`. A syntactically invalid locator is an error at apply,
+    `Sequencer.InvalidLocator`.
 
-### 8.1 S1 implementation notes (deviations and choices)
+### 8.1 Read: implementation notes
 
 - **Corpus location.** The corpus template folders are copied into the sandbox at their own `/Game` paths, as
   creating a project from the template does (`/Game/ArchvisProject/...`, not
@@ -940,8 +920,7 @@ The user accepted all eleven recommendations on 2026-10-07. They are binding for
   those paths, so this is the only way they resolve. Tests remove only what they copied.
 - **`list_types` kinds.** The kinds are `sequencer_track`, `sequencer_section` and `sequencer_binding`, with
   underscores like the other provider kinds (`ikrig_solver`, `metasound_node`) instead of dots.
-- **Parameter sections.** In S1 they are read through their channel-proxy names, like every other section. The
-  §3.5.3 `Parameters` form arrives with their authoring (S3).
+- **Parameter sections.** Read and written in the §3.5.3 `Parameters` form (§8.3).
 - **Fixed binding IDs.** A binding reference stored as a fixed ID (not sequence-relative) is written
   `{"Binding": "<path>", "Fixed": true}`. An invalid (empty) ID is `null`.
 - **Sparse comparison bases.** The spawnable `Template` is sparse against the class default object and the
@@ -955,14 +934,13 @@ The user accepted all eleven recommendations on 2026-10-07. They are binding for
 - **Derived template fields.** `PostLoad` recomputes some component fields from others (a cine camera's
   `FieldOfView` / `AspectRatio` from filmback and lens), so a loaded spawnable template differs from its component
   archetype in them and the `Template` lists them. They are stable across loads. A template created in memory
-  (S2's apply) has not been loaded yet, so S2 must exclude such derived fields or compare against a loaded template.
+  by an apply has not been loaded yet, so the apply excludes such derived fields (§8.4, Template baseline).
 - **Spawnable children in Inspect.** A component binding under a spawnable resolves against the spawnable's saved
   actor template (the spawned actor exists only during playback). Those locator rows carry `SpawnableTemplate: true`.
-- **Read-only check.** Apply runs only when Diff found a change. Preflight and apply compare the Body read by
-  `seq.read.v1` (the generic Details read is not admitted in those phases). An unchanged Body leaves the authored
-  `Properties` as the change, refused at `/Properties/<name>`.
+- **Change detection.** Apply runs only when Diff found a change. Preflight and apply compare the Body read by
+  `seq.read.v1`.
 
-### 8.2 S2 implementation notes (deviations and choices)
+### 8.2 Core authoring: implementation notes
 
 - **Two primitives, op batches.** `seq.edit.v1` takes `{ops: [...]}` and runs them in one `FScopedTransaction` inside
   `FAssetDocumentEditorNonInteractiveScope` (not one transaction per op: Core clears the undo history that references
@@ -992,8 +970,7 @@ The user accepted all eleven recommendations on 2026-10-07. They are binding for
   keeps stated tangents after `AutoSetTangents`, so the round trip reproduces the stored curve exactly (corpus
   `Seq_CineCameraActor02`); for that reason a curve channel's `PostEditChange` (which is `AutoSetTangents`, what the
   key editors call) is not called after the write. An author drops `Arrive` / `Leave` from such a key to let Sequencer compute them.
-  (S2 limit, fixed in S3, §8.3: a channel written in several `channel.append` chunks lost the stated tangents of all
-  but the last chunk.)
+  (A channel written in several `channel.append` chunks keeps its stated tangents across chunks, §8.3.)
 - **Negative zero.** The read writes `-0.0` as `0` (a document number `-0` parses back as the integer 0).
 - **Property tracks without a property.** `Fade` is a float property track the engine binds itself; a property track
   class whose path is empty stays empty instead of being refused.
@@ -1004,17 +981,15 @@ The user accepted all eleven recommendations on 2026-10-07. They are binding for
   compiled data reset). Behaviour test `Apply.Rollback` adds a binding and changes a marker before each failure.
 - **Read-only sequences.** A sequence marked `ReadOnly` is unlocked for the edit and locked again (the document's
   `Settings.ReadOnly` decides the final state); locked sections are unlocked for their write and locked again.
-- **Open editor.** (Until S6) refused when the sequence, or a sequence that reaches it through sub / shot sections, is
-  an edited asset of `UAssetEditorSubsystem` (`Sequencer.OpenInEditor`), before any change. S6: applied in place.
+- **Open editor.** When the sequence, or a sequence that reaches it through sub / shot sections, is an edited asset of
+  `UAssetEditorSubsystem`, the apply lands in place and the open Sequencers refresh (§5.4).
 - **Metadata author.** A new sequence gets the creating user as `MetaData.Author` from the factory, as in the editor;
   the round-trip comparison leaves `Author` out (§6.2 (4)).
-- **Not in S2.** Director authoring (`Sequencer.DirectorNotAuthored`), Template / Camera Animation Sequences, groups,
-  remote binding references and channel overrides (kept untouched on update), parameter sections (S3).
 
-### 8.3 S3 implementation notes (deviations and choices)
+### 8.3 Remaining tracks: implementation notes
 
 - **Parameter sections by reflection (§3.5.3).** Every stored `TArray` of a struct holding channels is a parameter
-  set (Control Rig sections excepted, p29), so material, MPC, component / primitive material, custom primitive data,
+  set (Control Rig sections excepted: Control Rig design), so material, MPC, component / primitive material, custom primitive data,
   particle / Niagara parameters and plugin sections such as DMX (fixture patch → function channels, nested
   `Parameters`) share one reader / writer. The write rebuilds the arrays from the list and then rebuilds the channel
   proxy with `PostEditImport` (what a paste of the section runs; the proxy points into the arrays). Custom primitive
@@ -1037,19 +1012,17 @@ The user accepted all eleven recommendations on 2026-10-07. They are binding for
   `{Loop}`, `{Clamp}`, `{LoopFloat}`, `{ClampFloat}`, `{Custom: {Class, Properties}}`; a custom getter's curve
   channels are section channels. A changed variant rebuilds the channel proxy.
 - **Conditions.** Track and section `ConditionContainer` are instanced objects (above); per-row conditions are the
-  track's `RowConditions` `{"<row>": condition}` (row metadata), no longer reported as `Sequencer.UnsupportedGroups`.
+  track's `RowConditions` `{"<row>": condition}` (row metadata).
 - **WholeSectionRanges on the document's bounds.** The validator checks `Start` (inclusive) and `End` (exclusive) as the
   document lists them; a section ending inclusively on a whole frame (DMX sections) ends one tick after it, and the
   warning names it on the source and on a copy alike.
-- **Preserved content.** Section / node groups, remote binding references and channel override registries stay
-  untouched by an update that rewrites their sections (`Apply.Preserved`); node groups are not reproduced by Create
-  (#12 `LS_FixtureDemo`).
+- **Preserved content.** Remote binding references no sub / shot section reaches and channel override registries stay
+  untouched by an update that rewrites their sections; section and node groups listed as extracted are kept as well
+  (`Apply.Preserved`).
 - **Dependents.** Blueprint "Get Sequence Binding" nodes are found as package referencers like parent sequences
   (`Apply.DependentsBlueprint`).
-- **Not in S3.** Director authoring and event keys (S5), Template / Camera Animation Sequences (S4), groups / remote
-  bindings / channel overrides authoring (S5).
 
-### 8.4 S4 implementation notes (deviations and choices)
+### 8.4 Template and Camera Animation Sequences: implementation notes
 
 - **Two registrations, one route.** `profile.template_sequence.v1` and `profile.camera_animation_sequence.v1` share
   route `seq_profile` and provider `seq` (profile ids and class paths are unique per registration). Create uses the
@@ -1073,17 +1046,13 @@ The user accepted all eleven recommendations on 2026-10-07. They are binding for
   native components and Blueprint construction-script nodes.
 - **Camera Animation Sequences.** Root classes must derive from `ACameraActor` (`Sequencer.CameraClassRequired`, also in
   status). Behaviour: `Template.CameraShake` plays a document-created sequence through `USequenceCameraShakePattern`.
-- **Level Sequence fix.** A listed binding's omitted `Tags` now clears its tags (they could not be removed before).
-- **Template baseline.** `Template` was sparse against the class default object and the component
-  archetypes, whose derived fields are not what an instance holds: a Cine Camera's `FieldOfView` / `AspectRatio` are
-  recomputed by PostLoad and by edit-change notifications, so every document-made Cine Camera spawnable read back with
-  extra template fields and failed the post-save check. Read and write now use a fresh transient actor of the class
-  with its components' edit-change notifications sent (`FTemplateBaseline`), which is what both a written and a
-  reloaded template hold. Test: `Apply.CineCameraSpawnable`. A listed value equal to that baseline is not stored and
+- **Template baseline.** The class default object and the component archetypes do not hold the derived fields of an
+  instance: a Cine Camera's `FieldOfView` / `AspectRatio` are recomputed by PostLoad and by edit-change notifications.
+  A `Template` is therefore sparse against a fresh transient actor of the class with its components' edit-change
+  notifications sent (`FTemplateBaseline`), which is what both a written and a reloaded template hold. Test: `Apply.CineCameraSpawnable`. A listed value equal to that baseline is not stored and
   reads back omitted (the section says to list only differences).
-- **Not in S4.** Director, event keys and groups (S5).
 
-### 8.5 S5 implementation notes (deviations and choices)
+### 8.5 Director, events, groups: implementation notes
 
 - **Hosted Blueprint.** The graph module keeps a registry of hosted Blueprints (`RegisterAssetDocumentHostedBlueprint
   (ULevelSequence::StaticClass(), resolver)`); the `blueprint` and `graph` providers resolve a Level Sequence handle to
@@ -1095,11 +1064,11 @@ The user accepted all eleven recommendations on 2026-10-07. They are binding for
   are rebased to `/Body/Director/<key>`.
 - **Region shape.** `Director` holds the Blueprint profile's keys (`ImplementedInterfaces`, `Variables`,
   `ClassDefaults`, `EventDispatchers`, `UbergraphPages`, `FunctionGraphs`, `MacroGraphs`), each optional (omitted =
-  kept), instead of §3.6's `Functions` / `Macros` names; `ParentClass`, `Components`, `Timelines`, `BlueprintType` are
+  kept), ; `ParentClass`, `Components`, `Timelines`, `BlueprintType` are
   refused (`Sequencer.InvalidBody`). `{}` creates the Director (`director.create`:
   `FMovieSceneSequenceEditor::GetOrCreateDirectorBlueprint`), `null` removes it last (`director.remove`, refused with
-  `Sequencer.DirectorInUse` while keys or director bindings call it). The S2 facts header (`Blueprint`, `Class`) stays a
-  read fact for the profile (self class of the K2 adapter); `Sequencer.DirectorNotAuthored` is retired.
+  `Sequencer.DirectorInUse` while keys or director bindings call it). The facts header (`Blueprint`, `Class`) is a read
+  fact for the profile (self class of the K2 adapter).
 - **Order.** The Director is written first (members, graphs, class defaults), the live sequence is read again, then the
   sequence plan runs, so event keys and director bindings can name endpoints the same document adds; a key whose
   endpoint the document deletes is rewritten and fails with `Sequencer.UnknownEventEndpoint` (rollback). Graph renames
@@ -1107,11 +1076,11 @@ The user accepted all eleven recommendations on 2026-10-07. They are binding for
   same node. The compile runs in the profile's repair phase (`compile_if_needed`): compiler errors fail the apply
   (`Graph.FinalizeFailed` under `/Body/Director`) when the document lists `Director`; otherwise they are warnings
   (`Sequencer.DirectorCompileFailed`).
-- **Event keys.** `{Frame, Event: {Endpoint?, BoundObjectPin?, Payload?}}` (§3.6 called the key field `Function`; it
-  names a function graph or a custom event, so `Endpoint`). Written with `FMovieSceneEventUtils::SetEndpoint` and the
+- **Event keys.** `{Frame, Event: {Endpoint?, BoundObjectPin?, Payload?}}` (`Endpoint` names a function graph or a
+  custom event). Written with `FMovieSceneEventUtils::SetEndpoint` and the
   payload map; repeater sections' `Event` is the same object. The event track's `SupportsType` names only the legacy
   `UMovieSceneEventSection`; the profile also takes `Trigger` / `Repeater` (the track editor's menus), so event
-  sections now always carry `Class`.
+  sections always carry `Class`.
 - **Director bindings.** `FMovieSceneDynamicBinding` values (the "Replaceable from Director Blueprint" binding's
   `DynamicBinding`) are `{Endpoint, ResolveParamsPin?, Payload?}` inside the custom binding's `Properties`, written with
   `FMovieSceneDynamicBindingUtils::SetEndpoint`.
@@ -1119,8 +1088,7 @@ The user accepted all eleven recommendations on 2026-10-07. They are binding for
   `Root` and `Tracks` for Template Sequences). Diff compares the partition (which sections share a group), not the
   numbers; a group needs two sections (`Sequencer.InvalidBody`). Written last by `section_groups.set` (ungroup all,
   then `UMovieScene::GroupSections` per group); regions the document omits keep their live sections in the partition.
-  `Sequencer.UnsupportedGroups` is retired; `Sequencer.UnsupportedRemoteBinding` remains only for IDs no sub / shot
-  section reaches.
+  `Sequencer.UnsupportedRemoteBinding` applies only to IDs no sub / shot section reaches.
 - **Node groups.** `Groups: [{Name, Members}]` with members `{Folder}`, `{Binding}`, `{Track, Node?}` or `{Raw}`,
   composed into the Sequencer's outliner paths (folder names, binding GUIDs, track object names). Members compare as a
   set. A `Raw` path names nothing the document has; a track whose object name a Raw path would now name (a created
@@ -1130,5 +1098,5 @@ The user accepted all eleven recommendations on 2026-10-07. They are binding for
   inner]}`, the sequence ID the binding picker composes (`FSequenceBindingTree`), depth ≤ 4. Tracks whose values hold
   such references are written after the others, and `track.order` runs before section content, so a reference may
   name a shot section created by the same document.
-- **Not in S5.** Level Instance contents (out of scope); the Director's `Timelines` / components (not offered by the
+- **Not authored.** Level Instance contents (out of scope); the Director's `Timelines` / components (not offered by the
   Blueprint editor for a non-actor Blueprint).

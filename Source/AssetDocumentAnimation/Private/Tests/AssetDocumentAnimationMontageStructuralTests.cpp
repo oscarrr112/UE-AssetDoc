@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Provider/Montage/MontageStructuralRollback.h"
@@ -19,7 +20,7 @@ namespace AssetDocumentMontageStructuralTests
 using namespace AssetDocumentMontage;
 
 // Exercises native publication/inverse only. Verified leases, preparation transport,
-// durable commit and shared P-ANIM wiring require the later integration fixture.
+// durable commit and shared Animation provider wiring require the later integration fixture.
 class FMontageStructuralTransaction final : public IAssetDocumentAtomicTransaction
 {
 public:

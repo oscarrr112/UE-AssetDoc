@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Sparse-over-defaults verification. Profiles whose extract leaves out values equal to their defaults, or
 // that accept sparse documents (a struct written with only some members), must not report a VerificationMismatch when
@@ -210,7 +211,7 @@ bool FAssetDocumentSparseDefaultsSequencerTest::RunTest(const FString& Parameter
 			"Target": "%TARGET%", "Properties": {}, "Body": {"Settings": {"PlaybackRange": {"Start": 0, "End": 150}},
 			"Bindings": [{"Name": "Cam", "Spawnable": {"Class": "/Script/Engine.CameraActor",
 				"Template": {"Components": {"CameraComponent": {"PostProcessSettings": {"bOverride_BloomIntensity": true, "BloomIntensity": 2}}}}}}]}})json")},
-		// Trial 5: a Cine Camera template's focal length recomputes the field of view, which its Details do not edit.
+		// A Cine Camera template's focal length recomputes the field of view, which its Details do not edit.
 		{TEXT("Cine Camera focal length"), TEXT(R"json({"SchemaVersion": 1, "Class": "/Script/LevelSequence.LevelSequence", "Action": "Create",
 			"Target": "%TARGET%", "Properties": {}, "Body": {"Settings": {"PlaybackRange": {"Start": 0, "End": 150}},
 			"Bindings": [{"Name": "Cam", "Spawnable": {"Class": "/Script/CinematicCamera.CineCameraActor",

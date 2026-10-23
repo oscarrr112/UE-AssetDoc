@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Focused pure codec tests for the production recursive Tree contract."""
 from copy import deepcopy
 import unittest

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Details-panel writes of IK Rig settings structs and goals (design §4.1, "struct writes"): the one place that writes
 // reflected memory of the rig directly. Everything else goes through UIKRigController.

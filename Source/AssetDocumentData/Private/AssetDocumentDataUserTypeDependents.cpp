@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Dependents of User Defined Structs / Enums and the Core package-snapshot rebuilders for both
 // (the rule is described in AssetDocumentDataUserTypes.h and in

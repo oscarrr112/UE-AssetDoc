@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Enhanced Input checks of the generic profile (Input Action / Input Mapping Context).
 
 The editor accepts all of these, so they are warnings, never refusals: a modifier

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Open-editor apply of the Persona assets (Runtime/AssetDocumentOpenEditor.h, AnimAssets/AssetDocumentAnimAssetOpenEditor.cpp).
 // Each test opens the asset in its Persona editor, applies a representative change through ApplyFile, and checks the
@@ -614,8 +615,8 @@ bool FAssetDocumentAnimSequenceOpenEditorApplyTest::RunTest(const FString& Param
 	const int32 NotifyNodesBefore = AnimOpenEd::DocumentWidgetCount(*Sequence, TEXT("SAnimNotifyNode"));
 	const SWidget* ContentBefore = AnimOpenEd::DocumentContent(*Sequence);
 	const TCHAR* Class = TEXT("/Script/Engine.AnimSequence");
-	const FString Edit = AnimOpenEd::Document(Target, Class, TEXT("Update"), TEXT(R"("Notifies": [{"Time": 0.25, "Name": "P77Step"}],
-		"Curves": [{"Name": "P77Curve", "Keys": [{"Time": 0, "Value": 0, "InterpMode": "Linear"}, {"Time": 0.5, "Value": 1, "InterpMode": "Linear"}]}])"));
+	const FString Edit = AnimOpenEd::Document(Target, Class, TEXT("Update"), TEXT(R"("Notifies": [{"Time": 0.25, "Name": "OpenEditorStep"}],
+		"Curves": [{"Name": "OpenEditorCurve", "Keys": [{"Time": 0, "Value": 0, "InterpMode": "Linear"}, {"Time": 0.5, "Value": 1, "InterpMode": "Linear"}]}])"));
 	if (!TestTrue(TEXT("apply while open"), AnimOpenEd::Apply(*this, Target, Edit, TEXT("apply while open")).IsSuccess()))
 	{
 		return false;
@@ -626,8 +627,8 @@ bool FAssetDocumentAnimSequenceOpenEditorApplyTest::RunTest(const FString& Param
 		return false;
 	}
 	TestEqual(TEXT("one notify"), Sequence->Notifies.Num(), 1);
-	TestTrue(TEXT("the notify"), Sequence->Notifies.Num() == 1 && Sequence->Notifies[0].NotifyName == FName(TEXT("P77Step")));
-	TestTrue(TEXT("the curve"), Sequence->GetDataModel()->FindFloatCurve(FAnimationCurveIdentifier(TEXT("P77Curve"), ERawCurveTrackTypes::RCT_Float)) != nullptr);
+	TestTrue(TEXT("the notify"), Sequence->Notifies.Num() == 1 && Sequence->Notifies[0].NotifyName == FName(TEXT("OpenEditorStep")));
+	TestTrue(TEXT("the curve"), Sequence->GetDataModel()->FindFloatCurve(FAnimationCurveIdentifier(TEXT("OpenEditorCurve"), ERawCurveTrackTypes::RCT_Float)) != nullptr);
 	TestFalse(TEXT("the apply is not an undo step"), UE::AssetDocument::UndoHistory::ReferencesPackage(Target.PackageName));
 	AnimOpenEd::TestAnimationEditorShows(*this, Target, ContentBefore, TEXT("after the apply"));
 	AnimOpenEd::TickEditorUi();
@@ -643,7 +644,7 @@ bool FAssetDocumentAnimSequenceOpenEditorApplyTest::RunTest(const FString& Param
 	{
 		const SWidget* ContentApplied = AnimOpenEd::DocumentContent(*Sequence);
 		const FAssetDocumentResult Failed = AnimOpenEd::Apply(*this, Target, AnimOpenEd::Document(Target, Class, TEXT("Update"), TEXT(R"("Notifies": [
-			{"Time": 0.25, "Name": "P77Step"}, {"Time": 0.5, "Class": "/Script/Engine.AnimNotify_PlaySound", "Properties": {"DoesNotExist": 1}}])")),
+			{"Time": 0.25, "Name": "OpenEditorStep"}, {"Time": 0.5, "Class": "/Script/Engine.AnimNotify_PlaySound", "Properties": {"DoesNotExist": 1}}])")),
 			TEXT("failing apply while open"));
 		TestFalse(TEXT("failing apply while open fails"), Failed.IsSuccess());
 		Sequence = Target.Get<UAnimSequence>();
@@ -963,9 +964,9 @@ bool FAssetDocumentAnimationAssetsOpenEditorApplySkeletonTest::RunTest(const FSt
 	{
 		return false;
 	}
-	TestFalse(TEXT("the tree has no p77 socket yet"), ItemsBefore->Contains(FName(TEXT("p77_socket"))));
+	TestFalse(TEXT("the tree has no such socket yet"), ItemsBefore->Contains(FName(TEXT("open_editor_socket"))));
 	if (!TestTrue(TEXT("apply while open"), AnimOpenEd::Apply(*this, Target, AnimOpenEd::Document(Target, Class, TEXT("Update"),
-		TEXT("\"Sockets\":[{\"Name\":\"p77_socket\",\"Bone\":\"hand_r\",\"Location\":{\"X\":0,\"Y\":5,\"Z\":0}}]")), TEXT("apply while open")).IsSuccess()))
+		TEXT("\"Sockets\":[{\"Name\":\"open_editor_socket\",\"Bone\":\"hand_r\",\"Location\":{\"X\":0,\"Y\":5,\"Z\":0}}]")), TEXT("apply while open")).IsSuccess()))
 	{
 		return false;
 	}
@@ -974,19 +975,19 @@ bool FAssetDocumentAnimationAssetsOpenEditorApplySkeletonTest::RunTest(const FSt
 	{
 		return false;
 	}
-	TestNotNull(TEXT("the socket"), Skeleton->FindSocket(TEXT("p77_socket")));
+	TestNotNull(TEXT("the socket"), Skeleton->FindSocket(TEXT("open_editor_socket")));
 	TestFalse(TEXT("the apply is not an undo step"), UE::AssetDocument::UndoHistory::ReferencesPackage(Target.PackageName));
 	TestNotNull(TEXT("the Skeleton editor is still open"), AnimOpenEd::EditorOf(*Skeleton));
 	const TOptional<TSet<FName>> ItemsAfter = AnimOpenEd::SkeletonTreeItems(*Skeleton);
-	TestTrue(TEXT("the skeleton tree lists the new socket"), ItemsAfter.IsSet() && ItemsAfter->Contains(FName(TEXT("p77_socket"))));
+	TestTrue(TEXT("the skeleton tree lists the new socket"), ItemsAfter.IsSet() && ItemsAfter->Contains(FName(TEXT("open_editor_socket"))));
 	AnimOpenEd::TickEditorUi();
 	const FString Applied = AnimOpenEd::ExtractText(*this, Target, TEXT("after apply while open"));
 
 	// A failure in the middle of the apply (slot ops run first; the new socket's bone does not exist).
 	{
 		const FAssetDocumentResult Failed = AnimOpenEd::Apply(*this, Target, AnimOpenEd::Document(Target, Class, TEXT("Update"), TEXT(
-			"\"SlotGroups\":[{\"Name\":\"DefaultGroup\",\"Slots\":[\"DefaultSlot\",\"P77Extra\"]}],"
-			"\"Sockets\":[{\"Name\":\"p77_socket\",\"Bone\":\"hand_r\"},{\"Name\":\"p77_bad\",\"Bone\":\"NoSuchBone\"}]")), TEXT("failing apply while open"));
+			"\"SlotGroups\":[{\"Name\":\"DefaultGroup\",\"Slots\":[\"DefaultSlot\",\"OpenEditorSlot\"]}],"
+			"\"Sockets\":[{\"Name\":\"open_editor_socket\",\"Bone\":\"hand_r\"},{\"Name\":\"bad_socket\",\"Bone\":\"NoSuchBone\"}]")), TEXT("failing apply while open"));
 		TestFalse(TEXT("failing apply while open fails"), Failed.IsSuccess());
 		Skeleton = Target.Get<USkeleton>();
 		if (!TestNotNull(TEXT("skeleton after the rollback"), Skeleton))
@@ -996,8 +997,8 @@ bool FAssetDocumentAnimationAssetsOpenEditorApplySkeletonTest::RunTest(const FSt
 		TestEqual(TEXT("after the rollback the skeleton is as applied"), AnimOpenEd::ExtractText(*this, Target, TEXT("after the rollback")), Applied);
 		TestFalse(TEXT("after the rollback the package is clean"), Skeleton->GetOutermost()->IsDirty());
 		const TOptional<TSet<FName>> ItemsRolledBack = AnimOpenEd::SkeletonTreeItems(*Skeleton);
-		TestTrue(TEXT("after the rollback the skeleton tree lists the applied socket"), ItemsRolledBack.IsSet() && ItemsRolledBack->Contains(FName(TEXT("p77_socket"))));
-		TestFalse(TEXT("after the rollback the skeleton tree has no failed socket"), ItemsRolledBack.IsSet() && ItemsRolledBack->Contains(FName(TEXT("p77_bad"))));
+		TestTrue(TEXT("after the rollback the skeleton tree lists the applied socket"), ItemsRolledBack.IsSet() && ItemsRolledBack->Contains(FName(TEXT("open_editor_socket"))));
+		TestFalse(TEXT("after the rollback the skeleton tree has no failed socket"), ItemsRolledBack.IsSet() && ItemsRolledBack->Contains(FName(TEXT("bad_socket"))));
 		AnimOpenEd::TickEditorUi();
 	}
 
@@ -1010,7 +1011,7 @@ bool FAssetDocumentAnimationAssetsOpenEditorApplySkeletonTest::RunTest(const FSt
 	if (USkeleton* Undone = Target.Get<USkeleton>())
 	{
 		const TOptional<TSet<FName>> ItemsUndone = AnimOpenEd::SkeletonTreeItems(*Undone);
-		TestTrue(TEXT("after undo / redo the skeleton tree lists the socket"), ItemsUndone.IsSet() && ItemsUndone->Contains(FName(TEXT("p77_socket"))));
+		TestTrue(TEXT("after undo / redo the skeleton tree lists the socket"), ItemsUndone.IsSet() && ItemsUndone->Contains(FName(TEXT("open_editor_socket"))));
 	}
 	AnimOpenEd::CloseEditor(*this, Target);
 	return true;

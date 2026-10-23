@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Exact registered dispatch; legacy runtime remains the unbound entry path."""
 from __future__ import annotations
 

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #include "AssetDocumentEditorMutationPreparation.h"
 #include "Animation/AnimMontage.h"
 #include "Animation/Skeleton.h"
@@ -267,7 +268,7 @@ bool FAssetDocumentMutationPreparationFactoryTest::RunTest(const FString&)
  DesiredRate = {}; DesiredRate.Kind = EAssetDocumentRuntimeValueKind::Number; DesiredRate.NumberValue = 1.5;
  FAssetDocumentPreparedMutationBatch Batch;
  const TArray<FAssetDocumentMutationIntent> Intents = {Factory, Property};
- if (!TestTrue(TEXT("exact L1 factory and property intents prepare"), PrepareAssetDocumentEditorMutationBatch(Request, Intents, Batch).bValid)) return false;
+ if (!TestTrue(TEXT("exact factory and property intents prepare"), PrepareAssetDocumentEditorMutationBatch(Request, Intents, Batch).bValid)) return false;
  TestEqual(TEXT("factory plus property has two contributions"), Batch.Contributions.Num(), 2);
  TestEqual(TEXT("create property raw object component remains provider exact"), Batch.Contributions[1].RawFootprint[0].RollbackComponentId, FString(TEXT("rollback.uobject")));
  TestEqual(TEXT("create property raw package component remains provider exact"), Batch.Contributions[1].RawFootprint[1].RollbackComponentId, FString(TEXT("rollback.package")));

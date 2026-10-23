@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Literal codec, class / page names and interface facts shared by the MetaSound read, catalog and
 // compile status (design §3.4, §3.2).

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -459,7 +460,7 @@ FTestSemanticResult InvokeHelperAdapter(
 	FAssetDocumentRuntimeDiagnostic& Diagnostic = Result.Diagnostics.AddDefaulted_GetRef();
 	Diagnostic.Path = TEXT("/BehaviorTreeSemanticRollback");
 	Diagnostic.Code = TEXT("Test.NodeBMissing");
-	Diagnostic.Message = TEXT("Node B exported helper is absent; this is the intentional RED terminal.");
+	Diagnostic.Message = TEXT("Node B exported helper is absent; this is the intentional failure terminal.");
 #endif
 	return Result;
 }
@@ -1354,7 +1355,7 @@ bool FAssetDocumentAIBehaviorTreeSemanticRuntimeRollbackCanonicalDerivedReadback
 		}
 		CorruptingService->ConfigureRuntimeLinkCorruption(false, false);
 		CorruptionScenario.Transaction->Rollback(TEXT("Test.CanonicalDerivedReadback.RuntimeLinkCorruption"));
-		Passed &= TestEqual(*FString::Printf(TEXT("%s RED scenario cleans up through the real rollback finalizer"), Row.Name),
+		Passed &= TestEqual(*FString::Printf(TEXT("%s corruption scenario cleans up through the real rollback finalizer"), Row.Name),
 			CorruptionScenario.Transaction->GetState(), EAssetDocumentAtomicState::RolledBack);
 	}
 
@@ -1388,7 +1389,7 @@ bool FAssetDocumentAIBehaviorTreeSemanticRuntimeRollbackCanonicalDerivedReadback
 	UBehaviorTreeGraphNode_Task* BackgroundTask = AddParallelTask(ParallelOutputs[1], FVector2f(400.0f, 120.0f));
 	if (!TestNotNull(TEXT("stock first SimpleParallel output owns the main task"), MainTask)
 		|| !TestNotNull(TEXT("stock second SimpleParallel output owns the background node"), BackgroundTask)) return false;
-	Passed &= TestTrue(TEXT("SimpleParallel RED fixture reverses global X order relative to pin declaration order"),
+	Passed &= TestTrue(TEXT("SimpleParallel fixture reverses global X order relative to pin declaration order"),
 		MainTask->NodePosX > BackgroundTask->NodePosX);
 	const FTestSemanticResult PinOrderResult = InvokeHelperAdapter(*PinOrderScenario.Lease,
 		*PinOrder.Graph, UBehaviorTreeGraph::KeepRebuildCounter, MakeRuntimeMirrorFootprint(*PinOrder.Tree),
@@ -1426,8 +1427,8 @@ bool FAssetDocumentAIBehaviorTreeSemanticRuntimeRollbackCanonicalDerivedReadback
 		Cast<UBehaviorTreeGraphNode_Decorator>(Injected.TaskGraphNode->Decorators[0]);
 	UBehaviorTreeGraphNode_Decorator* NormalWrapper =
 		Cast<UBehaviorTreeGraphNode_Decorator>(Injected.TaskGraphNode->Decorators[1]);
-	if (!TestNotNull(TEXT("injected RED fixture owns an ordinary injected wrapper"), InjectedWrapper)
-		|| !TestNotNull(TEXT("injected RED fixture owns an ordinary normal sibling"), NormalWrapper)) return false;
+	if (!TestNotNull(TEXT("injected fixture owns an ordinary injected wrapper"), InjectedWrapper)
+		|| !TestNotNull(TEXT("injected fixture owns an ordinary normal sibling"), NormalWrapper)) return false;
 	InjectedWrapper->bInjectedNode = true;
 	TArray<UBTDecorator*> NonInjectedDecorators;
 	TArray<FBTDecoratorLogic> NonInjectedOperations;

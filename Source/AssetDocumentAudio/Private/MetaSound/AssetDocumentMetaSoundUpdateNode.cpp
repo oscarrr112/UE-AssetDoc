@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The MetaSound editor's Update Node (MetasoundEditor.cpp FEditor::UpdateSelectedNodeClasses), the one edit the 5.7
 // editor still makes through the frontend controller API (design §4.1, §7.1: isolated here, behaviour test

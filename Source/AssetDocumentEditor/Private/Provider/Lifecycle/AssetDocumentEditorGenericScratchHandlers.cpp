@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Class-neutral preview targets for the generic factory lifecycle:
 //   editor.scratch.create_by_factory.v1  - new transient asset from the editor factory

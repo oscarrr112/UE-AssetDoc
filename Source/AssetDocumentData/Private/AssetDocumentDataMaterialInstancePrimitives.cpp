@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // data.material_instance.read.v1 / data.material_instance.edit.v1: parent and parameter overrides
 // of a UMaterialInstanceConstant, as the Material Instance Editor edits them.

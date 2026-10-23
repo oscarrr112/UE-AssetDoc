@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -93,7 +94,7 @@ CaptureAndEnlistAssetDocumentEditorObjectReferencePreimage(
 	TConstArrayView<FString> RollbackComponentIds,
 	IAssetDocumentAtomicTransaction& Transaction);
 
-// Native-only M3/M4 configuration of an object just allocated and recorded by
+// Native-only configuration of an object just allocated and recorded by
 // the Animation composite. Animation owns provenance, one parent footprint,
 // publication and retirement on failure; this function neither issues handles
 // nor enlists another mutation. Existing Notify objects are outside this contract.

@@ -1,9 +1,10 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Control Rig apply, phases CR2 / CR3 (docs/architecture/asset-document-controlrig-design.md §7.2: graphs, functions).
+// Control Rig apply, graphs and functions (docs/architecture/asset-document-controlrig-design.md §7.2: graphs, functions).
 // UEAssetDoc.ControlRig.GraphFidelity: §6.2 on CR_AllKinds (every node kind, a local public function
 //   with an input default and a local variable, a function node, a collapse node) and every corpus rig and rig module
-//   (#1-#9, #11-#13; modular rigs are phase CR4 and reported as skipped): Create a new asset from the whole extract; it
+//   (#1-#9, #11-#13; modular rigs are tested separately and reported as skipped): Create a new asset from the whole extract; it
 //   extracts as the source, compiles, its VM (ComputeVMHash, instruction count) and its runtime pose after
 //   construction + Forwards Solve (every element's global transform, every curve) equal the source's; the unchanged
 //   re-apply is a no-op; reload stable; timings.
@@ -57,7 +58,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-// Fixtures of the CR0 tests (AssetDocumentControlRigTests.cpp).
+// Fixtures of the read tests (AssetDocumentControlRigTests.cpp).
 namespace AssetDocumentControlRigTests
 {
 struct FTemplateContent;
@@ -841,7 +842,7 @@ bool FAssetDocumentControlRigGraphFidelityTest::RunTest(const FString& Parameter
 	AddInfo(FString::Printf(TEXT("%d rigs compared, %d refused as the editor would"), Compared, Refused));
 	if (!Skipped.IsEmpty())
 	{
-		AddInfo(FString::Printf(TEXT("SKIP (modular rigs, phase CR4): %s"), *FString::Join(Skipped, TEXT(", "))));
+		AddInfo(FString::Printf(TEXT("SKIP (modular rigs, tested separately): %s"), *FString::Join(Skipped, TEXT(", "))));
 	}
 	return true;
 }
@@ -1273,7 +1274,7 @@ TSharedPtr<FJsonObject> NamedEntry(const TSharedPtr<FJsonObject>& Object, const 
 	return nullptr;
 }
 
-// The editor side of FunctionFreeEdits, round 1: My Blueprint's Functions "+" (the editor's New Function), the Details
+// The editor side of FunctionFreeEdits, first edit: My Blueprint's Functions "+" (the editor's New Function), the Details
 // panel's "+" on Inputs / Outputs and Local Variables, the function graph's palette and wires; two function nodes
 // dragged into the rig graph and wired into the Forwards Solve chain; two nodes collapsed (Collapse Nodes).
 bool MakeFunctionEdits(FAutomationTestBase& Test, UControlRigBlueprint& Blueprint)
@@ -1346,7 +1347,7 @@ bool MakeFunctionEdits(FAutomationTestBase& Test, UControlRigBlueprint& Blueprin
 		false));
 }
 
-// Round 2: the function renamed (My Blueprint), made public and its input default changed (the function Details), its
+// Second edit: the function renamed (My Blueprint), made public and its input default changed (the function Details), its
 // local variable renamed (My Blueprint's Local Variables).
 bool MakeFunctionChanges(FAutomationTestBase& Test, UControlRigBlueprint& Blueprint)
 {

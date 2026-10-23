@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Raw file (design §4.2 / §4.4, B1 rule): the root of a Template / Camera Animation Sequence without an ISequencer.
 //

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentModule.h"
 #include "AssetDocumentService.h"
@@ -18,7 +19,7 @@ namespace BlackboardDataFreshReloadTestsLocal
 {
 FString MakeTarget()
 {
-	return FString::Printf(TEXT("/Game/AssetDocumentG3BlackboardData/BB_G3FreshReload_%s"),
+	return FString::Printf(TEXT("/Game/AssetDocumentBlackboardDataTests/BB_FreshReload_%s"),
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 }
 
@@ -68,7 +69,7 @@ bool FAssetDocumentBlackboardDataFreshReloadTest::RunTest(
 	const FString Target = MakeTarget();
 	const FString ObjectPath = MakeObjectPath(Target);
 	const FString SidecarPath = FPaths::Combine(FPaths::ProjectContentDir(),
-		TEXT("AssetDocumentG3BlackboardData"),
+		TEXT("AssetDocumentBlackboardDataTests"),
 		FPackageName::GetLongPackageAssetName(Target) + TEXT(".assetdoc.json"));
 	const FString PackagePath = FPackageName::LongPackageNameToFilename(Target,
 		FPackageName::GetAssetPackageExtension());

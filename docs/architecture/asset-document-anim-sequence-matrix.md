@@ -1,6 +1,6 @@
 # AnimSequence support matrix (legacy C++ profile vs Python route)
 
-Status: 2026-10-03. Governing rules:
+Governing rules:
 [design rules](asset-document-design-rules.md) §3 (rollback = functional
 equivalence), §4 (raw editor-equivalent code in its own file + behaviour test) and §5 (support
 matrix, no capability regression).
@@ -9,7 +9,7 @@ matrix, no capability regression).
 `profile.anim_sequence.v1` (`Content/Python/asset_document/profiles/anim_sequence.py`). The legacy
 C++ `FAnimSequenceAssetDocumentProfile` stays in the tree but is no longer registered.
 
-Columns: **Legacy** = the retired `FAnimSequenceAssetDocumentProfile`; **Python** = this slice.
+Columns: **Legacy** = the retired `FAnimSequenceAssetDocumentProfile`; **Python** = the current profile.
 Classification: **Supported** (Extract + Apply + Diff), **Read-only** (Extract/Diff only; authoring
 a different value fails with a stable diagnostic), **Unsupported** (not in the document; reason given).
 

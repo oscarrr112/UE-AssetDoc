@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 // Behavior test for the UE-editor-equivalent raw Montage settings edits.
 
 #if WITH_DEV_AUTOMATION_TESTS

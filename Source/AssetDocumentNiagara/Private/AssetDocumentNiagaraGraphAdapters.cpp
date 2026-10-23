@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Niagara adapters of the shared graph primitives (provider "graph", AssetDocumentGraph):
 //   schema adapter  UEdGraphSchema_Niagara graphs (script assets and scratch pads): actions are the graph's

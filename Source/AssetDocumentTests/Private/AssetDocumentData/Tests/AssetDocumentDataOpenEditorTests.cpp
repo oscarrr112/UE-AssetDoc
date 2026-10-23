@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Open-editor apply behaviour of the data profiles: the asset is open in its asset editor while documents are
 // applied; the tests read what the editor itself holds.

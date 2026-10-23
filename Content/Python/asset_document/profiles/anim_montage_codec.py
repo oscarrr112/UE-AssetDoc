@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Pure, lossless canonical/native projection for the structural Montage keys.
 
 Settings regions (Blend, Sync, RootMotion, ...) live in anim_montage_settings.

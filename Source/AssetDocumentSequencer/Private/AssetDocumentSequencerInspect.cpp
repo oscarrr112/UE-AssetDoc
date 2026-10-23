@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // seq.inspect.v1: the facts an author of a sequence document needs (design §3.8). Read only; never loads a map.
 //

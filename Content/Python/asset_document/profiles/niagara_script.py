@@ -1,4 +1,7 @@
-"""Script graphs of profile.niagara_script.v1 and of system / emitter ``ScratchPads`` (N4): Body checks, the
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Script graphs of profile.niagara_script.v1 and of system / emitter ``ScratchPads``: Body checks, the
 planner that turns a script body into ``fx.niagara.edit.v1`` script ops plus graph edits (graph.* primitives,
 ``graphs.schemas.niagara``), and the semantic Diff that reports the same differences.
 

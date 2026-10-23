@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Per-class property components for the generic (unregistered-class) Profile.
 
 A component declares the non-edit properties a class's document authors and the

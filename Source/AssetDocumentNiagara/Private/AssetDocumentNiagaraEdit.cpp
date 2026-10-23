@@ -1,7 +1,8 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // fx.niagara.edit.v1: system-level edits of a Niagara system, made through the Niagara editor's own view models
-// built headlessly (FNiagaraSystemViewModel in data-processing mode, as N1 reads), one view model per call and
+// built headlessly (FNiagaraSystemViewModel in data-processing mode, as the read does), one view model per call and
 // everything re-resolved by name for each op (adding or deleting an emitter rebuilds the handle view models).
 //
 // Input {ops: [op]}; ops run in order and the first refused op fails the call (Core rolls the package back):

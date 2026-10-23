@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Batch retarget export and extra bones:
 // UEAssetDoc.IKRig.BatchRetarget: retarget_animations (Batch::RetargetAnimations) duplicates and

@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered MaterialInstanceConstant Profile (profile.material_instance_constant.v1).
 
 Document (docs/architecture/asset-document-material-instance-matrix.md)::

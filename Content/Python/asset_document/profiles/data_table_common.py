@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared pieces of the data table family Profiles (DataTable, CurveTable, StringTable).
 
 Transport over the ``data.*`` primitives (provider "data", AssetDocumentData), document header

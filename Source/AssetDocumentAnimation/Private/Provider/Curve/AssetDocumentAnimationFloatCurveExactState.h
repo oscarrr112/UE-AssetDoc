@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 
 #include "Provider/Curve/AssetDocumentAnimationFloatCurveState.h"
@@ -9,7 +10,7 @@ bool IsExactAnimationFloatCurveTarget(UAnimSequenceBase& Asset);
 bool MatchesAnimationFloatCurveState(UAnimSequenceBase& Asset,
     TConstArrayView<FAssetDocumentAnimationFloatCurveState> Desired);
 
-// Private C0 authority exception. Only the prepared forward and typed inverse
+// Private exact-state authority exception. Only the prepared forward and typed inverse
 // call this after complete preimage capture and Core footprint enlistment.
 // Handles and mutable members never escape this leaf.
 bool PublishExactFloatCurveState(UAnimSequenceBase& Asset,

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // ai.env_query.edit.v1 and ai.env_query.finalize.v1: the Environment Query editor's own operations.
 //   add_option     -> the generator palette: UEdGraphSchema_EnvironmentQuery::GetGraphContextActions (Root's output as

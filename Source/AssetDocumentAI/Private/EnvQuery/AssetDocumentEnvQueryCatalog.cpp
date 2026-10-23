@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Environment Query primitives (ai.env_query.*, served by the AI provider "ai", owner AI): descriptors, the table
 // provider, the EnvQuery derived-state rebuilder, the compile status describer and the list_types kinds.

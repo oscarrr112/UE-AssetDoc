@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // edit_level actor references (design §4): "@id" of an actor created earlier in the
 // batch into an AActor* property, same-level paths, cross-level hard references

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // data.user_struct.read.v1 / data.user_struct.edit.v1: members of a User Defined Struct as the
 // Struct editor edits them (FStructureEditorUtils; the default value as the editor's Default

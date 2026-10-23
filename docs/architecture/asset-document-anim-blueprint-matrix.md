@@ -1,6 +1,6 @@
 # AnimBlueprint 支持矩阵
 
-**状态：** 2026-10-04。上位规则：[设计规则](asset-document-design-rules.md)
+上位规则：[设计规则](asset-document-design-rules.md)
 §3（回滚 = 功能等价）、§4（编辑器等价的原始编辑放在独立文件并有行为测试）、§5（支持矩阵、能力不倒退）。
 图原子操作契约：[graph primitives v1](asset-document-graph-primitives.md)（§AnimBlueprint 增补）。
 UBlueprint 部分（变量、接口、事件图 / 函数 / 宏、Class Defaults、Class Settings）与
@@ -15,7 +15,7 @@ UBlueprint 部分（变量、接口、事件图 / 函数 / 宏、Class Defaults�
 动画侧模块 `Source/AssetDocumentAnimation/Private/AnimBlueprint/` 注册到公共适配器注册表，Core 不含动画代码。
 成员原子操作复用 `blueprint.member.*`，新增 `blueprint.member.setting.set.v1`（ABP 设置）。
 
-列说明：**旧 C++** = 被替换的 `FAnimBlueprintAssetDocumentProfile`；**Python** = 本切片。
+列说明：**旧 C++** = 被替换的 `FAnimBlueprintAssetDocumentProfile`；**Python** = 当前 Profile。
 分类：**Supported**（Extract + Apply + Diff）、**Read-only**（只 Extract / Diff，写入不同值返回稳定 diagnostic）、
 **Unsupported**（不在文档中，或只接受 `[]`；给出原因）。✅ 支持，➖ 不支持，部分 = 有限支持。
 

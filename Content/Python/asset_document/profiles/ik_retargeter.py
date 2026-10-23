@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered IK Retargeter Profile (profile.ik_retargeter.v1, class /Script/IKRig.IKRetargeter); editable.
 
 Document (MCP/schemas/assetdocument/IKRig.md)::

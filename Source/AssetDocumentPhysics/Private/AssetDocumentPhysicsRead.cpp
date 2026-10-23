@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // physics.asset.read.v1: the authored state of a Physics Asset (design §2.1, §3) as document-ready records. The asset
 // is read as stored; nothing is rebuilt or written.

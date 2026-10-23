@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// N5 end-to-end tests: Niagara emitter assets (profile.niagara_emitter.v1) and parameter collections
+// End-to-end tests: Niagara emitter assets (profile.niagara_emitter.v1) and parameter collections
 // (profile.niagara_parameter_collection.v1), through the production Service as the MCP tools send documents.
 //   UEAssetDoc.Niagara.EmitterAsset.Apply        a Fountain copy edited by a document: the emitter
 //        editor's working copy is written back over the same object; re-apply is a no-op, save + reload is stable,

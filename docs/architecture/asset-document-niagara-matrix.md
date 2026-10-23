@@ -1,77 +1,75 @@
-# Niagara support matrix and corpus results (N1–N5)
+# Niagara support matrix and corpus results
 
-Status: 2026-10-07. Design: [asset-document-niagara-design.md](asset-document-niagara-design.md).
+Design: [asset-document-niagara-design.md](asset-document-niagara-design.md).
 Rules: [design rules](asset-document-design-rules.md) §3 (rollback = functional equivalence), §4
 (editor-equivalent code + behaviour test), §5 (support matrix). Reference editors: the Niagara System / Emitter
 editor (stack view models) and the Niagara script editor (`UEdGraphSchema_NiagaraSystem`, the graph action menu,
 `FNiagaraScriptToolkit` Apply). The agent-facing description is `MCP/schemas/assetdocument/Niagara.md`.
 
-| Class | Profile | Phase | State |
-|---|---|---|---|
-| `NiagaraSystem` | `profile.niagara_system.v1` | N1–N4 | Extract / Inspect / Apply / Diff |
-| `NiagaraEmitter` | `profile.niagara_emitter.v1` | N1, N5 | Extract / Inspect / Apply / Diff |
-| `NiagaraScript` (Module, Function, DynamicInput) | `profile.niagara_script.v1` | N4 | Extract / Inspect / Apply / Diff |
-| `NiagaraParameterCollection` | `profile.niagara_parameter_collection.v1` | N1, N5 | Extract / Inspect / Apply / Diff |
-| `NiagaraParameterCollectionInstance` | — | — | not authored (no profile) |
+| Class | Profile | State |
+|---|---|---|
+| `NiagaraSystem` | `profile.niagara_system.v1` | Extract / Inspect / Apply / Diff |
+| `NiagaraEmitter` | `profile.niagara_emitter.v1` | Extract / Inspect / Apply / Diff |
+| `NiagaraScript` (Module, Function, DynamicInput) | `profile.niagara_script.v1` | Extract / Inspect / Apply / Diff |
+| `NiagaraParameterCollection` | `profile.niagara_parameter_collection.v1` | Extract / Inspect / Apply / Diff |
+| `NiagaraParameterCollectionInstance` | — | not authored (no profile) |
 
 Classification: **Supported**, **Read only**, **Refused** (an error code; the editor cannot do it either, or the
-asset uses something the editor no longer offers), **Later** (phase named).
+asset uses something the editor no longer offers).
 
 ## Editor surfaces
 
 | Editor surface | Body location | Class | Mechanism |
 |---|---|---|---|
-| System Details, user parameters, declared parameters | `Properties`, `UserParameters`, `Parameters` | Supported (N2) | `fx.niagara.edit.v1` through the system view model; values through the Niagara value codec |
-| Emitters: add (empty / minimal / `From`), delete, rename, enable, parent removal and version | `Emitters` | Supported (N2) | `FNiagaraSystemViewModel` add / remove / rename; emitter Details |
-| Renderers: add, delete, order, Details, bindings | `Emitters.<e>.Renderers` | Supported (N2) | stack renderer items |
-| Module stacks: add, delete, move, enable, version, display name, note | `Stacks` | Supported (N3) | `FNiagaraStackGraphUtilities` as the stack's menu |
-| Module inputs: every value mode, nested dynamic inputs, data interfaces | module `Inputs` | Supported (N3) | stack function input view model |
-| Set Parameters modules, event handlers, simulation stages | `Stacks` | Supported (N3) | stack items |
-| Lightweight (stateless) emitters | `Mode: Stateless` | Supported (N3) | the stateless module list by reflection |
-| Script asset: New (Module / Function / Dynamic Input) | `Action: Create`, `Usage` | Supported (N4) | the New-asset factory of that usage; `Usage` immutable (`Niagara.UsageImmutable`) |
-| Script Details | `Settings`, top-level `Properties` | Supported (N4) | script Details |
-| Graph: place node from the action menu | `Graph.Nodes` | Supported (N4) | `graph.*` primitives + Niagara host adapter; actions from the graph's own menu (`graph.actions.enumerate.v1`) |
-| Graph: Add Parameter / Promote to Parameter | `Niagara:Input:<name>` | Supported (N4) | parameter input node as `FNiagaraEditorUtilities::InitializeParameterInputNode` (not exported; same result) |
-| Graph: Map Get / Set / custom HLSL / op Add pin, pin rename and type | node `Pins` | Supported (N4) | the node's Add pin + rename; numeric pins: Convert Numeric To (`UNiagaraNode::ConvertNumericPinToType`) |
-| Graph: links, pin defaults, Map Get default pins | `Links`, `PinDefaults` | Supported (N4) | schema `TryCreateConnection`; Map Get default pins after their parameter's `DefaultMode: Custom` |
-| Graph: function call version switch | node `Version` | Supported (N4) | as `FNiagaraFunctionCallNodeDetails::SwitchToVersion` (`ChangeScriptVersion`, then refresh) |
-| Graph: data interface function specifiers | `Properties.FunctionSpecifiers` | Supported (N4) | the node's specifier widget (`Specifiers` map) |
+| System Details, user parameters, declared parameters | `Properties`, `UserParameters`, `Parameters` | Supported | `fx.niagara.edit.v1` through the system view model; values through the Niagara value codec |
+| Emitters: add (empty / minimal / `From`), delete, rename, enable, parent removal and version | `Emitters` | Supported | `FNiagaraSystemViewModel` add / remove / rename; emitter Details |
+| Renderers: add, delete, order, Details, bindings | `Emitters.<e>.Renderers` | Supported | stack renderer items |
+| Module stacks: add, delete, move, enable, version, display name, note | `Stacks` | Supported | `FNiagaraStackGraphUtilities` as the stack's menu |
+| Module inputs: every value mode, nested dynamic inputs, data interfaces | module `Inputs` | Supported | stack function input view model |
+| Set Parameters modules, event handlers, simulation stages | `Stacks` | Supported | stack items |
+| Lightweight (stateless) emitters | `Mode: Stateless` | Supported | the stateless module list by reflection |
+| Script asset: New (Module / Function / Dynamic Input) | `Action: Create`, `Usage` | Supported | the New-asset factory of that usage; `Usage` immutable (`Niagara.UsageImmutable`) |
+| Script Details | `Settings`, top-level `Properties` | Supported | script Details |
+| Graph: place node from the action menu | `Graph.Nodes` | Supported | `graph.*` primitives + Niagara host adapter; actions from the graph's own menu (`graph.actions.enumerate.v1`) |
+| Graph: Add Parameter / Promote to Parameter | `Niagara:Input:<name>` | Supported | parameter input node as `FNiagaraEditorUtilities::InitializeParameterInputNode` (not exported; same result) |
+| Graph: Map Get / Set / custom HLSL / op Add pin, pin rename and type | node `Pins` | Supported | the node's Add pin + rename; numeric pins: Convert Numeric To (`UNiagaraNode::ConvertNumericPinToType`) |
+| Graph: links, pin defaults, Map Get default pins | `Links`, `PinDefaults` | Supported | schema `TryCreateConnection`; Map Get default pins after their parameter's `DefaultMode: Custom` |
+| Graph: function call version switch | node `Version` | Supported | as `FNiagaraFunctionCallNodeDetails::SwitchToVersion` (`ChangeScriptVersion`, then refresh) |
+| Graph: data interface function specifiers | `Properties.FunctionSpecifiers` | Supported | the node's specifier widget (`Specifiers` map) |
 | Graph: If node, Usage Selector, VM fast-path calls | `Niagara:If`, `Niagara:UsageSelector`, `Niagara:Function:Signature:*` | Read only | the menu does not offer them; `Graph.ActionNotFound` |
 | Graph: deprecated / hidden data interface functions | `Niagara:DataInterfaceFunction:*` | Refused | `Niagara.DeprecatedFunction` (existing nodes keep them; the menu no longer offers them) |
-| Parameters panel Details (default mode, default, static switch default, metadata) | `Parameters` | Supported (N4) | `UNiagaraScriptVariable` Details; unused parameters leave the list as a reload does |
-| Version menu | `Versions`, `EditExposedVersion` | Supported (N4) | add, expose, delete; editing the exposed version needs `EditExposedVersion` (`Niagara.ExposedVersionEdit`) |
-| Compile / Apply | — | Supported (N4) | new compile errors fail at the node path (`Niagara.CompileFailed`) and roll back; dependents refresh (`Niagara.DependentsUpdated`); unsaved dependents refuse (`Niagara.DependentHasUnsavedChanges`) |
-| Scratch pads in systems: add, rename, delete, edit | system `ScratchPads` | Supported (N4) | the Scratch Pad panel's view model; the same graph component |
+| Parameters panel Details (default mode, default, static switch default, metadata) | `Parameters` | Supported | `UNiagaraScriptVariable` Details; unused parameters leave the list as a reload does |
+| Version menu | `Versions`, `EditExposedVersion` | Supported | add, expose, delete; editing the exposed version needs `EditExposedVersion` (`Niagara.ExposedVersionEdit`) |
+| Compile / Apply | — | Supported | new compile errors fail at the node path (`Niagara.CompileFailed`) and roll back; dependents refresh (`Niagara.DependentsUpdated`); unsaved dependents refuse (`Niagara.DependentHasUnsavedChanges`) |
+| Scratch pads in systems: add, rename, delete, edit | system `ScratchPads` | Supported | the Scratch Pad panel's view model; the same graph component |
 | Scratch pads in emitters (from a system) | emitter `ScratchPads` | Supported (edit in place); add / rename / delete Refused (`Niagara.ScratchPadScope`) | the emitter's pads come with the emitter asset |
-| Emitter editor: every emitter surface above (Details, stacks, renderers, scratch pads add / rename / delete / edit) | emitter asset `Body` | Supported (N5) | the emitter editor's working copy (`MakeEmitterPlaceholder`, a placeholder system in EmitterAsset mode) and its Apply (`UpdateOriginalEmitter`: `StaticDuplicateObject` over the asset, `ClearResolvedData`, `PostEditChange`); not exported, same result |
-| New Niagara Emitter from an existing emitter (copy / inherit) | `From`, `Parent` on `Action: Create` | Supported (N5) | `UNiagaraEmitterFactoryNew` with `EmitterToCopy`: `CreateWithParentAndOwner` or a copy with versioning disabled; not inheritable = `Niagara.NotInheritable` |
-| Emitter asset settings | top-level `Properties` (`bIsInheritable`, `TemplateAssetDescription`, ...) | Supported (N5) | generic property admission outside the version data |
-| Emitter version menu | `Versions`, `EditExposedVersion` | Supported (N5) | as for scripts; the Body describes the exposed version |
-| Emitter Compile / Apply and dependents | — | Supported (N5) | new compile errors fail (`Niagara.CompileFailed`); loaded children and systems merge and recompile (`UpdateExistingEmitters`, `Niagara.DependentsUpdated`); unsaved dependents refuse (`Niagara.DependentHasUnsavedChanges`); dependents open in an editor follow as after the emitter editor's Apply (the editors' working copies merge, system editors `RefreshAll`): `UEAssetDoc.Niagara.OpenEditorApply.Dependents` |
+| Emitter editor: every emitter surface above (Details, stacks, renderers, scratch pads add / rename / delete / edit) | emitter asset `Body` | Supported | the emitter editor's working copy (`MakeEmitterPlaceholder`, a placeholder system in EmitterAsset mode) and its Apply (`UpdateOriginalEmitter`: `StaticDuplicateObject` over the asset, `ClearResolvedData`, `PostEditChange`); not exported, same result |
+| New Niagara Emitter from an existing emitter (copy / inherit) | `From`, `Parent` on `Action: Create` | Supported | `UNiagaraEmitterFactoryNew` with `EmitterToCopy`: `CreateWithParentAndOwner` or a copy with versioning disabled; not inheritable = `Niagara.NotInheritable` |
+| Emitter asset settings | top-level `Properties` (`bIsInheritable`, `TemplateAssetDescription`, ...) | Supported | generic property admission outside the version data |
+| Emitter version menu | `Versions`, `EditExposedVersion` | Supported | as for scripts; the Body describes the exposed version |
+| Emitter Compile / Apply and dependents | — | Supported | new compile errors fail (`Niagara.CompileFailed`); loaded children and systems merge and recompile (`UpdateExistingEmitters`, `Niagara.DependentsUpdated`); unsaved dependents refuse (`Niagara.DependentHasUnsavedChanges`); dependents open in an editor follow as after the emitter editor's Apply (the editors' working copies merge, system editors `RefreshAll`): `UEAssetDoc.Niagara.OpenEditorApply.Dependents` |
 | Lightweight emitter asset | `Stateless` | Refused (`Niagara.StatelessEmitter`) | lightweight emitters exist only inside systems |
-| Parameter collection editor: add, delete, rename, retype, value | `Parameters` | Supported (N5) | the collection's Details customization (`UNiagaraParameterCollection` Parameters / DefaultInstance); values through the Niagara value codec |
-| Collection Namespace, Source Material Collection | top-level `Properties` | Supported (N5) | a namespace in use is refused (`Niagara.NamespaceInUse`; the editor would rename it); material collection parameters are owned (`Niagara.CollectionParameterOwned`) |
+| Parameter collection editor: add, delete, rename, retype, value | `Parameters` | Supported | the collection's Details customization (`UNiagaraParameterCollection` Parameters / DefaultInstance); values through the Niagara value codec |
+| Collection Namespace, Source Material Collection | top-level `Properties` | Supported | a namespace in use is refused (`Niagara.NamespaceInUse`; the editor would rename it); material collection parameters are owned (`Niagara.CollectionParameterOwned`) |
 | Asset open in its editor | — | Supported | system, emitter asset, script: close / apply / reopen (`Niagara.EditorReopened`): the system editor keeps its own view models and scratch pad copies, the emitter and script editors edit a working copy they write back on Apply; edits there not applied yet (Apply / Apply Scratch enabled) refuse before any change (`Niagara.OpenInEditorUnsavedEdits`). Parameter collection: in place, the editor's view model rebuilds on the collection's change event. An apply is not an undo step. `UEAssetDoc.Niagara.OpenEditorApply.System` / `.EmitterAsset` / `.Script` / `.Collection` |
 
 ## Corpus results
 
-Timings: Windows CI PC, Development editor, commit `cd369978`, suite `-j 3` (other agents' suites ran
-at the same time), in milliseconds. `extract` = first Extract, `inspect`, `reload` = Extract after a package reload,
+Timings: Development editor, several test suites running at the same time, in milliseconds. `extract` = first Extract, `inspect`, `reload` = Extract after a package reload,
 `size` = Body JSON bytes. Round trip = Extract → the document re-targeted to a new `/Game` asset with `Action: Create`
 → Extract equal to the source (`create`), then the same document applied again is a no-op (`reapply`). Every
 asset of every tier also re-extracts equal (repeat, reload, Content Browser duplicate). Refused round trips must fail
 with the named code and leave no asset.
 
-### Read smoke (N1)
+### Read smoke
 
 Every system and emitter under the engine and enabled plugin mounts (52 systems + 81 emitters, 17,410 rows):
 0 failures, 34.5 s total, median 63 ms. Slowest: `Grid2D_Gas_Control_Emitter` 2387, `Grid2D_SW_River` 2139,
 `Grid3D_Gas_Master_Emitter` 1758, `Grid3D_Gas_ParticleAdvection` 1711.
 
-### Emitters (N1 read, N5 round trip as emitter assets)
+### Emitters
 
-All 22 extract, re-extract equal, reload equal and duplicate equal. N5 round trip (Mac, sandbox niagara5, Development
-editor, milliseconds): the extract as a `Create` document of a new emitter asset gives the same document (version
+All 22 extract, re-extract equal, reload equal and duplicate equal. Round trip: the extract as a `Create` document of a new emitter asset gives the same document (version
 guids aside: a copy's versions get new ones), and re-applying it is a no-op.
 
 | Asset | extract | size | create | reapply | Result |
@@ -99,19 +97,19 @@ guids aside: a copy's versions get new ones), and re-applying it is a no-op.
 | GroomRodsEmitter | 27 | 10,625 | — | — | Refused (`Niagara.CompileFailed`): the emitter does not compile on its own (`Emitter.*` values its system sets); a new asset has no errors before the apply |
 | WorkingWithAttributes | 45 | 20,056 | — | — | Refused (`Graph.PinNotFound`): a scratch pad's Map Get default pin keeps an older engine's name (`<output>_Input`; the editor now names it after its output) |
 
-### Stress emitters (N5, NiagaraFluids; refusals recorded)
+### Stress emitters (NiagaraFluids; refusals recorded)
 
-Three of them show the Summary View in their editor data; until the summary view was read their extracts had only what that view lists (see
-the design, section 1), which is why the earlier sizes were smaller.
+Three of them show the Summary View in their editor data; their extracts list the full stacks, not only what that view lists (see
+the design, section 1).
 
 | Asset | extract | inspect | reload | size | Round trip |
 |---|---|---|---|---|---|
-| SourceParticles (2 versions; summary view) | 146 | 171 | 135 | 6,999 | round trips (create 13,816, reapply 459; PC) |
-| Grid3D_Gas_Emitter (summary view) | 760 | 1,221 | 1,079 | 57,634 | Refused (`Graph.ConnectNeedsConversion`): a pad links a Position output to a Vector pin (PC) |
+| SourceParticles (2 versions; summary view) | 146 | 171 | 135 | 6,999 | round trips (create 13,816, reapply 459) |
+| Grid3D_Gas_Emitter (summary view) | 760 | 1,221 | 1,079 | 57,634 | Refused (`Graph.ConnectNeedsConversion`): a pad links a Position output to a Vector pin |
 | ParticleSurfacing_Emitter | 142 | 234 | 177 | 58,724 | Refused (`Graph.PinNotFound`): a pad's custom HLSL node has a `NiagaraParameterMap` output the current node does not make |
-| SandEmitter (summary view) | 91 | 173 | 109 | 11,407 | Refused (`Niagara.ModuleUsage`): `Grid3D_CreateUnitToWorldTransform` sits in EmitterSpawn, which the module's usage no longer offers (PC). Before that the summary view hid its stacks (empty module lists, so the copy missed `Emitter.NeighborGrid`) |
+| SandEmitter (summary view) | 91 | 173 | 109 | 11,407 | Refused (`Niagara.ModuleUsage`): `Grid3D_CreateUnitToWorldTransform` sits in EmitterSpawn, which the module's usage no longer offers |
 
-### Emitter asset scenarios (N5)
+### Emitter asset scenarios
 
 `EmitterAsset.Apply` (details, stacks, renderer, scratch pad add / delete, no-op, reload, no Undo history left on the
 asset, compile error rollback, refusals): apply 685. `EmitterAsset.Inheritance`: a child (`Parent`), a copy (`From`) and a system using the
@@ -121,14 +119,14 @@ emitter asset and a system emitter with the Summary View on read, edit and re-ap
 `EmitterAsset.FreeEdits`: the same edits (determinism, random seed, a renderer's sort order) through the editor's API on
 one duplicate and through a document on another read the same (apply 846).
 
-### Parameter collections (N5)
+### Parameter collections
 
 `NPC_Built`: extract 7, 413 bytes. `Collection.Apply`: add / rename / retype / delete, a curve data interface value,
 refusals (material collection parameters: Python planner tests only). `Collection.VRTemplate`: the template's `NPC_VRTemplate` round trips
 (create 67), its namespace in use is refused, and a system's Color module links `NPC.NPC_VRTemplate.TeleportColor`
 and compiles.
 
-### Systems (N2–N4)
+### Systems
 
 | Asset | extract | inspect | create | reapply | Result |
 |---|---|---|---|---|---|
@@ -145,7 +143,7 @@ and compiles.
 | DirectionalBurstLightweight | 82 | 170 | 968 | 493 | round trips |
 | FountainLightweight | 116 | 198 | 848 | 391 | round trips |
 
-### Stress systems (N4)
+### Stress systems
 
 | Asset | pads | extract | inspect | reload | size | no-op reapply | pad edit | Round trip |
 |---|---|---|---|---|---|---|---|---|
@@ -158,7 +156,7 @@ and compiles.
 The refusals are content the current editor cannot make again; editing these assets in place works (the pad edit
 column).
 
-### Scripts (N4)
+### Scripts
 
 | Asset | Kind | extract | size | create | reapply | Result |
 |---|---|---|---|---|---|---|

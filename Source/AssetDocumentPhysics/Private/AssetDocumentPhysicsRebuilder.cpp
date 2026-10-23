@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Rollback of Physics Assets (design §5.3). The Core package snapshot restores the authored state (the asset, its body
 // and constraint subobjects and the custom-serialized collision table) and runs PostEditUndo (index map, bounds

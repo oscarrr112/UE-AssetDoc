@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered SoundCue Profile (profile.sound_cue.v1) on the ``audio_profile`` route.
 
 The cue's editor graph is read and edited through the shared graph primitives (the SoundCue schema and host

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The parts of the symbolic plan (design §3.2) that model actors beyond their
 // existence: component sets, the attachment graph, Outliner folders, and the planned

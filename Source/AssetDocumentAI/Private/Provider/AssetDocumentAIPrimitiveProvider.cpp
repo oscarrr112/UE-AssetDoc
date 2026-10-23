@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentAIPrimitiveProvider.h"
 
@@ -51,7 +52,7 @@ const FAssetDocumentPrimitiveDescriptor* FindDescriptor(
 namespace
 {
 constexpr const TCHAR* BlackboardV2InvocationDiagnosticNormalizationFingerprint = TEXT(
-	"AD.P-AI.BLACKBOARD.V2.INVOCATION-DIAGNOSTIC-NORMALIZATION.v2|phase=AIProvider.InvalidContext|value=AIProvider.InvalidValueShape|transaction=AIProvider.InvalidTransaction|handle=AIProvider.InvalidHandle|v1=passthrough");
+	"AD.AI.BLACKBOARD.V2.INVOCATION-DIAGNOSTIC-NORMALIZATION.v2|phase=AIProvider.InvalidContext|value=AIProvider.InvalidValueShape|transaction=AIProvider.InvalidTransaction|handle=AIProvider.InvalidHandle|v1=passthrough");
 
 TOptional<FAssetDocumentPrimitiveOutcome> NormalizeBlackboardV2InvocationFailure(
 	const FAssetDocumentPrimitiveInvocation& Invocation,
@@ -191,7 +192,7 @@ public:
 			return MakeAssetDocumentAIPrimitiveFailure(
 				EAssetDocumentPrimitiveOutcomeStatus::Unavailable,
 				*Descriptor->StableDiagnosticCodes[0],
-				TEXT("This frozen G1 AI primitive has no callable authority."));
+				TEXT("This frozen AI primitive has no callable authority."));
 		}
 
 		const FAssetDocumentAIPrimitiveBinding* Binding =

@@ -1,4 +1,7 @@
-"""System-level Apply of profile.niagara_system.v1 (N2): the planner that turns a system document and the live
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
+"""System-level Apply of profile.niagara_system.v1: the planner that turns a system document and the live
 system (its extract) into ``fx.niagara.edit.v1`` ops, and the Diff that reports the same differences.
 
 Body semantics (MCP/schemas/assetdocument/Niagara.md):
@@ -20,8 +23,8 @@ Body semantics (MCP/schemas/assetdocument/Niagara.md):
   renderer; listed order).
 * Module stacks (``SystemSpawn``, ``SystemUpdate``; per emitter ``EmitterSpawn``, ``EmitterUpdate``,
   ``ParticleSpawn``, ``ParticleUpdate``, ``EventHandlers``, ``SimulationStages``), the declared ``Parameters`` and
-  lightweight emitters (``Mode: "Stateless"``, their ``Stateless`` value): ``niagara_stack`` (N3).
-* ``ScratchPads`` (N4, ``niagara_script``): the system's list is complete (not listed = deleted after the stacks no
+  lightweight emitters (``Mode: "Stateless"``, their ``Stateless`` value): ``niagara_stack``.
+* ``ScratchPads`` (``niagara_script``): the system's list is complete (not listed = deleted after the stacks no
   longer use it, a new name = added, ``RenamedFrom`` renames); an emitter's pads are edited in place (the list names
   the pads it has, ``Niagara.ScratchPadScope``).  Each pad is a script body (``Usage`` fixed once added).  The
   scratch pad edits run before each pass's stack edits (``niagara.apply_scratch_pads``).

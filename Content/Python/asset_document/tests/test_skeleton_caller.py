@@ -1,8 +1,11 @@
-"""Pure transport/semantic tests; native S1 tests own UE behavior evidence."""
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Pure transport/semantic tests; native Skeleton tests own UE behavior evidence."""
 import copy
 import unittest
 
-from asset_document.tests.fixtures import skeleton_s1_caller as caller
+from asset_document.tests.fixtures import skeleton_caller as caller
 from asset_document.tests.test_generic_runtime import request, outcome, handle_group, diagnostic, REQUEST_ID
 
 TARGET = '/Game/S1/M.M'

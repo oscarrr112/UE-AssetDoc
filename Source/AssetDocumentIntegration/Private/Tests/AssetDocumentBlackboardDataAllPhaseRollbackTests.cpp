@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentModule.h"
 #include "AssetDocumentTestDirectoryBlock.h"
@@ -19,7 +20,7 @@ namespace BlackboardDataAllPhaseRollbackTestsLocal
 {
 FString MakeTarget(const TCHAR* Name)
 {
-	return FString::Printf(TEXT("/Game/AssetDocumentG3BlackboardData/%s_%s"),
+	return FString::Printf(TEXT("/Game/AssetDocumentBlackboardDataTests/%s_%s"),
 		Name, *FGuid::NewGuid().ToString(EGuidFormats::Digits));
 }
 
@@ -66,7 +67,7 @@ public:
 		: Target(InTarget)
 		, ObjectPath(MakeObjectPath(InTarget))
 		, SidecarPath(FPaths::Combine(FPaths::ProjectContentDir(),
-			TEXT("AssetDocumentG3BlackboardData"),
+			TEXT("AssetDocumentBlackboardDataTests"),
 			FPackageName::GetLongPackageAssetName(InTarget) + TEXT(".assetdoc.json")))
 		, PackagePath(FPackageName::LongPackageNameToFilename(InTarget,
 			FPackageName::GetAssetPackageExtension()))
@@ -246,8 +247,8 @@ bool FAssetDocumentBlackboardDataAllPhaseRollbackTest::RunTest(
 	const FString Int = TEXT("/Script/AIModule.BlackboardKeyType_Int");
 	const FString Bool = TEXT("/Script/AIModule.BlackboardKeyType_Bool");
 	const FString Float = TEXT("/Script/AIModule.BlackboardKeyType_Float");
-	FFixture Parent(MakeTarget(TEXT("BB_G3RollbackParent")));
-	FFixture Child(MakeTarget(TEXT("BB_G3Rollback")));
+	FFixture Parent(MakeTarget(TEXT("BB_RollbackParent")));
+	FFixture Child(MakeTarget(TEXT("BB_Rollback")));
 	if (!Parent.Write(*this, MakeDocument(Parent.Target, FString(), {MakeKey(TEXT("ParentKey"), *Int)}, TEXT("Create")))
 		|| !TestTrue(TEXT("creates rollback Parent"), Parent.Apply(Service).IsSuccess())
 		|| !Child.Write(*this, MakeDocument(Child.Target, FString(), {

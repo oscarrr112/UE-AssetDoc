@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // End-to-end ApplyFile/Extract tests for the generic factory lifecycle through
 // the production Service: one apply creates and populates a new asset of any

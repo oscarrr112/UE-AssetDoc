@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // IK Retargeter apply and the automatic-setup suggestions (design §6, phases R2 / R3):
 // UEAssetDoc.IKRig.RetargeterFidelity: §6.2 on the editor-built retargeter fixtures (default ops; every

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Target lifecycle of Blueprint assets (catalog rows blueprint_exact.v1, widget_blueprint.v1 and
 // anim_blueprint_exact.v1; the asset_class handle picks the row's exact Blueprint class):

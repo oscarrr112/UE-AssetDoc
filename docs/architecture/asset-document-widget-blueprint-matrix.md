@@ -1,6 +1,6 @@
 # WidgetBlueprint support matrix (legacy C++ profile vs Python route)
 
-Status: 2026-10-04. Governing rules:
+Governing rules:
 [design rules](asset-document-design-rules.md) §3 (rollback = functional
 equivalence), §4 (raw editor-equivalent code in its own file + behaviour test) and §5 (support
 matrix, no capability regression).
@@ -11,7 +11,7 @@ matrix, no capability regression).
 The legacy C++ `FWidgetBlueprintAssetDocumentProfile` (and the other legacy C++ profiles) has
 been deleted; the Python route is the only route.
 
-Columns: **Legacy** = the retired `FWidgetBlueprintAssetDocumentProfile`; **Python** = this slice.
+Columns: **Legacy** = the retired `FWidgetBlueprintAssetDocumentProfile`; **Python** = the current profile.
 Classification: **Supported** (Extract + Apply + Diff), **Read-only** (Extract/Diff only; authoring
 a different value fails with a stable diagnostic), **Unsupported** (not in the document, or only
 `[]` accepted; reason given).

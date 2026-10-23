@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "AssetDocumentGenericReadOnlyDispatcher.h"
@@ -291,7 +292,7 @@ bool FAssetDocumentBehaviorTreeVerifyHandoffTest::RunTest(const FString& Paramet
 	Candidate.Providers = {CreateAssetDocumentEditorPrimitiveProvider(), CreateAssetDocumentAIPrimitiveProvider()};
 	Candidate.RequiredPrimitives = {{TEXT("editor.asset.resolve_existing.v1"), 1, TEXT("route.generic.v1")}, {ReadbackId, 1, TEXT("ai_profile")}};
 	const auto Projected = BuildAssetDocumentRequiredPrimitiveProjection(
-		Candidate.Providers, Candidate.RequiredPrimitives, GetG1FrozenAuthorityExceptionRecords());
+		Candidate.Providers, Candidate.RequiredPrimitives, GetFrozenAuthorityExceptionRecords());
 	for (const auto& D : Projected.Diagnostics) AddInfo(D.Code + TEXT(": ") + D.Message);
 	if (!TestTrue(TEXT("existing callable projection selects real descriptors"), Projected.Projection.IsValid())) return false;
 	Candidate.Providers = Projected.Projection->Providers;

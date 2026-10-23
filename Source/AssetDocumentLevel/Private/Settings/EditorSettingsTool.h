@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -31,6 +32,11 @@ FLevelToolResult RunEditorSettings(const TSharedPtr<FJsonObject>& Request);
 FLevelToolResult RunEditorSettingsFromBody(const FString& RequestBody);
 
 // True when Filename is an .ini file inside the project's Config/ directory (the only
-// config files settings writes); OutRelative is the project-relative path.
+// config files settings writes); OutRelative is the project-relative path. Links are followed:
+// a Config/ directory, or a file or folder in it, that leads out of the project is refused.
 bool IsProjectConfigFile(const FString& Filename, FString* OutRelative = nullptr);
+
+// IsProjectConfigFile for a given project and Config/ directory.
+bool IsConfigFileInProject(const FString& ProjectDir, const FString& ConfigDir, const FString& Filename,
+	FString* OutRelative = nullptr);
 }

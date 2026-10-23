@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // End-to-end MaterialInstanceConstant through the production Service and the Python Profile
 // (profile.material_instance_constant.v1). The parent materials are built here as the Material

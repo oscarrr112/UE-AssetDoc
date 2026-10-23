@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -356,23 +357,23 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentAnimationProviderAuthorityTest::RunTest(const FString&)
 {
-	const TConstArrayView<FAssetDocumentAnimationT0DecisionRecord> Decisions =
-		GetAssetDocumentAnimationT0DecisionRecords();
+	const TConstArrayView<FAssetDocumentAnimationAuthorityDecisionRecord> Decisions =
+		GetAssetDocumentAnimationAuthorityDecisionRecords();
 	TestEqual(TEXT("frozen Animation decision closure"), Decisions.Num(), 31);
 
 	TSet<FString> DecisionIds;
-	TSet<FString> CoveredGateIds;
+	TSet<FString> CoveredGroupIds;
 	int32 AdmittedCount = 0;
 	int32 StableBlockerCount = 0;
-	int32 FrozenG1NotApplicableCount = 0;
+	int32 FrozenNotApplicableCount = 0;
 	int32 VerifiedAssetIdentityReadyCount = 0;
 	int32 RuntimeHandleBootstrapBlockedCount = 0;
 	int32 AdmittedReadOnlyCount = 0;
 	int32 MutatingCandidateCount = 0;
-	for (const FAssetDocumentAnimationT0DecisionRecord& Decision : Decisions)
+	for (const FAssetDocumentAnimationAuthorityDecisionRecord& Decision : Decisions)
 	{
 		DecisionIds.Add(Decision.DecisionId);
-		CoveredGateIds.Add(Decision.AuthorityGateId);
+		CoveredGroupIds.Add(Decision.AuthorityGroupId);
 		TestTrue(
 			FString::Printf(TEXT("%s records its final diagnostic"),
 				Decision.DecisionId),
@@ -380,8 +381,8 @@ bool FAssetDocumentAnimationProviderAuthorityTest::RunTest(const FString&)
 
 		switch (Decision.BootstrapDisposition)
 		{
-		case decltype(Decision.BootstrapDisposition)::FrozenG1NotApplicable:
-			++FrozenG1NotApplicableCount;
+		case decltype(Decision.BootstrapDisposition)::FrozenNotApplicable:
+			++FrozenNotApplicableCount;
 			break;
 		case decltype(Decision.BootstrapDisposition)::VerifiedAssetIdentityReady:
 			++VerifiedAssetIdentityReadyCount;
@@ -393,7 +394,7 @@ bool FAssetDocumentAnimationProviderAuthorityTest::RunTest(const FString&)
 					TEXT("%s retains the runtime bootstrap blocker"),
 					Decision.DecisionId),
 				FString(Decision.FinalDiagnostic),
-				FString(TEXT("AD.PANIM.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")));
+				FString(TEXT("AD.ANIMATION.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")));
 			break;
 		default:
 			TestTrue(
@@ -455,8 +456,8 @@ bool FAssetDocumentAnimationProviderAuthorityTest::RunTest(const FString&)
 	TestEqual(TEXT("decision identities are unique"), DecisionIds.Num(), 31);
 	TestEqual(TEXT("final admitted decisions"), AdmittedCount, 9);
 	TestEqual(TEXT("final stable blockers"), StableBlockerCount, 22);
-	TestEqual(TEXT("frozen G1 rows have no bootstrap projection"),
-		FrozenG1NotApplicableCount, 6);
+	TestEqual(TEXT("frozen rows have no bootstrap projection"),
+		FrozenNotApplicableCount, 6);
 	TestEqual(TEXT("Asset and AssetPair rows have verified identity bootstrap"),
 		VerifiedAssetIdentityReadyCount, 17);
 	TestEqual(TEXT("derived Class and GraphNode rows lack runtime bootstrap"),
@@ -465,52 +466,52 @@ bool FAssetDocumentAnimationProviderAuthorityTest::RunTest(const FString&)
 	TestEqual(TEXT("ordinary mutating candidates include Curves and the two structural operations"),
 		MutatingCandidateCount, 17);
 
-	const TConstArrayView<FAssetDocumentAnimationAuthorityGateEvidence> Gates =
-		GetAssetDocumentAnimationAuthorityGateEvidence();
-	TestEqual(TEXT("all T0, structural and C0 gates are represented"), Gates.Num(), 10);
-	for (const FAssetDocumentAnimationAuthorityGateEvidence& Gate : Gates)
+	const TConstArrayView<FAssetDocumentAnimationAuthorityEvidence> EvidenceRows =
+		GetAssetDocumentAnimationAuthorityEvidence();
+	TestEqual(TEXT("every authority group has its evidence"), EvidenceRows.Num(), 10);
+	for (const FAssetDocumentAnimationAuthorityEvidence& Evidence : EvidenceRows)
 	{
 		TestTrue(
 			FString::Printf(
 				TEXT("%s is covered by a row or is provider-wide"),
-				Gate.GateId),
-			CoveredGateIds.Contains(Gate.GateId)
-				|| FStringView(Gate.GateId) == TEXTVIEW("T0-HANDLE")
-				|| FStringView(Gate.GateId) == TEXTVIEW("T0-ROLLBACK"));
+				Evidence.GroupId),
+			CoveredGroupIds.Contains(Evidence.GroupId)
+				|| FStringView(Evidence.GroupId) == TEXTVIEW("ANIMATION-HANDLE")
+				|| FStringView(Evidence.GroupId) == TEXTVIEW("ANIMATION-ROLLBACK"));
 		TestTrue(
-			FString::Printf(TEXT("%s records public module"), Gate.GateId),
-			FCString::Strlen(Gate.PublicModule) > 0);
+			FString::Printf(TEXT("%s records public module"), Evidence.GroupId),
+			FCString::Strlen(Evidence.PublicModule) > 0);
 		TestTrue(
-			FString::Printf(TEXT("%s records public header"), Gate.GateId),
-			FCString::Strlen(Gate.PublicHeader) > 0);
+			FString::Printf(TEXT("%s records public header"), Evidence.GroupId),
+			FCString::Strlen(Evidence.PublicHeader) > 0);
 		TestTrue(
-			FString::Printf(TEXT("%s records export authority"), Gate.GateId),
-			FCString::Strlen(Gate.ExportMacro) > 0);
+			FString::Printf(TEXT("%s records export authority"), Evidence.GroupId),
+			FCString::Strlen(Evidence.ExportMacro) > 0);
 		TestTrue(
-			FString::Printf(TEXT("%s records exact symbols"), Gate.GateId),
-			FCString::Strlen(Gate.PublicSymbols) > 0);
+			FString::Printf(TEXT("%s records exact symbols"), Evidence.GroupId),
+			FCString::Strlen(Evidence.PublicSymbols) > 0);
 		TestTrue(
-			FString::Printf(TEXT("%s records call context"), Gate.GateId),
-			FCString::Strlen(Gate.CallContext) > 0);
+			FString::Printf(TEXT("%s records call context"), Evidence.GroupId),
+			FCString::Strlen(Evidence.CallContext) > 0);
 		TestTrue(
-			FString::Printf(TEXT("%s records identity and lifetime"), Gate.GateId),
-			FCString::Strlen(Gate.IdentityAndLifetime) > 0);
+			FString::Printf(TEXT("%s records identity and lifetime"), Evidence.GroupId),
+			FCString::Strlen(Evidence.IdentityAndLifetime) > 0);
 		TestTrue(
-			FString::Printf(TEXT("%s records transaction and rollback"), Gate.GateId),
-			FCString::Strlen(Gate.TransactionAndRollback) > 0);
+			FString::Printf(TEXT("%s records transaction and rollback"), Evidence.GroupId),
+			FCString::Strlen(Evidence.TransactionAndRollback) > 0);
 		TestTrue(
-			FString::Printf(TEXT("%s records completion"), Gate.GateId),
-			FCString::Strlen(Gate.Completion) > 0);
+			FString::Printf(TEXT("%s records completion"), Evidence.GroupId),
+			FCString::Strlen(Evidence.Completion) > 0);
 		TestTrue(
-			FString::Printf(TEXT("%s records compile/link result"), Gate.GateId),
-			FCString::Strlen(Gate.CompileAndLinkResult) > 0);
+			FString::Printf(TEXT("%s records compile/link result"), Evidence.GroupId),
+			FCString::Strlen(Evidence.CompileAndLinkResult) > 0);
 		TestTrue(
-			FString::Printf(TEXT("%s records focused test ID"), Gate.GateId),
-			FCString::Strlen(Gate.FocusedTestId) > 0);
+			FString::Printf(TEXT("%s records focused test ID"), Evidence.GroupId),
+			FCString::Strlen(Evidence.FocusedTestId) > 0);
 		TestTrue(
-			FString::Printf(TEXT("%s closes or blocks locally"), Gate.GateId),
-			Gate.bLocalAuthorityClosed
-				|| FCString::Strlen(Gate.StableDiagnostic) > 0);
+			FString::Printf(TEXT("%s closes or blocks locally"), Evidence.GroupId),
+			Evidence.bLocalAuthorityClosed
+				|| FCString::Strlen(Evidence.StableDiagnostic) > 0);
 	}
 	return true;
 }

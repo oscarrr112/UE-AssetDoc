@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // spawn: the Content Browser / Place Actors drop of an actor class or an asset, at an
 // explicit transform and level (Raw/LevelPlacement), followed by the same field edits

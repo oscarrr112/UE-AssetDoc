@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "Provider/AssetDocumentAnimationProviderCommon.h"
 #include "Provider/Asset/AssetDocumentAnimationSkeletonOperations.h"
@@ -39,7 +40,7 @@ bool IsDecisionRowValid(
 		|| Decision.PrimitiveId == TEXT("animation.sequence.complete_edit.v2")
         || Decision.PrimitiveId == TEXT("animation.sequence.retarget_source_asset.set.v2");
 	if (Decision.PrimitiveId.IsEmpty() || Decision.Version != (bVersionTwo ? 2u : 1u)
-		|| Decision.ConsumerId.IsEmpty() || Decision.AuthorityGateId.IsEmpty())
+		|| Decision.ConsumerId.IsEmpty() || Decision.AuthorityGroupId.IsEmpty())
 	{
 		return false;
 	}
@@ -51,9 +52,9 @@ bool IsDecisionRowValid(
 	case EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker:
 		return Decision.ConsumerId == TEXT("animation_profile")
 			&& !Decision.StableBlockerDiagnostic.IsEmpty();
-	case EAssetDocumentAnimationDecisionDisposition::FrozenG1StableBlocker:
+	case EAssetDocumentAnimationDecisionDisposition::FrozenStableBlocker:
 		return Decision.ConsumerId == TEXT("animation_provider_design")
-			&& Decision.AuthorityGateId == TEXT("G1")
+			&& Decision.AuthorityGroupId == TEXT("FROZEN-AUTHORITY")
 			&& !Decision.StableBlockerDiagnostic.IsEmpty();
 	default:
 		return false;
@@ -63,11 +64,11 @@ bool IsDecisionRowValid(
 bool HasExactDecisionCounts(
 	int32 Admitted,
 	int32 OrdinaryBlockers,
-	int32 FrozenG1Blockers)
+	int32 FrozenBlockers)
 {
 	return Admitted == 14
 		&& OrdinaryBlockers == 16
-		&& FrozenG1Blockers == 6;
+		&& FrozenBlockers == 6;
 }
 
 bool IsReadOnlyAdmissionShape(
@@ -190,7 +191,7 @@ FAssetDocumentContractValidationResult ValidateAnimationDecisionClosure(
 	TSet<FString> Identities;
 	int32 Admitted = 0;
 	int32 OrdinaryBlockers = 0;
-	int32 FrozenG1Blockers = 0;
+	int32 FrozenBlockers = 0;
 	for (const FAssetDocumentAnimationDecision& Decision : Decisions)
 	{
 		const FString Identity = FString::Printf(
@@ -206,13 +207,13 @@ FAssetDocumentContractValidationResult ValidateAnimationDecisionClosure(
 			EAssetDocumentAnimationDecisionDisposition::Admitted;
 		OrdinaryBlockers += Decision.Disposition ==
 			EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker;
-		FrozenG1Blockers += Decision.Disposition ==
-			EAssetDocumentAnimationDecisionDisposition::FrozenG1StableBlocker;
+		FrozenBlockers += Decision.Disposition ==
+			EAssetDocumentAnimationDecisionDisposition::FrozenStableBlocker;
 	}
 	return MakeValidationResult(
 		Decisions.Num() == 36
 			&& HasExactDecisionCounts(
-				Admitted, OrdinaryBlockers, FrozenG1Blockers),
+				Admitted, OrdinaryBlockers, FrozenBlockers),
 		TEXT("AnimationProvider.DecisionClosureInvalid"),
 		TEXT("The Animation decision catalog must close exactly 14/16/6 rows."));
 }

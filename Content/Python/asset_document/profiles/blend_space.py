@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered blend space Profiles: BlendSpace, BlendSpace1D, AimOffsetBlendSpace and
 AimOffsetBlendSpace1D (profile.blend_space.v1, profile.blend_space_1d.v1, profile.aim_offset.v1,
 profile.aim_offset_1d.v1): the Blend Space editor's axes and samples.

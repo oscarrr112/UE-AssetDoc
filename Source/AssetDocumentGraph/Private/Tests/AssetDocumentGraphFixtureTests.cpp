@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Golden DTO fixtures shared with the Python graph model
 // (Content/Python/asset_document/tests/fixtures/graph_dto/<primitive>.<scenario>.json).

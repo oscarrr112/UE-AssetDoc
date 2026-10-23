@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Control Rig apply, phase CR1 (docs/architecture/asset-document-controlrig-design.md §7.2: rig apply without graphs).
+// Control Rig apply (docs/architecture/asset-document-controlrig-design.md §7.2: rig apply without graphs).
 // UEAssetDoc.ControlRig.Fidelity: §6.2 on a hierarchy-only fixture, CR_AllKinds, #3 (Root module) and
 //   #5 (Constraint, Hinge, Wheel, Finger): Create a new asset from the extract without Graphs / Functions, the created
 //   asset extracts as the source minus those regions; the unchanged re-apply is a no-op; reload stable; timings.
@@ -41,7 +42,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-// Fixtures of the CR0 tests (AssetDocumentControlRigTests.cpp).
+// Fixtures of the read tests (AssetDocumentControlRigTests.cpp).
 namespace AssetDocumentControlRigTests
 {
 UControlRigBlueprint* MakeControlRig(FAutomationTestBase& Test, const AssetDocumentIKRigTests::FTarget& Target, const TCHAR* MeshPath, bool bModular);
@@ -62,7 +63,7 @@ TSharedPtr<FJsonObject> ForTarget(const TSharedPtr<FJsonObject>& Document, const
 	return Copy;
 }
 
-// The document without the regions CR1 does not author (Graphs, GraphOrder, Functions).
+// The document without the regions the rig apply does not author (Graphs, GraphOrder, Functions).
 TSharedPtr<FJsonObject> WithoutGraphs(const TSharedPtr<FJsonObject>& Document)
 {
 	const TSharedPtr<FJsonObject> Copy = Parse(Serialize(Document));
@@ -214,7 +215,7 @@ UControlRigBlueprint* MakeHierarchyOnly(FAutomationTestBase& Test, const FTarget
 	return Blueprint;
 }
 
-// The corpus sources of §7.2 CR1: #3 and #5.
+// The corpus sources of §7.2 (rig apply): #3 and #5.
 const TCHAR* const ModuleSources[] = {
 	TEXT("/ControlRig/Modules/Modules56/Root.Root"),
 	TEXT("/ControlRigModules/Modules56/Constraint.Constraint"),

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Values of the Sequencer document (design §3.3, §7.1): the Editor typed value codec with the movie-scene adapters
 // (frame numbers in display frames, binding IDs as binding paths, time-warp play rates, events), sparse objects and

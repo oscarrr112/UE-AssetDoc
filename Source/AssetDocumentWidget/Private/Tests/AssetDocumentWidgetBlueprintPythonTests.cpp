@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // End-to-end Widget Blueprint through the production Service and the Python Profile
 // (profile.widget_blueprint.v1): one ApplyFile creates and populates a Widget Blueprint

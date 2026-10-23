@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.Sequencer.Corpus: design §6.1 (template folders copied in at their /Game paths, plugin
 //   content when enabled): every sequence extracts with no unknown diagnostic, twice equal and equal after reload, Diff

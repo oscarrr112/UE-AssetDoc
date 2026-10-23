@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The Blueprint graph features the Widget, Anim and Level Sequence Director Blueprint Profiles share with the
 // Blueprint Class Profile, on the production route (FAssetDocumentService -> Generic Runtime -> the Python Profile ->

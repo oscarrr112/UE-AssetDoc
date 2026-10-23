@@ -1,45 +1,44 @@
-# IK Rig / IK Retargeter support matrix and corpus results (R0–R3)
+# IK Rig / IK Retargeter support matrix and corpus results
 
-Status: 2026-10-07. Design: [asset-document-ikrig-design.md](asset-document-ikrig-design.md).
+Design: [asset-document-ikrig-design.md](asset-document-ikrig-design.md).
 Rules: [design rules](asset-document-design-rules.md) §3 (rollback = functional equivalence), §4
 (editor-equivalent code + behaviour test), §5 (support matrix). Reference editors: the IK Rig editor
 (`UIKRigController`, the solver stack, the struct viewer) and the IK Retarget editor (`UIKRetargeterController`, the
 op stack, edit-pose mode, the toolbar's Auto Align / Auto Map). The agent-facing description is
 `MCP/schemas/assetdocument/IKRig.md`.
 
-| Class | Profile | Phase | State |
-|---|---|---|---|
-| `IKRigDefinition` | `profile.ik_rig.v1` | R0–R1, R3 | Extract / Inspect (+ `Suggestions`) / Apply / Diff |
-| `IKRetargeter` | `profile.ik_retargeter.v1` | R0, R2–R3 | Extract / Inspect (+ `Suggestions`) / Apply / Diff |
+| Class | Profile | State |
+|---|---|---|
+| `IKRigDefinition` | `profile.ik_rig.v1` | Extract / Inspect (+ `Suggestions`) / Apply / Diff |
+| `IKRetargeter` | `profile.ik_retargeter.v1` | Extract / Inspect (+ `Suggestions`) / Apply / Diff |
 
-Classification: **Supported**, **Read only**, **Refused** (an error code; the editor cannot do it either),
-**Later**.
+Classification: **Supported**, **Read only**, **Refused** (an error code; the editor cannot do it either).
 
 ## Editor surfaces
 
 | Editor surface | Body location | Class | Mechanism |
 |---|---|---|---|
-| New IK Rig on a mesh; preview mesh swap | `Action: Create`, `PreviewMesh` | Supported (R1) | `UIKRigDefinitionFactory`, `SetSkeletalMesh` (exclusions re-applied) |
-| Goals, solvers (all six types), solver goal / bone settings, excluded bones, chains, retarget root | `Goals`, `Solvers`, `ExcludedBones`, `Chains`, `RetargetRoot` | Supported (R1) | `rig.ikrig.edit.v1` through `UIKRigController` and struct-viewer writes |
-| Auto Characterize, Auto FBIK | Inspect `Suggestions.Body` | Supported (R3), read-only suggestion | `rig.suggest.v1` on a transient copy |
-| New IK Retargeter; pick source / target rig ("assign to all ops") | `Action: Create`, `Source` / `Target.IKRig` | Supported (R2) | `UIKRetargetFactory`, `SetIKRig` + `AssignIKRigToAllOps` |
-| Source / target preview mesh | `Source` / `Target.PreviewMesh` | Supported (R2) | `SetPreviewMesh`; omitted = the rig's mesh, `null` = none |
-| Op stack: add (every op type, child ops under Run IK Rig), remove, rename, move, re-parent, enable | `Ops`, `Children`, `Name`, `RenamedFrom`, `Enabled` | Supported (R2) | `rig.ikretargeter.edit.v1`: `AddRetargetOp`, `RemoveRetargetOp`, `SetOpName`, `MoveRetargetOpInStack`, `SetParentOpByName`, `SetRetargetOpEnabled` |
-| Op Details (settings), per-chain op settings | `Settings`, `Chains` | Supported (R2) | struct-viewer writes over a new op's defaults; re-initialized like `UIKRigStructViewer::TriggerReinitIfNeeded` |
-| Op chain mapping, Auto Map Chains | `ChainMapping`; Inspect `Suggestions.AutoMap` | Supported (R2 / R3) | `SetSourceChain`; `AutoMapChains` on a transient copy |
-| Op target rig | `TargetIKRig` | Supported (R2) | op `IKRigAsset` property + `OnOpPropertyChanged` |
-| Retarget poses: new, delete, rename, current; edit-pose rotations, root offset, reset | `Poses.<Side>` | Supported (R2) | `CreateRetargetPose`, `RemoveRetargetPose`, `RenameRetargetPose`, `SetCurrentRetargetPose`; edit-pose mode's `SetDeltaRotationForBone` / `SetRootTranslationDelta` / `ResetRetargetPose` |
-| Auto Align All Bones | Inspect `Suggestions.AutoAlign` | Supported (R3), read-only suggestion | `AutoAlignAllBones` (ChainToChain) on a transient copy |
+| New IK Rig on a mesh; preview mesh swap | `Action: Create`, `PreviewMesh` | Supported | `UIKRigDefinitionFactory`, `SetSkeletalMesh` (exclusions re-applied) |
+| Goals, solvers (all six types), solver goal / bone settings, excluded bones, chains, retarget root | `Goals`, `Solvers`, `ExcludedBones`, `Chains`, `RetargetRoot` | Supported | `rig.ikrig.edit.v1` through `UIKRigController` and struct-viewer writes |
+| Auto Characterize, Auto FBIK | Inspect `Suggestions.Body` | Supported, read-only suggestion | `rig.suggest.v1` on a transient copy |
+| New IK Retargeter; pick source / target rig ("assign to all ops") | `Action: Create`, `Source` / `Target.IKRig` | Supported | `UIKRetargetFactory`, `SetIKRig` + `AssignIKRigToAllOps` |
+| Source / target preview mesh | `Source` / `Target.PreviewMesh` | Supported | `SetPreviewMesh`; omitted = the rig's mesh, `null` = none |
+| Op stack: add (every op type, child ops under Run IK Rig), remove, rename, move, re-parent, enable | `Ops`, `Children`, `Name`, `RenamedFrom`, `Enabled` | Supported | `rig.ikretargeter.edit.v1`: `AddRetargetOp`, `RemoveRetargetOp`, `SetOpName`, `MoveRetargetOpInStack`, `SetParentOpByName`, `SetRetargetOpEnabled` |
+| Op Details (settings), per-chain op settings | `Settings`, `Chains` | Supported | struct-viewer writes over a new op's defaults; re-initialized like `UIKRigStructViewer::TriggerReinitIfNeeded` |
+| Op chain mapping, Auto Map Chains | `ChainMapping`; Inspect `Suggestions.AutoMap` | Supported | `SetSourceChain`; `AutoMapChains` on a transient copy |
+| Op target rig | `TargetIKRig` | Supported | op `IKRigAsset` property + `OnOpPropertyChanged` |
+| Retarget poses: new, delete, rename, current; edit-pose rotations, root offset, reset | `Poses.<Side>` | Supported | `CreateRetargetPose`, `RemoveRetargetPose`, `RenameRetargetPose`, `SetCurrentRetargetPose`; edit-pose mode's `SetDeltaRotationForBone` / `SetRootTranslationDelta` / `ResetRetargetPose` |
+| Auto Align All Bones | Inspect `Suggestions.AutoAlign` | Supported, read-only suggestion | `AutoAlignAllBones` (ChainToChain) on a transient copy |
 | Retarget profiles | Inspect `Profiles` | Read only | `IKRetargeter.ProfilesNotAuthored` (no editor UI in 5.7) |
 | Edit an asset open in its editor | — | Supported: close, apply, reopen (Info `IKRig.EditorReopened`, `IKRetargeter.EditorReopened`) | tests `IKRig.OpenEditorApply.Rig`, `IKRig.OpenEditorApply.Retargeter` |
 | Interactive editor prompts during an apply | — | Refused | `IKRetargeter.InteractiveEditRefused` (non-interactive scope) |
 
 ## Corpus and fixture results
 
-Windows CI sandbox (UE 5.7, MoverExamples enabled; MetaHumanCharacter and MoverTests not enabled: those rows skip
-with a note), `UEAssetDoc.IKRig.*` 17/17, 2026-10-07. Times are one run, in ms.
+UE 5.7, MoverExamples enabled; MetaHumanCharacter and MoverTests not enabled: those rows skip
+with a note), `UEAssetDoc.IKRig.*` 17/17. Times are one run, in ms.
 
-### R0 read (design §6.1 #1–6)
+### Read (design §6.1 #1–6)
 
 | Asset | Extract | Inspect | Status | Content |
 |---|---|---|---|---|
@@ -50,7 +49,7 @@ with a note), `UEAssetDoc.IKRig.*` 17/17, 2026-10-07. Times are one run, in ms.
 
 Extract is stable (twice equal, equal after reload) and reading dirties no package.
 
-### R1 IK Rig apply (§6.2: extract → Create → equal extract and status → unchanged re-apply no-op → reload)
+### IK Rig apply (§6.2: extract → Create → equal extract and status → unchanged re-apply no-op → reload)
 
 | Source | Create | Unchanged re-apply | Status |
 |---|---|---|---|
@@ -60,7 +59,7 @@ Extract is stable (twice equal, equal after reload) and reading dirties no packa
 
 §6.3 rig free edits (document side 280 ms), §6.4 rig from scratch, Undo, StructWrites, OpenEditorApply.Rig: pass.
 
-### R2 IK Retargeter apply (§6.2)
+### IK Retargeter apply (§6.2)
 
 | Source | Ops | Create | Unchanged re-apply | Status (equal on both) |
 |---|---|---|---|---|
@@ -84,7 +83,7 @@ Extract is stable (twice equal, equal after reload) and reading dirties no packa
   the applied asset); a failed apply rolls back and the editor reads the rolled-back asset; a human edit through the
   reopened editor's controller is saved, undone and redone; the editor closes without a prompt.
 
-### R3 AI surface
+### AI surface
 
 | Check | Result |
 |---|---|
@@ -101,4 +100,4 @@ Extract is stable (twice equal, equal after reload) and reading dirties no packa
 - Only `ChainToChain` auto-align is computed by Inspect (`rig.suggest.v1` takes `methods` for the others).
 - The processor's own log sometimes reports a too-short chain once per side and sometimes once; status equality is
   checked within one run, where it is stable.
-- MetaHuman and MoverTests content is not covered on the CI sandbox (plugins not enabled).
+- MetaHuman and MoverTests content is not covered (plugins not enabled).

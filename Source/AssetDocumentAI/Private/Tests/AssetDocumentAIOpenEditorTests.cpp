@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Open-editor apply of the AI profiles (Runtime/AssetDocumentOpenEditor.h, AssetDocumentAIOpenEditor.cpp):
 // UEAssetDoc.StateTree.OpenEditorApply: with the tree open in the StateTree editor, an apply (states

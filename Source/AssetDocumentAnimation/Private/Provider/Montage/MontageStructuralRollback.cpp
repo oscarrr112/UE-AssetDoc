@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #include "Provider/Montage/MontageStructuralRollback.h"
 #include "Provider/Montage/MontageStructuralPreparation.h"
 #include "Animation/AnimData/IAnimationDataController.h"

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentAIPrimitiveProvider.h"
 #include "AssetDocumentAnimationRequestBinding.h"
@@ -282,7 +283,7 @@ TArray<FString> RetiredHardCodedRequirementTuples()
 		TEXT("editor.class.resolve_canonical.v1"), TEXT("editor.asset.resolve_existing.v1"),
 		TEXT("editor.scratch.create_by_factory.v1"), TEXT("editor.asset.rollback_created.v1")});
 	Add(TEXT("env_query_profile"), 2, {TEXT("editor.scratch.clone_asset.v2"), TEXT("editor.asset.create_by_factory.v2")});
-	// Niagara Python Profiles (fx_profile): the "fx" provider, the generic factory lifecycle and (N4: script graphs and
+	// Niagara Python Profiles (fx_profile): the "fx" provider, the generic factory lifecycle and (script graphs and
 	// scratch pads) the shared graph primitives.
 	Add(TEXT("fx_profile"), 1, {TEXT("fx.niagara.read.v1"), TEXT("fx.niagara.edit.v1"), TEXT("fx.niagara.compile.v1"),
 		TEXT("editor.class.resolve_canonical.v1"), TEXT("editor.asset.resolve_existing.v1"),
@@ -327,8 +328,8 @@ TArray<FString> RetiredHardCodedRequirementTuples()
 		TEXT("editor.scratch.create_by_factory.v1"), TEXT("editor.asset.rollback_created.v1")});
 	Add(TEXT("physics_profile"), 2, {TEXT("editor.scratch.clone_asset.v2"), TEXT("editor.asset.create_by_factory.v2")});
 	// Level / Template Sequence Python Profiles (seq_profile): the "seq" provider read, inspect, catalog, edit and status,
-	// the generic factory lifecycle (Create and Update since S2; a Template Sequence's factory takes its bound actor class)
-	// and (S5) the Director Blueprint's members and graphs (the hosted Blueprint of the "blueprint" / "graph" providers).
+	// the generic factory lifecycle (Create and Update; a Template Sequence's factory takes its bound actor class)
+	// and the Director Blueprint's members and graphs (the hosted Blueprint of the "blueprint" / "graph" providers).
 	Add(TEXT("seq_profile"), 1, {TEXT("seq.read.v1"), TEXT("seq.inspect.v1"), TEXT("seq.catalog.v1"), TEXT("seq.edit.v1"), TEXT("seq.status.v1"),
 		TEXT("editor.class.resolve_canonical.v1"), TEXT("editor.asset.resolve_existing.v1"), TEXT("editor.reference.resolve_asset.v1"),
 		TEXT("editor.scratch.create_by_factory.v1"), TEXT("editor.asset.rollback_created.v1"),
@@ -364,7 +365,7 @@ bool IsRejectedProviderClosure(
 	TConstArrayView<FAssetDocumentProviderAvailability> Providers)
 {
 	return !ValidateAssetDocumentPrimitiveFreezeInput(
-		Descriptors, Requirements, Providers, GetG1FrozenAuthorityExceptionRecords()).bValid;
+		Descriptors, Requirements, Providers, GetFrozenAuthorityExceptionRecords()).bValid;
 }
 }
 
@@ -486,7 +487,7 @@ bool FAssetDocumentIntegrationTwoProviderCatalogTest::RunTest(
 		CreateAssetDocumentPhysicsPrimitiveProvider(), CreateAssetDocumentSequencerPrimitiveProvider()};
 	const TArray<FAssetDocumentPrimitiveRequirement> Seed = GetAssetDocumentGenericRequirementsForTests();
 	const auto Built = BuildAssetDocumentRequiredPrimitiveProjection(
-		SourceProviders, Seed, GetG1FrozenAuthorityExceptionRecords());
+		SourceProviders, Seed, GetFrozenAuthorityExceptionRecords());
 	if (!TestTrue(TEXT("production seed projects successfully"), Built.Projection.IsValid()))
 	{
 		return false;
@@ -585,7 +586,7 @@ bool FAssetDocumentIntegrationTwoProviderCatalogTest::RunTest(
 	TestTrue(TEXT("manifest is exactly the declared set"), RequirementTuples(Requirements) == RequirementTuples(Seed));
 	TestTrue(TEXT("production projection passes full Core freeze contract"),
 		ValidateAssetDocumentPrimitiveFreezeInput(Descriptors, Requirements, Providers,
-			GetG1FrozenAuthorityExceptionRecords()).bValid);
+			GetFrozenAuthorityExceptionRecords()).bValid);
 
 	const TCHAR* const ProviderNames[] = {TEXT("AI"), TEXT("Animation"), TEXT("Animation asset"), TEXT("Audio"),
 		TEXT("Blueprint"), TEXT("Data"), TEXT("Editor"), TEXT("FX"), TEXT("Graph"), TEXT("Physics"), TEXT("Rig"), TEXT("Sequencer"), TEXT("UMG")};

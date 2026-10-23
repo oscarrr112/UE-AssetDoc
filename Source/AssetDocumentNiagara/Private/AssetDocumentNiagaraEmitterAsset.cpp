@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Emitter assets (N5): the Niagara emitter editor without its UI. Raw editor-equivalent code: the emitter editor's
+// Emitter assets: the Niagara emitter editor without its UI. Raw editor-equivalent code: the emitter editor's
 // working copy (FNiagaraSystemToolkit::InitializeWithEmitter), its Apply (FNiagaraSystemToolkit::UpdateOriginalEmitter,
 // NiagaraSystemToolkit.cpp:1148) and the Apply's follow-up on loaded assets (UpdateExistingEmitters), none of which is
 // exported. Behaviour tests: UEAssetDoc.Niagara.EmitterAsset.*.

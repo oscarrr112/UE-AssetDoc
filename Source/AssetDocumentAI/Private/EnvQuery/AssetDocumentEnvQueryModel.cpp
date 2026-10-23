@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The Environment Query editor's model as the ai.env_query.* primitives see it: its (unexported) graph classes by
 // path, the graph of a query (created as the editor's graph tab creates it), the palette and Add Test classes, the

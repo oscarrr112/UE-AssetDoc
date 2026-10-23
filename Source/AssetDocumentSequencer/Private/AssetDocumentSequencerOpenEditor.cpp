@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Open-editor apply of the Sequencer profiles (Runtime/AssetDocumentOpenEditor.h, design phase S6): in place. Sequencer
+// Open-editor apply of the Sequencer profiles (Runtime/AssetDocumentOpenEditor.h): in place. Sequencer
 // edits the sequence itself (no working copy); what it holds besides is derived from the sequence: the outliner and
 // track area view models, the compiled evaluation template, spawned preview objects and the pre-animated state of what
 // it animates. After its own Undo it rebuilds them (FSequencer::PostUndo -> NotifyMovieSceneDataChanged(Unknown): the

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Physics Asset apply (design §6, phase P1):
 // UEAssetDoc.PhysicsAsset.Fidelity: §6.2 without Create (P2): every source (generated fixtures, the

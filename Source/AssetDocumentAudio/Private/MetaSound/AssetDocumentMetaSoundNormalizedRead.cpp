@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The editor-open normalisation of the MetaSound read (design §3.3): what MetasoundEditor.cpp does when an
 // asset is opened (FindOrBeginBuilding, VersionAsset, FInputNodeTemplate::Inject(bForceNodeCreation=false)),

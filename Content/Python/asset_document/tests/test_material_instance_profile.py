@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """MaterialInstanceConstant Profile: document validation, value canonical forms, op planning,
 Extract shape, Diff and primitive-path mapping.  The editor-side behaviour (parameter discovery,
 UpdateStaticPermutation, parent change, rollback) is covered end to end by

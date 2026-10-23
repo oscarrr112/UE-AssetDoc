@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentGenericRuntimeRoute.h"
 
@@ -254,7 +255,7 @@ FString FirstDiagnosticCode(const FAssetDocumentResult& Result)
 		: Result.Diagnostics[0].Code;
 }
 
-FString LoadG3BlackboardSource(
+FString LoadRouteTestPluginSource(
 	FAutomationTestBase& Test,
 	const TCHAR* RelativePath)
 {
@@ -265,7 +266,7 @@ FString LoadG3BlackboardSource(
 	if (!FFileHelper::LoadFileToString(Source, *Path))
 	{
 		Test.AddError(FString::Printf(
-			TEXT("Failed to read G3-BB source gate file '%s'"),
+			TEXT("Failed to read plugin source file '%s'"),
 			*Path));
 	}
 	return Source;
@@ -362,13 +363,13 @@ bool FAssetDocumentBlackboardDataSoleAuthoritativeRouteTest::RunTest(
 	const FString& Parameters)
 {
 	(void)Parameters;
-	const FString ModuleSource = LoadG3BlackboardSource(
+	const FString ModuleSource = LoadRouteTestPluginSource(
 		*this,
 		TEXT("Source/AssetDocument/Private/AssetDocumentModule.cpp"));
-	const FString RuntimeSource = LoadG3BlackboardSource(
+	const FString RuntimeSource = LoadRouteTestPluginSource(
 		*this,
 		TEXT("Content/Python/asset_document/runtime.py"));
-	const FString ProfileSource = LoadG3BlackboardSource(
+	const FString ProfileSource = LoadRouteTestPluginSource(
 		*this,
 		TEXT("Content/Python/asset_document/profiles/blackboard_data.py"));
 	TestFalse(

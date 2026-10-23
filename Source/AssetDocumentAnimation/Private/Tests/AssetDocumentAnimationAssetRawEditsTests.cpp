@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Behaviour tests of the raw-edit files of the standalone animation asset primitives:
 //   AnimAssets/AssetDocumentSkeletonRawEdits: a socket removed as the skeleton tree's Delete does

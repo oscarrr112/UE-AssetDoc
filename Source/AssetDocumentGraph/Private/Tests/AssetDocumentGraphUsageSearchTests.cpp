@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // find_assets `uses` (graph content search, AssetDocumentUsageSearch.h) through the production Service:
 // - Graph.UsageSearch.IndexAndLoaded: a saved Blueprint is searched from its Find-in-Blueprints index; the node keys

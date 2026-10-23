@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentUMGPrimitiveProvider.h"
 #include "AssetDocumentUMGProviderTestSupport.h"
@@ -129,7 +130,7 @@ bool FAssetDocumentUMGDesignerBindingLifecycleTest::RunTest(const FString& Param
 	const FAssetDocumentPrimitiveOutcome Blocked = Provider->Invoke(
 		BlockedInvocation, DuplicateHandles, &DuplicateTransaction);
 	TestTrue(TEXT("designer binding apply delta remains an exact blocker"),
-		HasCode(Blocked, TEXT("AD.G1.BLOCK.UMG.DESIGNER_BINDING_EVIDENCE")));
+		HasCode(Blocked, TEXT("AD.BLOCK.UMG.DESIGNER_BINDING_EVIDENCE")));
 	return true;
 }
 
@@ -238,7 +239,7 @@ bool FAssetDocumentUMGVariableGuidIsEngineObservedTest::RunTest(const FString& P
 	const FAssetDocumentPrimitiveOutcome Blocked = Provider->Invoke(
 		BlockedInvocation, RollbackHandles, &RollbackTransaction);
 	TestTrue(TEXT("caller-selected GUID remains an exact blocker"),
-		HasCode(Blocked, TEXT("AD.G1.BLOCK.UMG.CALLER_SELECTED_GUID_UNSUPPORTED")));
+		HasCode(Blocked, TEXT("AD.BLOCK.UMG.CALLER_SELECTED_GUID_UNSUPPORTED")));
 	return true;
 }
 #endif

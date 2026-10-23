@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered StateTree Profile (UStateTree, profile.state_tree.v1).
 
 Document (docs/architecture/asset-document-statetree-matrix.md)::
@@ -1377,7 +1380,7 @@ def _without_defaults(values, defaults, include_defaults):
 
 
 # Within a node_facts block, _node_doc stores each node's comparison facts under this key (popped by node_facts).
-_FACTS = "_P82Facts"
+_FACTS = "_NodeFacts"
 _COLLECT_FACTS = []
 
 

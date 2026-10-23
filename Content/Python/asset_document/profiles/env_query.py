@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered Environment Query Profile (profile.env_query.v1) on the ``env_query_profile`` route.
 
 The query's content is its editor graph: options (a generator each, wired to Root, run left to right) and their tests

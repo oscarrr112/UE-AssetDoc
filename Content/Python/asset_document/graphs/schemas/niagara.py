@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Niagara script graphs on the shared graph component: Body ``Graph`` <-> GraphDoc, the schema adapter and the
 executor that edits one script graph (a module / function / dynamic input asset, or one scratch pad of a system).
 

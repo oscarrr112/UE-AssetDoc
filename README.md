@@ -20,7 +20,7 @@ Unlike tools that expose one editor action per call, an AI here works on the who
 ## Requirements
 
 - Unreal Engine 5.7 or 5.8, on macOS or Windows, with a C++ toolchain to build the plugin. The engine is not part of this repository; you need your own copy under Epic's license.
-- Node.js 18 or newer, only for MCP clients that start stdio servers (the `ue-assetdoc` bridge).
+- Node.js 20 or newer, only for MCP clients that start stdio servers (the `ue-assetdoc` bridge).
 
 ## Install
 
@@ -54,9 +54,13 @@ The editor reads them when it starts. A value in the per-user `Saved/Config/<Pla
 - **`Build.bat` says "Unable to build while Live Coding is active".** An editor of the same engine is running with Live Coding. Close it, or build from that editor if it is this project's (Live Coding, Ctrl+Alt+F11). For another project's editor, adding `-NoHotReloadFromIDE` to the `Build.bat` command line also skips the check.
 - **The first build takes long.** Building the plugin for the first time compiles all of its modules, which can take tens of minutes and about 20 GB of disk for the intermediate files; later builds compile only what changed.
 
+### Packaging the plugin
+
+A packaged copy of the plugin keeps the stdio bridge's sources (`MCP/src/`, see [MCP/README.md](MCP/README.md#packaging)), so its users can build the bridge with `npm ci && npm run build` in its `MCP` folder. To ship the bridge built, run `npm ci && npm run build` in `MCP/` before packaging: the built `MCP/dist/` is packaged too, but `node_modules/` is not, so users of that package run `npm ci --omit=dev` in its `MCP` folder to install the bridge's runtime dependencies before starting it.
+
 ## Security
 
-The server accepts requests from this machine only (loopback listener, `Host` and `Origin` checks, JSON request bodies), can require a bearer token, and lets you switch `execute_python` and `delete_assets` off. The endpoint can run Python and delete assets in your editor, so read [SECURITY.md](SECURITY.md) (what is exposed, the defaults, how to report a vulnerability) and [MCP/README.md](MCP/README.md#security) (the settings).
+The server accepts requests from this machine only (loopback listener, `Host` and `Origin` checks, JSON request bodies), can require a bearer token, and lets you switch `execute_python` and `delete_assets` off. Who can connect is the security boundary: the switches are not a sandbox, and any client that can connect can make the editor run code, so read [SECURITY.md](SECURITY.md) (what is exposed, the defaults, how to report a vulnerability) and [MCP/README.md](MCP/README.md#security) (the settings).
 
 ## Documentation
 
@@ -70,4 +74,4 @@ Apache License 2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE). Copyright 2026 
 
 ## Third-party software
 
-The plugin has no third-party code of its own and ships no Unreal Engine code. The optional stdio bridge in `MCP/` installs npm packages (MIT, ISC and BSD licensed) when you run `npm install`. They are listed with their licenses in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), which also covers the engine and Python.
+The plugin has no third-party code of its own and ships no Unreal Engine code. The optional stdio bridge in `MCP/` installs npm packages (MIT, ISC and BSD licensed) when you run `npm ci` (or `npm install`). They are listed with their licenses in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), which also covers the engine and Python.

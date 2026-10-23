@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Registered MetaSound node classes, data types and interfaces (design §3.6), for list_types
 // (kind=metasound_node / metasound_datatype / metasound_interface, AssetDocumentTypeListers.h) and for the

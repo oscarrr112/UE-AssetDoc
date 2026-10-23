@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Sequencer types (design §3.8) for list_types (kinds sequencer_track / sequencer_section / sequencer_binding,
 // AssetDocumentTypeListers.h) and for seq.catalog.v1 ({kind: track | section | binding, name?, path?, base?, offset?,

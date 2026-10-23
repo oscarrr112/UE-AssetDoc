@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 // AnimMontage on the shared generic factory lifecycle: the Skeleton is the
 // optional factory_context of editor.scratch.create_by_factory.v1 /
 // editor.asset.create_by_factory.v2, and editor.asset.rollback_created.v1 (or

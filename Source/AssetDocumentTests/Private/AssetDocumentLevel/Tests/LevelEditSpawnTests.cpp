@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // edit_level spawn: the placement factory is the editor's (actor class -> its factory
 // or AddActor; static mesh -> AStaticMeshActor; Blueprint -> its generated class), the

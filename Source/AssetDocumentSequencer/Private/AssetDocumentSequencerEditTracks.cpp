@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // seq.edit.v1 track, section and channel ops (AssetDocumentSequencerEdit.cpp has the call and the other ops). What the
 // Sequencer UI does for each (design §4.2):

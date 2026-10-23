@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // settings (POST /assetdoc/settings):
 // UEAssetDoc.Settings.World.WriteAndUndo: World Settings of the open level (GameMode override, KillZ,
@@ -12,18 +13,28 @@
 //   UDeveloperSettings section (Physics, DefaultEngine.ini) written and read back; files and values restored.
 // UEAssetDoc.Settings.Project.ListAndRefusals: the sections listed (Maps & Modes, Input); unknown
 //   sections and properties, engine config files and malformed requests refused.
+// UEAssetDoc.Settings.Project.ConfigScope: only files really in the project's Config/ are written: a Config/
+//   directory, or a folder in it, that links out of the project is refused.
 // UEAssetDoc.Settings.DryRun: dry_run: true checks a World Settings / Project Settings write and returns
 //   the planned changes (as edit_level's dry run) without changing the values, the Undo history or the config file.
+// UEAssetDoc.Settings.Project.PluginSettingsProtected: the plugin's own server and security settings (execute_python,
+//   delete_assets, the auth token) are neither read nor written under any name of their section, dry runs included;
+//   the settings object and its config file stay unchanged, and the section is listed as protected, not writable.
+// UEAssetDoc.Settings.Project.ExecutionSettingsProtected: the Python plugin's settings (startup scripts, remote
+//   execution) are read but never written, dry runs included; the values and the config file stay unchanged.
 
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/WorldSettings.h"
 #include "GameFramework/InputSettings.h"
+#include "AssetDocumentPathsTestSupport.h"
+#include "AssetDocumentSettings.h"
 #include "GameMapsSettings.h"
 #include "PhysicsEngine/PhysicsSettings.h"
 #include "LevelEditTestSupport.h"
 #include "LevelEditorUndo.h"
 #include "LevelMapTools.h"
 #include "Misc/FileHelper.h"
+#include "Misc/ScopeExit.h"
 #include "Settings/EditorSettingsTool.h"
 #include "Utils/AssetDocumentJsonKeys.h"
 
@@ -465,6 +476,54 @@ bool FAssetDocumentSettingsRefusalsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentSettingsConfigScopeTest, "UEAssetDoc.Settings.Project.ConfigScope",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentSettingsConfigScopeTest::RunTest(const FString& Parameters)
+{
+	using namespace AssetDocumentPathsTestSupport;
+	using UE::AssetDocumentLevel::Private::IsConfigFileInProject;
+	using UE::AssetDocumentLevel::Private::IsProjectConfigFile;
+
+	const FString Scratch = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("AssetDocumentSettingsScope"),
+		FGuid::NewGuid().ToString(EGuidFormats::Digits)));
+	const FString Outside = MakeOutsideDirectory(TEXT("Config"));
+	const FString LinkedProject = Scratch / TEXT("LinkedProject");
+	const FString LinkInProjectConfig = FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir())
+		/ (TEXT("AssetDocumentScope_") + FGuid::NewGuid().ToString(EGuidFormats::Digits));
+	ON_SCOPE_EXIT
+	{
+		RemoveDirectoryLink(LinkedProject / TEXT("Config"));
+		RemoveDirectoryLink(LinkInProjectConfig);
+		IFileManager::Get().DeleteDirectory(*Scratch, false, true);
+		IFileManager::Get().DeleteDirectory(*Outside, false, true);
+	};
+	TestTrue(TEXT("an outside config file"), FFileHelper::SaveStringToFile(TEXT("[Section]\n"), *(Outside / TEXT("DefaultEngine.ini"))));
+
+	// An ordinary project: its Config/ files are written.
+	const FString Project = Scratch / TEXT("Project");
+	TestTrue(TEXT("a project config file"), FFileHelper::SaveStringToFile(TEXT("[Section]\n"), *(Project / TEXT("Config/DefaultEngine.ini"))));
+	FString Relative;
+	TestTrue(TEXT("a file in an ordinary Config/"), IsConfigFileInProject(Project, Project / TEXT("Config"),
+		Project / TEXT("Config/DefaultEngine.ini"), &Relative));
+	TestEqual(TEXT("its project-relative path"), Relative, FString(TEXT("Config/DefaultEngine.ini")));
+
+	// A project whose Config/ links out of it: its files are not the project's.
+	if (TestTrue(TEXT("a linked Config/"), MakeDirectoryLink(LinkedProject / TEXT("Config"), Outside)))
+	{
+		TestFalse(TEXT("a Config/ that links out of the project is refused"), IsConfigFileInProject(LinkedProject,
+			LinkedProject / TEXT("Config"), LinkedProject / TEXT("Config/DefaultEngine.ini")));
+	}
+	// A folder in this project's Config/ that links out of it.
+	if (TestTrue(TEXT("a linked folder in Config/"), MakeDirectoryLink(LinkInProjectConfig, Outside)))
+	{
+		TestFalse(TEXT("a config file through a link out of the project is refused"),
+			IsProjectConfigFile(LinkInProjectConfig / TEXT("DefaultEngine.ini")));
+	}
+	TestTrue(TEXT("this project's DefaultEngine.ini is still written"),
+		IsProjectConfigFile(AssetDocumentSettingsTests::ProjectConfigFile(TEXT("DefaultEngine.ini"))));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentSettingsDryRunTest, "UEAssetDoc.Settings.DryRun",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FAssetDocumentSettingsDryRunTest::RunTest(const FString& Parameters)
@@ -527,6 +586,177 @@ bool FAssetDocumentSettingsDryRunTest::RunTest(const FString& Parameters)
 	FFileHelper::LoadFileToString(IniAfter, *IniFile);
 	TestEqual(TEXT("the file is untouched"), IniAfter, IniBefore);
 	TestEqual(TEXT("the GameMode is unchanged"), UGameMapsSettings::GetGlobalDefaultGameMode(), ModeBefore);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentSettingsPluginProtectedTest, "UEAssetDoc.Settings.Project.PluginSettingsProtected",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentSettingsPluginProtectedTest::RunTest(const FString& Parameters)
+{
+	using namespace AssetDocumentSettingsTests;
+	UAssetDocumentSettings* PluginSettings = UAssetDocumentSettings::Get();
+	if (!TestNotNull(TEXT("the plugin settings"), PluginSettings))
+	{
+		return false;
+	}
+	// The user switched execute_python and delete_assets off and the auth token on (in memory only; restored below).
+	const bool bExecuteBefore = PluginSettings->bEnableExecutePython;
+	const bool bDeleteBefore = PluginSettings->bEnableDeleteAssets;
+	const bool bTokenBefore = PluginSettings->bRequireAuthToken;
+	const int32 PortBefore = PluginSettings->HttpServerPort;
+	const bool bRemoteBefore = PluginSettings->bAllowRemoteConnections;
+	const bool bLogBefore = PluginSettings->bLogHttpRequests;
+	PluginSettings->bEnableExecutePython = false;
+	PluginSettings->bEnableDeleteAssets = false;
+	PluginSettings->bRequireAuthToken = true;
+	const FString IniFile = FPaths::ConvertRelativePathToFull(PluginSettings->GetDefaultConfigFilename());
+	const bool bIniExisted = FPaths::FileExists(IniFile);
+	FString IniBefore;
+	FFileHelper::LoadFileToString(IniBefore, *IniFile);
+
+	const TCHAR* const Sections[] = {TEXT("/Script/AssetDocumentServer.AssetDocumentSettings"), TEXT("Plugins/UE-AssetDoc"), TEXT("UE-AssetDoc"),
+		TEXT("AssetDocumentSettings")};
+	const TCHAR* const Writes[] = {TEXT(R"({"bEnableExecutePython": true})"), TEXT(R"({"bEnableDeleteAssets": true})"),
+		TEXT(R"({"bRequireAuthToken": false})"), TEXT(R"({"HttpServerPort": 8600, "bAllowRemoteConnections": true, "bLogHttpRequests": true})")};
+	for (const TCHAR* Section : Sections)
+	{
+		for (const TCHAR* Write : Writes)
+		{
+			for (const TCHAR* DryRun : {TEXT("false"), TEXT("true")})
+			{
+				const FString Stage = FString::Printf(TEXT("write %s %s (dry_run %s)"), Section, Write, DryRun);
+				const FLevelToolResult Result = Settings(*this, FString::Printf(TEXT(R"({"action": "write", "section": "%s", "dry_run": %s, "properties": %s})"),
+					Section, DryRun, Write), *Stage);
+				TestFalse(*FString::Printf(TEXT("%s is refused"), *Stage), Result.bSuccess);
+				TestTrue(*FString::Printf(TEXT("%s: Settings.Protected"), *Stage), HasCode(Result, TEXT("Settings.Protected"), TEXT("/section")));
+				const FAssetDocumentDiagnostic* Protected = FindCode(Result, TEXT("Settings.Protected"));
+				TestTrue(TEXT("the refusal says where the user changes it"), Protected != nullptr
+					&& Protected->Message.Contains(TEXT("Project Settings > Plugins > UE-AssetDoc")));
+			}
+		}
+		const FLevelToolResult Read = Settings(*this, FString::Printf(TEXT(R"({"section": "%s"})"), Section), *FString::Printf(TEXT("read %s"), Section));
+		TestTrue(*FString::Printf(TEXT("read %s: Settings.Protected"), Section), HasCode(Read, TEXT("Settings.Protected"), TEXT("/section")));
+	}
+	TestFalse(TEXT("execute_python stays off"), PluginSettings->bEnableExecutePython);
+	TestFalse(TEXT("delete_assets stays off"), PluginSettings->bEnableDeleteAssets);
+	TestTrue(TEXT("the auth token stays required"), PluginSettings->bRequireAuthToken);
+	TestEqual(TEXT("the port is unchanged"), PluginSettings->HttpServerPort, PortBefore);
+	TestEqual(TEXT("remote connections are unchanged"), PluginSettings->bAllowRemoteConnections, bRemoteBefore);
+	TestEqual(TEXT("request logging is unchanged"), PluginSettings->bLogHttpRequests, bLogBefore);
+	FString IniAfter;
+	FFileHelper::LoadFileToString(IniAfter, *IniFile);
+	TestEqual(TEXT("the config file still exists or is still absent"), FPaths::FileExists(IniFile), bIniExisted);
+	TestEqual(TEXT("the config file is unchanged"), IniAfter, IniBefore);
+
+	// Listed, but neither writable nor readable.
+	bool bListed = false;
+	const FLevelToolResult Listed = Settings(*this, TEXT(R"({"action": "list"})"), TEXT("list"));
+	const TArray<TSharedPtr<FJsonValue>>* Listing = nullptr;
+	if (Listed.Payload.IsValid() && Listed.Payload->TryGetArrayField(TEXT("sections"), Listing))
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *Listing)
+		{
+			const TSharedPtr<FJsonObject> Entry = Value->AsObject();
+			FString Class;
+			if (Entry.IsValid() && Entry->TryGetStringField(TEXT("class"), Class) && Class == TEXT("/Script/AssetDocumentServer.AssetDocumentSettings"))
+			{
+				bListed = true;
+				bool bWritable = true;
+				bool bProtected = false;
+				TestTrue(TEXT("listed as not writable"), Entry->TryGetBoolField(TEXT("writable"), bWritable) && !bWritable);
+				TestTrue(TEXT("listed as protected"), Entry->TryGetBoolField(TEXT("protected"), bProtected) && bProtected);
+			}
+		}
+	}
+	TestTrue(TEXT("the plugin's section is listed"), bListed);
+
+	// An engine section is still written as before (dry run: the file is not touched).
+	const FLevelToolResult Engine = Settings(*this, TEXT(R"({"action": "write", "section": "Maps & Modes", "dry_run": true,
+		"properties": {"bUseSplitscreen": false}})"), TEXT("engine section"));
+	TestTrue(TEXT("an engine section is still writable"), Engine.bSuccess);
+
+	PluginSettings->bEnableExecutePython = bExecuteBefore;
+	PluginSettings->bEnableDeleteAssets = bDeleteBefore;
+	PluginSettings->bRequireAuthToken = bTokenBefore;
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentSettingsExecutionProtectedTest, "UEAssetDoc.Settings.Project.ExecutionSettingsProtected",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentSettingsExecutionProtectedTest::RunTest(const FString& Parameters)
+{
+	using namespace AssetDocumentSettingsTests;
+	const TCHAR* const ClassPath = TEXT("/Script/PythonScriptPlugin.PythonScriptPluginSettings");
+	UClass* PythonClass = FindObject<UClass>(nullptr, ClassPath);
+	if (!TestNotNull(TEXT("the Python plugin's settings class is loaded"), PythonClass))
+	{
+		return false;
+	}
+	UObject* PythonSettings = PythonClass->GetDefaultObject();
+	const auto ValueText = [PythonSettings](const TCHAR* Name)
+	{
+		FString Text;
+		if (const FProperty* Property = PythonSettings->GetClass()->FindPropertyByName(Name))
+		{
+			Property->ExportText_InContainer(0, Text, PythonSettings, PythonSettings, PythonSettings, PPF_None);
+		}
+		return Text;
+	};
+	const FString ScriptsBefore = ValueText(TEXT("StartupScripts"));
+	const FString RemoteBefore = ValueText(TEXT("bRemoteExecution"));
+	const FString PathsBefore = ValueText(TEXT("AdditionalPaths"));
+	const FString IniFile = FPaths::ConvertRelativePathToFull(PythonSettings->GetDefaultConfigFilename());
+	const bool bIniExisted = FPaths::FileExists(IniFile);
+	FString IniBefore;
+	FFileHelper::LoadFileToString(IniBefore, *IniFile);
+
+	const TCHAR* const Writes[] = {TEXT(R"json({"StartupScripts": ["print('startup')"]})json"), TEXT(R"json({"bRemoteExecution": true})json"),
+		TEXT(R"json({"AdditionalPaths": [{"Path": "Scripts"}]})json")};
+	for (const TCHAR* Write : Writes)
+	{
+		for (const TCHAR* DryRun : {TEXT("false"), TEXT("true")})
+		{
+			const FString Stage = FString::Printf(TEXT("write %s (dry_run %s)"), Write, DryRun);
+			const FLevelToolResult Result = Settings(*this, FString::Printf(TEXT(R"({"action": "write", "section": "%s", "dry_run": %s, "properties": %s})"),
+				ClassPath, DryRun, Write), *Stage);
+			TestFalse(*FString::Printf(TEXT("%s is refused"), *Stage), Result.bSuccess);
+			TestTrue(*FString::Printf(TEXT("%s: Settings.Protected"), *Stage), HasCode(Result, TEXT("Settings.Protected"), TEXT("/section")));
+			const FAssetDocumentDiagnostic* Protected = FindCode(Result, TEXT("Settings.Protected"));
+			TestTrue(TEXT("the refusal says why"), Protected != nullptr && Protected->Message.Contains(TEXT("Python")));
+		}
+	}
+	TestEqual(TEXT("StartupScripts is unchanged"), ValueText(TEXT("StartupScripts")), ScriptsBefore);
+	TestEqual(TEXT("bRemoteExecution is unchanged"), ValueText(TEXT("bRemoteExecution")), RemoteBefore);
+	TestEqual(TEXT("AdditionalPaths is unchanged"), ValueText(TEXT("AdditionalPaths")), PathsBefore);
+	FString IniAfter;
+	FFileHelper::LoadFileToString(IniAfter, *IniFile);
+	TestEqual(TEXT("the config file still exists or is still absent"), FPaths::FileExists(IniFile), bIniExisted);
+	TestEqual(TEXT("the config file is unchanged"), IniAfter, IniBefore);
+
+	// Reading stays allowed, and the listing marks the section protected.
+	const FLevelToolResult Read = Settings(*this, FString::Printf(TEXT(R"({"section": "%s", "properties": ["bRemoteExecution"]})"), ClassPath),
+		TEXT("read"));
+	TestTrue(TEXT("the section is readable"), Read.bSuccess && PropertyValue(Read, TEXT("bRemoteExecution")).IsValid());
+	bool bListed = false;
+	const FLevelToolResult Listed = Settings(*this, TEXT(R"({"action": "list"})"), TEXT("list"));
+	const TArray<TSharedPtr<FJsonValue>>* Listing = nullptr;
+	if (Listed.Payload.IsValid() && Listed.Payload->TryGetArrayField(TEXT("sections"), Listing))
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *Listing)
+		{
+			const TSharedPtr<FJsonObject> Entry = Value->AsObject();
+			FString Class;
+			if (Entry.IsValid() && Entry->TryGetStringField(TEXT("class"), Class) && Class == ClassPath)
+			{
+				bListed = true;
+				bool bWritable = true;
+				bool bProtected = false;
+				TestTrue(TEXT("listed as not writable"), Entry->TryGetBoolField(TEXT("writable"), bWritable) && !bWritable);
+				TestTrue(TEXT("listed as protected"), Entry->TryGetBoolField(TEXT("protected"), bProtected) && bProtected);
+			}
+		}
+	}
+	TestTrue(TEXT("the Python section is listed"), bListed);
 	return true;
 }
 

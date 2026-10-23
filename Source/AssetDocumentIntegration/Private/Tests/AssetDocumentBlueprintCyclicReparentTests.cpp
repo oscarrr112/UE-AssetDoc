@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // KI-1 on the production path: reparenting both sides of a Blueprint cycle. The fixture is a component cycle: a component
 // Blueprint BPC_X whose function casts its owner to the Actor Blueprint BP_A and reads BP_A.Comp, and BP_A, which holds

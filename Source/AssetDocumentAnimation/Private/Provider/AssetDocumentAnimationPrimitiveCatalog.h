@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -9,7 +10,7 @@ enum class EAssetDocumentAnimationDecisionDisposition : uint8
 {
 	Admitted = 0,
 	OrdinaryStableBlocker = 1,
-	FrozenG1StableBlocker = 2,
+	FrozenStableBlocker = 2,
 };
 
 struct FAssetDocumentAnimationDecision
@@ -19,7 +20,7 @@ struct FAssetDocumentAnimationDecision
 	EAssetDocumentAnimationDecisionDisposition Disposition =
 		EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker;
 	FString ConsumerId;
-	FString AuthorityGateId;
+	FString AuthorityGroupId;
 	FString StableBlockerDiagnostic;
 };
 

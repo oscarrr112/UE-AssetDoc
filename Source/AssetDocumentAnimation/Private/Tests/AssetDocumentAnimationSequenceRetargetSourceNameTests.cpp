@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Provider/Sequence/AssetDocumentAnimationSequenceRetargetSourceName.h"
 #include "Provider/AssetDocumentAnimationProviderCommon.h"
@@ -203,7 +204,7 @@ bool FAssetDocumentSequenceRetargetSourceNameContractTest::RunTest(const FString
   {
    ++Rows; TestEqual(TEXT("legacy v1 remains an ordinary stable blocker"), Row.Disposition, EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker);
    TestEqual(TEXT("legacy blocker diagnostic is unchanged"), Row.StableBlockerDiagnostic,
-    FString(FString(Blocked).Contains(TEXT("retarget_source_asset")) ? TEXT("AD.PANIM.BLOCK.RETARGET_SOURCE_AUTHORITY") : TEXT("AD.PANIM.BLOCK.SEQUENCE_COMPLETION_AUTHORITY")));
+    FString(FString(Blocked).Contains(TEXT("retarget_source_asset")) ? TEXT("AD.ANIMATION.BLOCK.RETARGET_SOURCE_AUTHORITY") : TEXT("AD.ANIMATION.BLOCK.SEQUENCE_COMPLETION_AUTHORITY")));
   }
   TestEqual(TEXT("exactly one legacy blocker row"), Rows, 1);
   for (const auto& Row : Descriptors) TestFalse(TEXT("legacy v1 has no callable descriptor"), Row.PrimitiveId == Blocked && Row.Version == 1);

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -22,6 +23,30 @@ public:
 
 	/** Get the singleton settings instance */
 	static UAssetDocumentSettings* Get();
+
+	/**
+	 * These settings decide what AI clients may do (port, remote connections, auth token, execute_python,
+	 * delete_assets), so no tool of the plugin reads or changes them: only the user does, in Project Settings.
+	 * True for this class (or a subclass), its default object and any instance of it.
+	 */
+	static bool IsProtectedSettingsObject(const UObject* Object);
+
+	/**
+	 * Why no tool of the plugin writes Object, or empty. Object is a class, its default object or an instance (subclasses
+	 * included) of a protected settings class: these settings, or one of a short list of engine settings that make the
+	 * editor run code or open a channel that runs it (Python startup scripts and remote execution, the Remote Control
+	 * web server, command lines that render jobs run). Reading the engine ones stays allowed.
+	 */
+	static FString WhyWriteProtected(const UObject* Object);
+
+	/** True when Text names a protected settings class or its default object (a console command or a value that names it). */
+	static bool NamesProtectedSettings(const FString& Text);
+
+	/** The refusal for a Text that names a protected settings class (see NamesProtectedSettings), or empty. */
+	static FString WhyNamesProtectedSettings(const FString& Text);
+
+	/** Where the user changes these settings, for refusals: "... change it in Project Settings > Plugins > UE-AssetDoc." */
+	static FString DescribeProtectedSettings();
 
 	//~ UDeveloperSettings interface
 	virtual FName GetContainerName() const override { return FName("Project"); }

@@ -1,4 +1,7 @@
-import type { EditorTarget } from "./discovery.js";
+// Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
+
+import { sameProjectDirectory, type EditorTarget } from "./discovery.js";
 
 export type JsonRpcId = string | number;
 export type JsonRpcMessage = {
@@ -12,6 +15,9 @@ export type JsonRpcMessage = {
 
 // The editor could not be reached (not running, wrong port): the message says where the bridge looked.
 export class EditorUnreachableError extends Error {}
+
+// The editor reached is not the named project's: the bridge forwards nothing to it.
+export class EditorIdentityError extends EditorUnreachableError {}
 
 // The editor answered with an HTTP refusal that is not a JSON-RPC message (security checks: Host, Origin, token).
 export class EditorRefusedError extends Error {
@@ -27,6 +33,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+// The system error code (ECONNREFUSED, ECONNRESET, ...) behind a fetch failure, when there is one.
+function connectionErrorCode(error: unknown): string | undefined {
+  const cause = isRecord(error) && isRecord(error.cause) ? error.cause : undefined;
+  return cause && typeof cause.code === "string" ? cause.code : undefined;
+}
+
 /**
  * The error of a request that never reached the editor (connection refused, reset, DNS...). It names the port the
  * editor's UEAssetDoc HTTP server should listen on, where the bridge got the address and what to do.
@@ -39,15 +51,33 @@ export function describeConnectionFailure(url: string, error: unknown, source?: 
   } catch {
     port = "(unknown)";
   }
-  const cause = isRecord(error) && isRecord(error.cause) ? error.cause : undefined;
-  const code = cause && typeof cause.code === "string" ? cause.code : undefined;
-  const reason = [error instanceof Error ? error.message : String(error), code].filter(Boolean).join(": ");
+  const reason = [error instanceof Error ? error.message : String(error), connectionErrorCode(error)].filter(Boolean).join(": ");
   return (
     `The Unreal Editor's UEAssetDoc HTTP server is not listening on port ${port} (${url}: ${reason}). ` +
     "Check that the editor is running and look in its log (LogAssetDocumentServer: a port that cannot be bound is reported " +
     "there and as an editor notification), or restart the editor. The bridge finds the editor through UE_API_BASE, " +
     `UE_PROJECT or the project's Saved/UEAssetDoc/service.json${source ? ` (this time: ${source})` : ""}.`
   );
+}
+
+// The projectDir of a health_check result (a text block holding the editor's health JSON).
+function projectDirOf(result: unknown): string | undefined {
+  if (!isRecord(result) || result.isError === true || !Array.isArray(result.content)) {
+    return undefined;
+  }
+  for (const block of result.content) {
+    if (isRecord(block) && block.type === "text" && typeof block.text === "string") {
+      try {
+        const health: unknown = JSON.parse(block.text);
+        if (isRecord(health) && typeof health.projectDir === "string" && health.projectDir.length > 0) {
+          return health.projectDir;
+        }
+      } catch {
+        // Not the health JSON.
+      }
+    }
+  }
+  return undefined;
 }
 
 function parseEventStream(text: string): JsonRpcMessage[] {
@@ -70,13 +100,16 @@ type PostResult = { status: number; message?: JsonRpcMessage; sessionId?: string
 
 /**
  * One MCP session with the editor's /mcp endpoint, opened on first use with the client's initialize parameters and
- * opened again when the editor no longer knows it (the editor restarted) or the target changed.
+ * opened again when the editor no longer knows it (the editor restarted) or the target changed. Requests and
+ * notifications are forwarded only once the session is ready: opened and, for a known project, the editor checked to
+ * serve it. Any failure on the way leaves no session behind, so the next request starts over.
  */
 export class EditorConnection {
   private target?: EditorTarget;
   private sessionId?: string;
   private protocolVersion?: string;
   private opening?: Promise<void>;
+  private ready = false;
   private nextId = 1;
 
   constructor(
@@ -93,7 +126,12 @@ export class EditorConnection {
     let result: PostResult = { status: 0 };
     for (let attempt = 0; attempt < 2; attempt++) {
       await this.open();
-      result = await this.post(message);
+      try {
+        result = await this.post(message);
+      } catch (error) {
+        this.reset();
+        throw error;
+      }
       if (!this.isSessionLost(result) && result.status !== 401) {
         break;
       }
@@ -106,10 +144,10 @@ export class EditorConnection {
     throw new EditorRefusedError(result.status, result.refusal ?? `the editor answered HTTP ${result.status} without a JSON-RPC message`);
   }
 
-  /** Forwards a notification when a session is open. */
+  /** Forwards a notification when the session is ready. */
   async notify(message: JsonRpcMessage): Promise<void> {
-    if (this.sessionId) {
-      await this.post(message).catch(() => undefined);
+    if (this.ready) {
+      await this.post(message).catch(() => this.reset());
     }
   }
 
@@ -127,6 +165,7 @@ export class EditorConnection {
   }
 
   private reset(): void {
+    this.ready = false;
     this.target = undefined;
     this.sessionId = undefined;
     this.protocolVersion = undefined;
@@ -138,7 +177,8 @@ export class EditorConnection {
   }
 
   private open(): Promise<void> {
-    if (this.sessionId) {
+    // While the session is being opened (and the editor checked), requests wait for that to finish.
+    if (this.ready) {
       return Promise.resolve();
     }
     this.opening ??= this.initialize().finally(() => {
@@ -148,7 +188,26 @@ export class EditorConnection {
   }
 
   private async initialize(): Promise<void> {
+    try {
+      await this.openSession();
+      this.ready = true;
+    } catch (error) {
+      // Whatever failed (a refusal, a mismatch, a connection cut while reading an answer), no session stays usable.
+      await this.close();
+      this.reset();
+      throw error instanceof EditorUnreachableError || error instanceof EditorRefusedError
+        ? error
+        : new EditorUnreachableError(`Opening the session with the editor failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async openSession(): Promise<void> {
     this.target = this.resolveTarget();
+    if (this.target.unavailable) {
+      const reason = this.target.unavailable;
+      this.reset();
+      throw new EditorUnreachableError(reason);
+    }
     const result = await this.post({ jsonrpc: "2.0", id: `bridge-${this.nextId++}`, method: "initialize", params: this.initializeParams() });
     if (!result.message || result.message.error || !result.sessionId) {
       const reason = result.message?.error?.message ?? result.refusal ?? `HTTP ${result.status}`;
@@ -159,6 +218,29 @@ export class EditorConnection {
     const negotiated = isRecord(result.message.result) ? result.message.result.protocolVersion : undefined;
     this.protocolVersion = typeof negotiated === "string" ? negotiated : undefined;
     await this.post({ jsonrpc: "2.0", method: "notifications/initialized" });
+    if (this.target?.project) {
+      await this.verifyProject(this.target);
+    }
+  }
+
+  /** Confirms through health_check that the editor serves the expected project; otherwise ends the session and refuses. */
+  private async verifyProject(target: EditorTarget): Promise<void> {
+    const expected = target.project!;
+    const result = await this.post({ jsonrpc: "2.0", id: `bridge-${this.nextId++}`, method: "tools/call", params: { name: "health_check", arguments: {} } });
+    const reported = projectDirOf(result.message?.result);
+    if (reported !== undefined && sameProjectDirectory(expected, reported)) {
+      return;
+    }
+    await this.close();
+    const answer =
+      reported !== undefined
+        ? `serves the project ${reported}`
+        : `did not say which project it serves (health_check: ${result.message?.error?.message ?? result.refusal ?? `HTTP ${result.status}`})`;
+    throw new EditorIdentityError(
+      `The editor at ${target.mcpUrl} (found through ${target.source}) ${answer}, not the project ${expected}. The bridge ` +
+        "forwards no request to it. Start the editor of that project, or correct UE_PROJECT or UE_API_BASE; when several " +
+        "editors run, give each project its own port.",
+    );
   }
 
   private async post(message: JsonRpcMessage): Promise<PostResult> {
@@ -181,13 +263,20 @@ export class EditorConnection {
     try {
       response = await fetch(target.mcpUrl, { method: "POST", headers, body: JSON.stringify(message) });
     } catch (error) {
-      const text = describeConnectionFailure(target.mcpUrl, error, target.source);
-      this.reset();
-      throw new EditorUnreachableError(text);
+      throw new EditorUnreachableError(describeConnectionFailure(target.mcpUrl, error, target.source));
     }
 
     const sessionId = response.headers.get("mcp-session-id") ?? undefined;
-    const body = await response.text();
+    let body: string;
+    try {
+      body = await response.text();
+    } catch (error) {
+      const reason = [error instanceof Error ? error.message : String(error), connectionErrorCode(error)].filter(Boolean).join(": ");
+      throw new EditorUnreachableError(
+        `The connection to the editor at ${target.mcpUrl} was cut while it answered (${reason}). The request may or may not ` +
+          "have run: check its effect (health_check, then the asset or level it changes) before sending it again.",
+      );
+    }
     if (response.status === 202 || body.length === 0) {
       return { status: response.status, sessionId };
     }

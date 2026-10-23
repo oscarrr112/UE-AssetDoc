@@ -1,7 +1,8 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Provider "fx": descriptors, bindings and the paged read handler. fx.niagara.read.v1 reads (N1);
-// fx.niagara.edit.v1 and fx.niagara.compile.v1 author systems at system level (N2: emitters, emitter
+// Provider "fx": descriptors, bindings and the paged read handler. fx.niagara.read.v1 reads;
+// fx.niagara.edit.v1 and fx.niagara.compile.v1 author systems at system level (emitters, emitter
 // properties, renderers, user parameters; AssetDocumentNiagaraEdit.cpp, AssetDocumentNiagaraCompile.cpp).
 
 #include "AssetDocumentNiagaraPrimitives.h"

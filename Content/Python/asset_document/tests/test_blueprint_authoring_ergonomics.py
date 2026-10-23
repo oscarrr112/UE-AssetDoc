@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Blueprint authoring ergonomics: pin spellings, short keys, the graph check and its diagnostics."""
 import unittest
 

@@ -1,3 +1,6 @@
+// Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
+
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -57,6 +60,10 @@ class StubEditor {
   readonly requests: Recorded[] = [];
   readonly sessions = new Set<string>();
   hook?: Hook;
+  // The project directory its health_check reports, as the editor's does (absolute, with a trailing slash).
+  projectDir?: string;
+  // How long its health_check takes to answer.
+  healthDelayMs = 0;
   private issued = 0;
   private constructor(
     private readonly server: Server,
@@ -88,6 +95,11 @@ class StubEditor {
   /** The recorded JSON-RPC requests (not notifications) of one method. */
   withMethod(method: string): Recorded[] {
     return this.requests.filter((request) => request.method === "POST" && request.body?.method === method);
+  }
+
+  /** The recorded tools/call requests of one tool. */
+  callsOf(tool: string): Recorded[] {
+    return this.withMethod("tools/call").filter((request) => request.body?.params?.name === tool);
   }
 
   private handle(request: IncomingMessage, response: ServerResponse): void {
@@ -148,6 +160,10 @@ class StubEditor {
     }
     if (body.method === "tools/list") {
       sendJson(response, 200, { jsonrpc: "2.0", id: body.id, result: { tools: STUB_TOOLS } });
+    } else if (body.method === "tools/call" && body.params.name === "health_check") {
+      const health = { status: "ok", service: "UEAssetDoc", port: this.port, ...(this.projectDir === undefined ? {} : { projectDir: this.projectDir }) };
+      const answer = { jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: JSON.stringify(health) }] } };
+      setTimeout(() => sendJson(response, 200, answer), this.healthDelayMs);
     } else if (body.method === "tools/call") {
       const text = JSON.stringify({ name: body.params.name, arguments: body.params.arguments });
       sendJson(response, 200, { jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text }] } });
@@ -297,13 +313,14 @@ test("the token of UE_ASSETDOC_TOKEN arrives as a bearer token on every request"
 test("UE_PROJECT's discovery file names the editor's port and token", async () => {
   await withStub(async (stub) => {
     const project = emptyDirectory();
+    stub.projectDir = `${project}/`;
     mkdirSync(join(project, "Saved", "UEAssetDoc"), { recursive: true });
     writeFileSync(join(project, "Saved", "UEAssetDoc", "service.json"), JSON.stringify({ port: stub.port, authToken: "from-file" }));
     await withClient({ UE_PROJECT: project }, async (client) => {
       const result = await client.callTool({ name: "stub_echo", arguments: { text: "found" } });
       assert.notEqual(result.isError, true);
     });
-    assert.equal(stub.withMethod("tools/call")[0].headers.authorization, "Bearer from-file");
+    assert.equal(stub.callsOf("stub_echo")[0].headers.authorization, "Bearer from-file");
   });
 });
 
@@ -483,13 +500,14 @@ test("after the editor restarted on another port, the bridge finds it again thro
   await withStub(async (first) => {
     await withStub(async (second) => {
       const project = emptyDirectory();
+      first.projectDir = second.projectDir = `${project}/`;
       mkdirSync(join(project, "Saved", "UEAssetDoc"), { recursive: true });
       const serviceFile = join(project, "Saved", "UEAssetDoc", "service.json");
       writeFileSync(serviceFile, JSON.stringify({ port: first.port }));
       await withClient({ UE_PROJECT: project }, async (client) => {
         const before = await client.callTool({ name: "stub_echo", arguments: { text: "one" } });
         assert.notEqual(before.isError, true);
-        assert.equal(first.withMethod("tools/call").length, 1);
+        assert.equal(first.callsOf("stub_echo").length, 1);
 
         // The first editor is gone: it no longer knows the session and the discovery file names the new one.
         first.sessions.clear();
@@ -499,8 +517,138 @@ test("after the editor restarted on another port, the bridge finds it again thro
         assert.deepEqual(JSON.parse(textOf(after)).arguments, { text: "two" });
       });
       assert.equal(second.withMethod("initialize").length, 1);
-      assert.equal(second.withMethod("tools/call").length, 1);
+      assert.equal(second.callsOf("stub_echo").length, 1);
     });
+  });
+});
+
+/** A project directory whose discovery file names the stub editor's port, with the token when given. */
+function projectServedBy(stub: StubEditor, authToken?: string): string {
+  const project = emptyDirectory();
+  mkdirSync(join(project, "Saved", "UEAssetDoc"), { recursive: true });
+  writeFileSync(join(project, "Saved", "UEAssetDoc", "service.json"), JSON.stringify({ port: stub.port, ...(authToken ? { authToken } : {}) }));
+  return project;
+}
+
+test("a named project whose editor is not running reaches no editor: every call says so", async () => {
+  await withStub(async (stub) => {
+    const project = emptyDirectory();
+    const serviceFile = join(project, "Saved", "UEAssetDoc", "service.json");
+    await withClient({ UE_PROJECT: project }, async (client) => {
+      const { tools } = await client.listTools();
+      assert.deepEqual(tools, listedTools(manifest), "the tools are still listed from the manifest");
+      for (const name of ["find_assets", "stub_echo"]) {
+        const result = await client.callTool({ name, arguments: {} });
+        assert.equal(result.isError, true, name);
+        const text = textOf(result);
+        assert.match(text, /is not running/, text);
+        assert.ok(text.includes(project), "it names the project");
+        assert.ok(text.includes(serviceFile), "it names the missing discovery file");
+        assert.ok(!/port 8559/.test(text), "it tried no default port");
+      }
+      // The editor starts later: the next call finds it.
+      stub.projectDir = `${project}/`;
+      mkdirSync(join(project, "Saved", "UEAssetDoc"), { recursive: true });
+      writeFileSync(serviceFile, JSON.stringify({ port: stub.port }));
+      const later = await client.callTool({ name: "stub_echo", arguments: { text: "up" } });
+      assert.notEqual(later.isError, true, textOf(later));
+    });
+    assert.equal(stub.callsOf("stub_echo").length, 1);
+  });
+});
+
+test("an editor serving another project is refused before any request is forwarded to it", async () => {
+  await withStub(async (stub) => {
+    const project = projectServedBy(stub, "from-file");
+    const other = emptyDirectory();
+    stub.projectDir = `${other}/`;
+    await withClient({ UE_PROJECT: project }, async (client) => {
+      const result = await client.callTool({ name: "stub_echo", arguments: { text: "must not arrive" } });
+      assert.equal(result.isError, true);
+      const text = textOf(result);
+      assert.ok(text.includes(project), "it names the project asked for");
+      assert.ok(text.includes(other), "it names the project the editor serves");
+      assert.ok(text.includes(String(stub.port)), "it names the editor's address");
+      assert.equal((await client.callTool({ name: "stub_other", arguments: {} })).isError, true, "every call is refused");
+      // A call that arrives while the bridge is still checking the editor (the session is open) waits for the check.
+      stub.healthDelayMs = 300;
+      const checks = stub.callsOf("health_check").length;
+      const first = client.callTool({ name: "stub_echo", arguments: { text: "first" } });
+      await waitFor(() => stub.callsOf("health_check").length > checks, "the bridge checks the editor again");
+      const during = client.callTool({ name: "stub_echo", arguments: { text: "during the check" } });
+      assert.equal((await first).isError, true);
+      assert.equal((await during).isError, true);
+    });
+    assert.equal(stub.callsOf("stub_echo").length, 0);
+    assert.equal(stub.callsOf("stub_other").length, 0);
+    assert.ok(stub.requests.some((request) => request.method === "DELETE"), "the session with the wrong editor is closed");
+  });
+});
+
+test("UE_API_BASE with UE_PROJECT: an editor serving another project is refused too", async () => {
+  await withStub(async (stub) => {
+    const project = emptyDirectory();
+    stub.projectDir = `${emptyDirectory()}/`;
+    await withClient({ UE_API_BASE: stub.baseUrl, UE_PROJECT: project }, async (client) => {
+      const result = await client.callTool({ name: "stub_echo", arguments: {} });
+      assert.equal(result.isError, true);
+      assert.ok(textOf(result).includes(project));
+    });
+    assert.equal(stub.callsOf("stub_echo").length, 0);
+    stub.projectDir = `${project}/`;
+    await withClient({ UE_API_BASE: stub.baseUrl, UE_PROJECT: project }, async (client) => {
+      assert.notEqual((await client.callTool({ name: "stub_echo", arguments: {} })).isError, true, "the right project is served");
+    });
+    assert.equal(stub.callsOf("stub_echo").length, 1);
+  });
+});
+
+test("an editor that does not say which project it serves is refused for a named project", async () => {
+  await withStub(async (stub) => {
+    const project = projectServedBy(stub);
+    await withClient({ UE_PROJECT: project }, async (client) => {
+      const result = await client.callTool({ name: "stub_echo", arguments: {} });
+      assert.equal(result.isError, true);
+      assert.match(textOf(result), /project/);
+    });
+    assert.equal(stub.callsOf("stub_echo").length, 0);
+  });
+});
+
+test("a connection that drops while the editor is checked leaves no usable session: nothing is forwarded unchecked", async () => {
+  await withStub(async (stub) => {
+    const project = projectServedBy(stub);
+    stub.projectDir = `${project}/`;
+    let drop = true;
+    stub.hook = (request, response) => {
+      if (!drop || request.body?.method !== "tools/call" || request.body?.params?.name !== "health_check") {
+        return false;
+      }
+      // The answer's headers arrive, then the connection is cut in the middle of its body.
+      response.writeHead(200, { "Content-Type": "application/json", "Content-Length": "4096" });
+      response.write('{"jsonrpc":"2.0","id":');
+      setTimeout(() => response.socket?.destroy(), 20);
+      return true;
+    };
+    await withClient({ UE_PROJECT: project }, async (client) => {
+      const outcomes: string[] = [];
+      for (const text of ["first", "second"]) {
+        try {
+          const result = await client.callTool({ name: "stub_echo", arguments: { text } });
+          outcomes.push(result.isError === true ? "tool error" : "forwarded");
+        } catch (error) {
+          outcomes.push(`JSON-RPC error: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      assert.equal(stub.callsOf("stub_echo").length, 0, `no call reached the editor without a completed check (${outcomes.join("; ")})`);
+      assert.deepEqual(outcomes, ["tool error", "tool error"], "each call answers a tool error saying the editor could not be reached");
+      assert.ok(stub.callsOf("health_check").length >= 2, "each attempt checks the editor again");
+      // The connection holds again: the next call checks the editor and goes through.
+      drop = false;
+      const later = await client.callTool({ name: "stub_echo", arguments: { text: "checked" } });
+      assert.notEqual(later.isError, true, textOf(later));
+    });
+    assert.equal(stub.callsOf("stub_echo").length, 1);
   });
 });
 
@@ -636,4 +784,24 @@ test("describeConnectionFailure names the port, the cause, where to look and wha
   assert.match(describeConnectionFailure("https://editor.example/mcp", new Error("boom")), /port 443 /);
   assert.match(describeConnectionFailure("not a url", "plain failure"), /port \(unknown\) .*plain failure/);
   assert.match(describeConnectionFailure("http://127.0.0.1:8559/mcp", new Error("boom"), "default port"), /\(this time: default port\)/);
+});
+
+test("a notification is forwarded only in a session whose editor was checked", async () => {
+  await withStub(async (stub) => {
+    const project = projectServedBy(stub);
+    stub.projectDir = `${emptyDirectory()}/`;
+    const bridge = new RawBridge({ UE_PROJECT: project });
+    try {
+      await bridge.request({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "raw", version: "1" } } });
+      bridge.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+      const refused = await bridge.request({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "stub_echo", arguments: {} } });
+      assert.equal(refused.result?.isError, true);
+      bridge.send({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 2 } });
+      assert.equal((await bridge.request({ jsonrpc: "2.0", id: 3, method: "ping" })).id, 3);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(stub.requests.filter((request) => request.body?.method === "notifications/cancelled").length, 0);
+    } finally {
+      bridge.kill();
+    }
+  });
 });

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The design's AI scenario (§5.5): "build a small lit room: floor, four walls, a
 // ceiling light, a door Blueprint and a camera looking at the door", then fit the door

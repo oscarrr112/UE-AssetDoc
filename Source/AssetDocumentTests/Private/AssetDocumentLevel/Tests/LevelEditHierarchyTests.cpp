@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // edit_level attach / detach / spawn attach_to (design §7.2 L3): the Outliner's drag onto a
 // parent (UEditorEngine::CanParentActors + ParentActors) and Detach. World transforms are

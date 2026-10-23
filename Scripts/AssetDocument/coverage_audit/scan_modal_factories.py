@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Static scan (lower bound): which admitted generic-route factories contain modal/blocking UI calls
 directly inside FactoryCreateNew / FactoryCreateFile / ConfigureProperties / PostCreate, and in which function.
 Calls made through helpers in other files are NOT found (e.g. GroomFactory -> UE::Groom::BuildGroomDataflowAsset
 -> SMessageDialog::ShowModal); those are found only by running the audit under the stall watchdog.
-Usage: scan_modal_factories.py coverage-audit.json  (prints JSON; ENGINE_DIR env overrides the engine root)"""
+Usage: scan_modal_factories.py coverage-audit.json  (prints JSON; ENGINE_DIR names the engine's Engine folder and is required)"""
 import json, os, re, subprocess, sys
-ENGINE = os.environ.get("ENGINE_DIR", "/Users/Shared/Epic Games/UE_5.7/Engine")
+ENGINE = os.environ.get("ENGINE_DIR")
+if not ENGINE or not os.path.isdir(ENGINE):
+    sys.exit("ENGINE_DIR must name the Engine folder of an Unreal Engine install "
+             "(<UE_ROOT>/Engine, the folder that holds Source and Plugins)")
 d = json.load(open(sys.argv[1]))
 fac = {f['factory'].split('.')[-1] for f in d['factories'] if f['verdict'] == 'admitted'}
 admitted = {f['factory'].split('.')[-1]: f['supported_class'] for f in d['factories'] if f['verdict'] == 'admitted'}

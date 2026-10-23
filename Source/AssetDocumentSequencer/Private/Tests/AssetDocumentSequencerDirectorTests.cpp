@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Sequencer phase S5 (design §3.6, §7.2): the Director Blueprint, event keys, director bindings, section / node groups and
+// Sequencer director (design §3.6, §7.2): the Director Blueprint, event keys, director bindings, section / node groups and
 // binding references into sub-sequences.
 // UEAssetDoc.Sequencer.Director.Twin: the editor's own director work on a duplicate of the fixture
 //   ("Open Director Blueprint", "Create Quick Binding" on a key of a binding's event track, a function endpoint created

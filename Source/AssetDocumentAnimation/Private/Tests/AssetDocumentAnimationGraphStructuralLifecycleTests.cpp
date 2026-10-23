@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -18,17 +19,17 @@ constexpr const TCHAR* AnimationProfileConsumer = TEXT("animation_profile");
 constexpr const TCHAR* AnimationProviderDesignConsumer =
 	TEXT("animation_provider_design");
 constexpr const TCHAR* RuntimeHandleBootstrapDiagnostic =
-	TEXT("AD.PANIM.BLOCK.RUNTIME_HANDLE_BOOTSTRAP");
+	TEXT("AD.ANIMATION.BLOCK.RUNTIME_HANDLE_BOOTSTRAP");
 
 struct FExpectedGraphBlocker
 {
 	const TCHAR* PrimitiveId;
 	EAssetDocumentAnimationDecisionDisposition CatalogDisposition;
 	const TCHAR* ConsumerId;
-	const TCHAR* CatalogGateId;
+	const TCHAR* CatalogGroupId;
 	const TCHAR* RowDiagnostic;
 	const TCHAR* FinalDiagnostic;
-	bool bFrozenG1;
+	bool bFrozenAuthority;
 };
 
 const TArray<FExpectedGraphBlocker>& GetExpectedGraphBlockers()
@@ -36,39 +37,39 @@ const TArray<FExpectedGraphBlocker>& GetExpectedGraphBlockers()
 	static const TArray<FExpectedGraphBlocker> Rows = {
 		{TEXT("animation.linked_anim_layer.action.enumerate.v1"),
 			EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker,
-			AnimationProfileConsumer, TEXT("T0-GRAPH"),
-			TEXT("AD.PANIM.BLOCK.LINKED_LAYER_ACTION_AUTHORITY"),
+			AnimationProfileConsumer, TEXT("ANIMATION-GRAPH"),
+			TEXT("AD.ANIMATION.BLOCK.LINKED_LAYER_ACTION_AUTHORITY"),
 			RuntimeHandleBootstrapDiagnostic, false},
 		{TEXT("animation.anim_graph.lifecycle.v1"),
 			EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker,
-			AnimationProfileConsumer, TEXT("T0-GRAPH"),
-			TEXT("AD.PANIM.BLOCK.ANIM_GRAPH_LIFECYCLE_AUTHORITY"),
+			AnimationProfileConsumer, TEXT("ANIMATION-GRAPH"),
+			TEXT("AD.ANIMATION.BLOCK.ANIM_GRAPH_LIFECYCLE_AUTHORITY"),
 			RuntimeHandleBootstrapDiagnostic, false},
 		{TEXT("animation.linked_anim_layer.edit.v1"),
 			EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker,
-			AnimationProfileConsumer, TEXT("T0-GRAPH"),
-			TEXT("AD.PANIM.BLOCK.LINKED_LAYER_EDIT_AUTHORITY"),
+			AnimationProfileConsumer, TEXT("ANIMATION-GRAPH"),
+			TEXT("AD.ANIMATION.BLOCK.LINKED_LAYER_EDIT_AUTHORITY"),
 			RuntimeHandleBootstrapDiagnostic, false},
 		{TEXT("animation.state_transition.connect.v1"),
 			EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker,
-			AnimationProfileConsumer, TEXT("T0-GRAPH"),
-			TEXT("AD.PANIM.BLOCK.STATE_TRANSITION_AUTHORITY"),
+			AnimationProfileConsumer, TEXT("ANIMATION-GRAPH"),
+			TEXT("AD.ANIMATION.BLOCK.STATE_TRANSITION_AUTHORITY"),
 			RuntimeHandleBootstrapDiagnostic, false},
 		{TEXT("animation.state_entry.connect.v1"),
 			EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker,
-			AnimationProfileConsumer, TEXT("T0-GRAPH"),
-			TEXT("AD.PANIM.BLOCK.STATE_ENTRY_AUTHORITY"),
+			AnimationProfileConsumer, TEXT("ANIMATION-GRAPH"),
+			TEXT("AD.ANIMATION.BLOCK.STATE_ENTRY_AUTHORITY"),
 			RuntimeHandleBootstrapDiagnostic, false},
 		{TEXT("animation.state_machine.node.create.v1"),
-			EAssetDocumentAnimationDecisionDisposition::FrozenG1StableBlocker,
-			AnimationProviderDesignConsumer, TEXT("G1"),
-			TEXT("AD.G1.BLOCK.ANIMATION.STATE_MACHINE_NODE_AUTHORITY"),
-			TEXT("AD.G1.BLOCK.ANIMATION.STATE_MACHINE_NODE_AUTHORITY"), true},
+			EAssetDocumentAnimationDecisionDisposition::FrozenStableBlocker,
+			AnimationProviderDesignConsumer, TEXT("FROZEN-AUTHORITY"),
+			TEXT("AD.BLOCK.ANIMATION.STATE_MACHINE_NODE_AUTHORITY"),
+			TEXT("AD.BLOCK.ANIMATION.STATE_MACHINE_NODE_AUTHORITY"), true},
 		{TEXT("animation.anim_parent_override.replace.v1"),
-			EAssetDocumentAnimationDecisionDisposition::FrozenG1StableBlocker,
-			AnimationProviderDesignConsumer, TEXT("G1"),
-			TEXT("AD.G1.BLOCK.ANIMATION.PARENT_OVERRIDE_LIFECYCLE"),
-			TEXT("AD.G1.BLOCK.ANIMATION.PARENT_OVERRIDE_LIFECYCLE"), true},
+			EAssetDocumentAnimationDecisionDisposition::FrozenStableBlocker,
+			AnimationProviderDesignConsumer, TEXT("FROZEN-AUTHORITY"),
+			TEXT("AD.BLOCK.ANIMATION.PARENT_OVERRIDE_LIFECYCLE"),
+			TEXT("AD.BLOCK.ANIMATION.PARENT_OVERRIDE_LIFECYCLE"), true},
 	};
 	return Rows;
 }
@@ -114,11 +115,11 @@ const FAssetDocumentAnimationDecision* FindCatalogDecision(FStringView Primitive
 		});
 }
 
-const FAssetDocumentAnimationT0DecisionRecord* FindT0Decision(
+const FAssetDocumentAnimationAuthorityDecisionRecord* FindAuthorityDecision(
 	FStringView PrimitiveId)
 {
-	return GetAssetDocumentAnimationT0DecisionRecords().FindByPredicate(
-		[PrimitiveId](const FAssetDocumentAnimationT0DecisionRecord& Decision)
+	return GetAssetDocumentAnimationAuthorityDecisionRecords().FindByPredicate(
+		[PrimitiveId](const FAssetDocumentAnimationAuthorityDecisionRecord& Decision)
 		{
 			return FStringView(Decision.DecisionId) == PrimitiveId;
 		});
@@ -210,7 +211,7 @@ bool FAssetDocumentAnimationGraphStructuralLifecycleTest::RunTest(const FString&
 	const TSharedRef<IAssetDocumentPrimitiveProvider> Provider =
 		CreateAssetDocumentAnimationPrimitiveProvider();
 	int32 OrdinaryCount = 0;
-	int32 FrozenG1Count = 0;
+	int32 FrozenBlockerCount = 0;
 	for (const FExpectedGraphBlocker& Expected : GetExpectedGraphBlockers())
 	{
 		const FAssetDocumentAnimationDecision* CatalogDecision =
@@ -218,12 +219,12 @@ bool FAssetDocumentAnimationGraphStructuralLifecycleTest::RunTest(const FString&
 		TestNotNull(
 			*FString::Printf(TEXT("%s has a catalog decision"), Expected.PrimitiveId),
 			CatalogDecision);
-		const FAssetDocumentAnimationT0DecisionRecord* T0Decision =
-			FindT0Decision(Expected.PrimitiveId);
+		const FAssetDocumentAnimationAuthorityDecisionRecord* AuthorityDecision =
+			FindAuthorityDecision(Expected.PrimitiveId);
 		TestNotNull(
-			*FString::Printf(TEXT("%s has T0/G1 evidence"), Expected.PrimitiveId),
-			T0Decision);
-		if (CatalogDecision == nullptr || T0Decision == nullptr)
+			*FString::Printf(TEXT("%s has authority evidence"), Expected.PrimitiveId),
+			AuthorityDecision);
+		if (CatalogDecision == nullptr || AuthorityDecision == nullptr)
 		{
 			continue;
 		}
@@ -232,39 +233,39 @@ bool FAssetDocumentAnimationGraphStructuralLifecycleTest::RunTest(const FString&
 			Expected.CatalogDisposition);
 		TestEqual(TEXT("catalog consumer is exact"), CatalogDecision->ConsumerId,
 			FString(Expected.ConsumerId));
-		TestEqual(TEXT("catalog gate is exact"), CatalogDecision->AuthorityGateId,
-			FString(Expected.CatalogGateId));
+		TestEqual(TEXT("catalog authority group is exact"), CatalogDecision->AuthorityGroupId,
+			FString(Expected.CatalogGroupId));
 		TestEqual(TEXT("catalog diagnostic is exact"),
 			CatalogDecision->StableBlockerDiagnostic,
 			FString(Expected.FinalDiagnostic));
-		TestEqual(TEXT("T0 family diagnostic is retained"),
-			FString(T0Decision->RowDiagnostic), FString(Expected.RowDiagnostic));
-		TestEqual(TEXT("T0 final diagnostic is exact"),
-			FString(T0Decision->FinalDiagnostic), FString(Expected.FinalDiagnostic));
-		TestEqual(TEXT("T0 final disposition is stable blocker"),
-			T0Decision->FinalDisposition,
+		TestEqual(TEXT("family diagnostic is retained"),
+			FString(AuthorityDecision->RowDiagnostic), FString(Expected.RowDiagnostic));
+		TestEqual(TEXT("final diagnostic is exact"),
+			FString(AuthorityDecision->FinalDiagnostic), FString(Expected.FinalDiagnostic));
+		TestEqual(TEXT("final disposition is stable blocker"),
+			AuthorityDecision->FinalDisposition,
 			EAssetDocumentAnimationFinalDisposition::StableBlocker);
 
-		if (Expected.bFrozenG1)
+		if (Expected.bFrozenAuthority)
 		{
-			++FrozenG1Count;
-			TestTrue(TEXT("frozen graph row remains G1"), T0Decision->bFrozenG1Blocker);
+			++FrozenBlockerCount;
+			TestTrue(TEXT("frozen graph row remains frozen authority"), AuthorityDecision->bFrozenBlocker);
 			TestEqual(TEXT("frozen graph row has no bootstrap dependency"),
-				T0Decision->BootstrapDependency,
+				AuthorityDecision->BootstrapDependency,
 				EAssetDocumentAnimationBootstrapDependency::None);
 			TestEqual(TEXT("frozen graph row remains bootstrap-not-applicable"),
-				T0Decision->BootstrapDisposition,
-				EAssetDocumentAnimationBootstrapDisposition::FrozenG1NotApplicable);
+				AuthorityDecision->BootstrapDisposition,
+				EAssetDocumentAnimationBootstrapDisposition::FrozenNotApplicable);
 		}
 		else
 		{
 			++OrdinaryCount;
-			TestFalse(TEXT("ordinary graph row is not G1"), T0Decision->bFrozenG1Blocker);
+			TestFalse(TEXT("ordinary graph row is not frozen authority"), AuthorityDecision->bFrozenBlocker);
 			TestEqual(TEXT("ordinary graph row needs GraphOrNode bootstrap"),
-				T0Decision->BootstrapDependency,
+				AuthorityDecision->BootstrapDependency,
 				EAssetDocumentAnimationBootstrapDependency::GraphOrNode);
 			TestEqual(TEXT("ordinary graph row remains bootstrap-blocked"),
-				T0Decision->BootstrapDisposition,
+				AuthorityDecision->BootstrapDisposition,
 				EAssetDocumentAnimationBootstrapDisposition::RuntimeHandleBootstrapBlocked);
 		}
 
@@ -272,7 +273,7 @@ bool FAssetDocumentAnimationGraphStructuralLifecycleTest::RunTest(const FString&
 		AssertProviderTerminal(*this, Expected, *Provider);
 	}
 	TestEqual(TEXT("five ordinary graph rows are frozen"), OrdinaryCount, 5);
-	TestEqual(TEXT("two frozen G1 graph rows are retained"), FrozenG1Count, 2);
+	TestEqual(TEXT("two frozen graph rows are retained"), FrozenBlockerCount, 2);
 	AssertNoGraphFallbackSource(*this);
 	return true;
 }

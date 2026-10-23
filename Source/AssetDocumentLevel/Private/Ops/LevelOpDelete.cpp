@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // delete: the Delete key (UUnrealEdEngine::DeleteActors). The reference dialogs it
 // would show are computed in preflight instead (design §3.2, decision D5): a

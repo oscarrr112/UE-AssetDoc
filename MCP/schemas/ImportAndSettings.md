@@ -2,7 +2,7 @@
 
 ## import_assets
 
-The Content Browser's Import (and drag and drop) and Reimport, without dialogs. Sources are
+The Content Browser's Import and Reimport, without dialogs. Sources are
 local files the user named, as absolute paths; no URLs or network shares.
 
 | Kind | Formats | Assets |
@@ -15,7 +15,7 @@ local files the user named, as absolute paths; no URLs or network shares.
 project's default Interchange pipelines (Project Settings > Interchange), as the import dialog
 opens them (the editor's factory where Interchange does not import the format). `name` renames the asset of one file. The result lists every created or updated
 asset (`assets[]`: `path`, `class`, `status`, and `facts`, e.g. `Bounds`,
-`PlayLength`, `Duration`, plus `Bones`, `Triangles`, `CollisionShapes`, texture `Size` / `SRGB` /
+`PlayLength`, `Duration`, `Bones`, `Triangles`, `CollisionShapes`, texture `Size` / `SRGB` /
 `Compression` and the `Source` file), the importer of each file and its warnings. Imported
 packages are saved (`save: false` leaves them dirty). Asset paths follow the pipelines (glTF imports into
 `<destination>/<scene>/<Type>` subfolders by default): use the result's paths.
@@ -32,7 +32,7 @@ packages are saved (`save: false` leaves them dirty). Asset paths follow the pip
 | `create_physics_asset`, `nanite` | skeletal physics asset; Nanite for static meshes |
 | `import_materials`, `import_textures`, `import_animations` | what else the file creates |
 | `uniform_scale` | import scale (FBX, glTF; Interchange's OBJ import ignores it) |
-| `normal_map`, `srgb`, `compression`, `flip_normal_green` | texture settings (`compression`: `Default`, `Normalmap`, `Grayscale`, `Masks`, `HDR`, ...) |
+| `normal_map`, `srgb`, `compression`, `flip_normal_green` | texture settings (`compression`: `Default`, `Normalmap`, `Masks`, `HDR`, ...) |
 
 Any other dialog setting goes in `pipeline`, by property name, nested by sub-pipeline:
 `{"pipeline": {"MeshPipeline": {"bImportLods": false}}}`. `{"action": "options", "files": [f]}`
@@ -79,20 +79,19 @@ Reading is free; `action: "write"` changes.
   writable) as the Project Settings editor does; `written_keys` are read back from the file.
   Project Settings writes are not in the Undo history.
 - `"dry_run": true` on a write checks it and returns the planned `changes` (`before` / `after`)
-  without changing anything, as `edit_level`'s dry run.
+  without changing anything.
 
 | Code | Meaning |
 | --- | --- |
 | `Settings.SectionNotFound`, `SectionAmbiguous` | close / candidate sections are listed |
-| `Settings.ConfigFileNotInProject` | the section saves to engine, plugin or per-user config: not written |
+| `Settings.ConfigFileNotInProject`, `Protected` | saved to engine, plugin or per-user config; UE-AssetDoc's own, or settings that run code (Python startup scripts): not written |
 | `Settings.ConfigFileReadOnly` | the file could not be checked out or made writable |
 | `Settings.RestartRequired` | warning: takes effect after an editor restart |
 | `Generic.UnknownProperty` | no such property in the section |
 
 ## Asset files: save_assets, reload_assets, asset_editor, export_assets
 
-The editor's File > Save, Reload, asset editor windows and Export, without dialogs; no
-`execute_python` needed. Assets are package or object paths; each is answered on its own
+The editor's File > Save, Reload, asset editor windows and Export, without dialogs. Assets are package or object paths; each is answered on its own
 (`refused[]` with `Assets.NotFound`, `Assets.SaveFailed`, ...; 207 when others succeeded). Refused during Play In Editor.
 
 - `save_assets {"assets": [...]}` saves those with unsaved changes (`clean[]` lists the others;
@@ -112,5 +111,5 @@ The editor's File > Save, Reload, asset editor windows and Export, without dialo
   refused (`Assets.EditorNeedsAudio`: the engine would crash).
 - `export_assets {"assets": [...], "folder": "Saved/Exports/Audio"}` writes
   `<folder>/<AssetName>.<format>`: `wav` for sounds, `png` for textures by default; other classes
-  pass `format` (`Assets.NoExporter` lists the offered formats). The folder must be inside the
-  project; existing files need `overwrite: true` (`Assets.FileExists`).
+  pass `format` (`Assets.NoExporter` lists formats). Folder and every file written stay in the
+  project (no `..`, no link out: `Assets.FileOutsideProject`); existing files need `overwrite: true` (`Assets.FileExists`).

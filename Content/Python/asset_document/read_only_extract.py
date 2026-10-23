@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Extract of engine and plugin content (outside /Game), which is read-only.
 
 Such an asset extracts as the same document a /Game asset of its class would give, with

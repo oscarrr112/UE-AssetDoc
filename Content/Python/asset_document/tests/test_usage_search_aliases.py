@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """find_assets `uses` normalizes action-key aliases in C++ (AssetDocumentGraphUsageScanner.cpp); its table
 mirrors asset_document.graphs.actions.ALIASES and must stay in step with it."""
 from __future__ import annotations

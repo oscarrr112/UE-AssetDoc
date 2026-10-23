@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentUMGPrimitiveProvider.h"
 #include "AssetDocumentUMGProviderTestSupport.h"
@@ -293,7 +294,7 @@ bool FAssetDocumentUMGWidgetAnimationProviderTest::RunTest(const FString& Parame
 	DeleteInvocation.PrimitiveId = TEXT("UMG-WIDGET-ANIMATION-DELETE-v1");
 	const FAssetDocumentPrimitiveOutcome DeleteOutcome = CreateAssetDocumentUMGPrimitiveProvider()->Invoke(DeleteInvocation, Handles, nullptr);
 	TestTrue(TEXT("WidgetAnimation Delete is an exact stable blocker."), DeleteOutcome.Diagnostics.ContainsByPredicate(
-		[](const FAssetDocumentRuntimeDiagnostic& Diagnostic) { return Diagnostic.Code == TEXT("AD.G1.BLOCK.UMG.ANIMATION_DELETE_EVIDENCE"); }));
+		[](const FAssetDocumentRuntimeDiagnostic& Diagnostic) { return Diagnostic.Code == TEXT("AD.BLOCK.UMG.ANIMATION_DELETE_EVIDENCE"); }));
 	for (const EAssetDocumentHandleInvalidationReason Reason : {
 		EAssetDocumentHandleInvalidationReason::PackageUnload,
 		EAssetDocumentHandleInvalidationReason::ProviderUnload})

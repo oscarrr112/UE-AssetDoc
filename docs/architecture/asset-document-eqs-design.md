@@ -1,7 +1,7 @@
 # AssetDocument EQS (Environment Query) Profile Design
 
-Status: 2026-10-09. Profile `profile.env_query.v1`, class `/Script/AIModule.EnvQuery`, route
-`env_query_profile`. Governing rules: the 2026-10-03 direction reset (editor-equivalent apply, rollback =
+Profile `profile.env_query.v1`, class `/Script/AIModule.EnvQuery`, route
+`env_query_profile`. Governing rules: the [design rules](asset-document-design-rules.md) (editor-equivalent apply, rollback =
 functional equivalence, no typed inverses), the SoundCue design (the closest graph profile) as template.
 
 ## 1. What a human edits
@@ -127,7 +127,7 @@ own Undo does the same); since keys are those names, the rebuilder captures the 
 with the snapshot (`CaptureDerivedState`) and renames them back after the restore, so a refused apply leaves
 the document, keys included, as it was. (A human Undo in the editor still renames them: the next Extract shows
 the new names.) Undo of a successful apply uses the editor's transaction
-(as SoundCue: release of the undo history at the end of ApplyFile per direction reset §3.1).
+(as SoundCue: release of the undo history at the end of ApplyFile per design rules §3.1).
 
 ## 5. Fidelity plan
 
@@ -141,7 +141,7 @@ the new names.) Undo of a successful apply uses the editor's transaction
 * Free edits on both sides (document vs the editor operations): add / remove / reorder tests, move a test to
   another option, change filter / score, switch generator, bind a query param.
 * Rollback (new error, bad property) and Undo; a BehaviorTree with a *Run EQS Query* task on the new query.
-  BehaviorTree-profile gap (found here, not fixed in this lane): a new *Run EQS Query* task (or EQS service) is
+  BehaviorTree-profile limit: a new *Run EQS Query* task (or EQS service) is
   refused with `MissingBlackboardKey` on `EQSRequest/EQSQueryBlackboardKey`, a selector the editor leaves None
   and shows disabled while the query template is used (`bUseBBKeyForQueryTemplate` is an inline toggle without
   its own row, so a document cannot switch modes either); giving a key fails the write of the disabled field,

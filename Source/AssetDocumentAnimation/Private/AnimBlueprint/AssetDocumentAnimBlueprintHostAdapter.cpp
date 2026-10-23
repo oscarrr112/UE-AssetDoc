@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UAnimBlueprint host adapter: the Blueprint host adapter plus anim layers.
 // Top-level anim graphs other than "AnimGraph" (own layers and implemented

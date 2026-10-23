@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 
 #include "AssetDocumentEditorSequenceOwnedFragmentProperties.h"
@@ -83,7 +84,7 @@ private:
 
 // Existing-child update/delete participant. Creation is a separate unresolved
 // effect-ownership edge; this operation never calls a class constructor. The
-// same existing G1 pure Prepare captures all fields before the parent's enlist.
+// same existing pure Prepare captures all fields before the parent's enlist.
 class ASSETDOCUMENTANIMATION_API FExistingReplacement final : public IAssetDocumentRollbackAction,
 	public TSharedFromThis<FExistingReplacement>
 {

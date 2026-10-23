@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Case-only renames of Blueprint members (variables, event dispatchers, own components, timelines), pure.
 
 Names are matched case-insensitively (FName), so ``ondied`` -> ``OnDied`` looks like "the same member" to

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // seq.read.v1: the authored state of a Level Sequence (design §2.1, §3) as document-ready records. The sequence is read
 // as stored (after the engine's PostLoad upgrades, design §7.1); nothing is rebuilt or written.

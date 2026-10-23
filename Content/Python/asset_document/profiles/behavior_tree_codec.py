@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Pure legacy Tree.Root semantics and public authored-readback V2 projection.
 
 The lowered records are an internal semantic value, not a native call contract.

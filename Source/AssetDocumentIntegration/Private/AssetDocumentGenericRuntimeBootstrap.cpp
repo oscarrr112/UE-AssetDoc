@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentGenericRuntimeBootstrap.h"
 #include "AssetDocumentRequiredPrimitiveProviderView.h"
@@ -93,7 +94,7 @@ FAssetDocumentPythonRevisionCandidate MakeRevisionCandidate()
 	FAssetDocumentPythonRevisionCandidate Candidate;
 	Candidate.RuntimeRevision = GenericRuntimeRevision;
 	Candidate.EntryModuleRelativePath = TEXT("asset_document/bootstrap.py");
-	Candidate.AuthorityCatalog.Append(GetG1FrozenAuthorityExceptionRecords());
+	Candidate.AuthorityCatalog.Append(GetFrozenAuthorityExceptionRecords());
 	return Candidate;
 }
 
@@ -133,7 +134,7 @@ bool HasExactActiveCatalog(
 		}
 	}
 	if (!ValidateAssetDocumentPrimitiveFreezeInput(Snapshot.Descriptors,
-		Projection.Requirements, Snapshot.Providers, GetG1FrozenAuthorityExceptionRecords()).bValid)
+		Projection.Requirements, Snapshot.Providers, GetFrozenAuthorityExceptionRecords()).bValid)
 	{
 		return false;
 	}
@@ -269,15 +270,15 @@ bool FAssetDocumentGenericRuntimeBootstrap::ActivateFrozenRevision()
 		CreateAssetDocumentDataPrimitiveProvider(),
 		// Skeleton / blend space / pose asset / anim composite editors; whole-package snapshot rollback.
 		CreateAssetDocumentAnimationAssetPrimitiveProvider(),
-		// Niagara systems / emitters / scripts / parameter collections (N1: read only).
+		// Niagara systems / emitters / scripts / parameter collections.
 		CreateAssetDocumentNiagaraPrimitiveProvider(),
-		// MetaSound Source / Patch documents (read-only in phase M0).
+		// MetaSound Source / Patch documents.
 		CreateAssetDocumentAudioPrimitiveProvider(),
 		// IK Rig / IK Retargeter documents; whole-package snapshot rollback.
 		CreateAssetDocumentRigPrimitiveProvider(),
 		// Physics Asset documents; whole-package snapshot rollback.
 		CreateAssetDocumentPhysicsPrimitiveProvider(),
-		// Level Sequence documents (read-only in phase S1).
+		// Level Sequence documents.
 		CreateAssetDocumentSequencerPrimitiveProvider()};
 	const TArray<FAssetDocumentMutationPreparationBinding> PreparationBindings{
 		{Providers[0], PrepareAssetDocumentEditorMutationBatch},
@@ -301,7 +302,7 @@ bool FAssetDocumentGenericRuntimeBootstrap::ActivateFrozenRevision()
 		(void)Registrations;
 		const FAssetDocumentRequiredPrimitiveProjectionResult Projected =
 			BuildAssetDocumentRequiredPrimitiveProjection(Providers, Declared,
-				GetG1FrozenAuthorityExceptionRecords(), PreparationBindings, InvokePrepared);
+				GetFrozenAuthorityExceptionRecords(), PreparationBindings, InvokePrepared);
 		if (!Projected.Projection.IsValid())
 		{
 			OutDiagnostics.Append(Projected.Diagnostics);

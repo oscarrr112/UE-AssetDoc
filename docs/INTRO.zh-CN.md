@@ -125,7 +125,7 @@ AI 和编辑器之间没有单独的进程。插件在编辑器内部以 `http:/
 - 它只监听回环接口，并拒绝 `Host` 不是 `localhost`、`127.0.0.1` 或 `[::1]` 的请求，以及 `Origin` 不是 localhost 页面
   的请求。
 - 发送数据的请求必须是 `application/json`；网页不经 CORS 预检就无法向其他源发送这种请求，而服务器不响应任何预检。
-- 可以要求 bearer token，也可以在 Project Settings 中关闭 `execute_python` 和 `delete_assets`。二者默认开启。
+- 可以要求 bearer token，也可以在 Project Settings 中关闭 `execute_python` 和 `delete_assets`。二者默认开启。这两个开关不是沙箱：能连上端点的客户端仍能让编辑器运行代码（例如它编写的 Blueprint 在 Play In Editor 中运行），所以安全边界是谁能连上端点。
 - 远程连接默认关闭；开启后总是要求 token。
 
 请把对这个端点的访问当作编辑器用户的一个 shell 会话来对待。[SECURITY.md](../SECURITY.md) 说明暴露了什么以及如何

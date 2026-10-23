@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // An Actor Blueprint's SCS has one scene root, and the editor attaches a new scene component that has no parent
 // to that root. A document whose scene components name no AttachTo is read the same way: the first one becomes the

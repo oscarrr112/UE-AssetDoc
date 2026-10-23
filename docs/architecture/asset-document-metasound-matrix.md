@@ -1,7 +1,7 @@
-# MetaSound support matrix and corpus results (M0–M4)
+# MetaSound support matrix and corpus results
 
-Status: 2026-10-18, M0–M4 merged; the black-box AI trial passed; **approved by the user 2026-10-18** (M4 done). Design:
-[asset-document-metasound-design.md](asset-document-metasound-design.md) (decisions in §9). Rules:
+Design:
+[asset-document-metasound-design.md](asset-document-metasound-design.md) (decisions in §8). Rules:
 [design rules](asset-document-design-rules.md) §3 (rollback = functional equivalence), §4
 (editor-equivalent code + behaviour test), §5 (support matrix). Reference editor: the MetaSound editor of UE 5.7
 (`Engine/Plugins/Runtime/Metasound`: `UMetasoundEditorGraphSchema` actions, `FEditor` commands, the Members /
@@ -9,20 +9,17 @@ Interfaces / Details panels, `FMetasoundPagesDetailCustomization`), the document
 (`FMetaSoundFrontendDocumentBuilder`) and the Content Browser (New MetaSound Source / Patch, Create Preset). The
 agent-facing description is `MCP/schemas/assetdocument/MetaSound.md`.
 
-| Class | Profile | Phase | State |
-|---|---|---|---|
-| `MetaSoundSource` | `profile.metasound_source.v1` (route `audio_profile`, provider `audio`) | M0–M3 | Extract / Inspect / Diff / Apply / Create |
-| `MetaSoundPatch` | `profile.metasound_patch.v1` (same route and provider) | M0–M3 | Extract / Inspect / Diff / Apply / Create |
-| Preset of either (`RootGraph.PresetOptions.bIsPreset`) | same profiles, `Body.Preset` | M2 | Create (Create Preset), overrides, Convert From Preset; its graph is read only (derived from the parent) |
-| `UMetaSoundBuilderDocument`, `UMetaSoundSettings`, `UMetasoundEditorSettings`, the transient editor graph | — | — | not assets (out of scope, design §1) |
+| Class | Profile | State |
+|---|---|---|
+| `MetaSoundSource` | `profile.metasound_source.v1` (route `audio_profile`, provider `audio`) | Extract / Inspect / Diff / Apply / Create |
+| `MetaSoundPatch` | `profile.metasound_patch.v1` (same route and provider) | Extract / Inspect / Diff / Apply / Create |
+| Preset of either (`RootGraph.PresetOptions.bIsPreset`) | same profiles, `Body.Preset` | Create (Create Preset), overrides, Convert From Preset; its graph is read only (derived from the parent) |
+| `UMetaSoundBuilderDocument`, `UMetaSoundSettings`, `UMetasoundEditorSettings`, the transient editor graph | — | not assets (out of scope, design §1) |
 
 Classification: **Supported**, **Read only**, **Refused** (an error code; the editor cannot do it either, or doing
-it would crash the editor), **Not reproduced** (view state or UI without document content), **Later** (named
-follow-up).
+it would crash the editor), **Not reproduced** (view state or UI without document content).
 
-Summary (51 surfaces): 36 Supported (one on the Default page only), 4 Read only, 4 Refused, 7 Not reproduced,
-none Later. The black-box AI trial (design §6.4) passed: all five tasks applied first time, validate
-agreed with apply on all 18 applies, 4 of 6 mistakes were fixed from the message alone.
+Summary (51 surfaces): 36 Supported (one on the Default page only), 4 Read only, 4 Refused, 7 Not reproduced.
 
 ## Editor surfaces
 
@@ -46,8 +43,8 @@ agreed with apply on all 18 applies, 4 of 6 mistakes were fixed from the message
 | Move node, hidden node | `Position`, `Hidden: true` | Supported | `SetNodeLocation` / `RemoveNodeLocation`; a new node without `Position` is laid out by graph depth |
 | Node comment bubble, Hide Unconnected Pins | `Comment`, `CommentVisible`, `HideUnconnectedPins` | Supported | `SetNodeComment`, `SetNodeCommentVisible`, `SetNodeUnconnectedPinsHidden` |
 | Comment box (C) and its Details | `Graphs.<p>.Comments.<k>` (`Text`, `Position`, `Size`, `Color`, `FontSize`, `ColorBubble`, `MoveMode`) | Supported | `FindOrAddGraphComment` / field writes / `RemoveGraphComment` |
-| Node Details: configuration (General settings of a configurable class, e.g. Harmonix Tape Stop/Start `NumChannels`) | `Nodes.<k>.Configuration {Type?, Properties}` (complete) | Supported (M2) | `SetNodeConfiguration` + `UpdateNodeInterfaceFromConfiguration` (pins follow); errors `MetaSound.InvalidConfiguration`. Test `Configuration` |
-| Update Node Class (node with a newer major) | `Nodes.<k>.Version` = the highest registered major | Supported (M2), Default page only | the editor's controller call (`INodeController::ReplaceWithVersion` + dependency clean-up, `AssetDocumentMetaSoundUpdateNode.cpp`); other targets and other pages `MetaSound.UpdateNodeNotSupported`. Test `UpdateNode` |
+| Node Details: configuration (General settings of a configurable class, e.g. Harmonix Tape Stop/Start `NumChannels`) | `Nodes.<k>.Configuration {Type?, Properties}` (complete) | Supported | `SetNodeConfiguration` + `UpdateNodeInterfaceFromConfiguration` (pins follow); errors `MetaSound.InvalidConfiguration`. Test `Configuration` |
+| Update Node Class (node with a newer major) | `Nodes.<k>.Version` = the highest registered major | Supported, Default page only | the editor's controller call (`INodeController::ReplaceWithVersion` + dependency clean-up, `AssetDocumentMetaSoundUpdateNode.cpp`); other targets and other pages `MetaSound.UpdateNodeNotSupported`. Test `UpdateNode` |
 | Node of an unregistered class version ("class not found") | `Version` as read | Read only on Create | an extraction showing it cannot be created as is (`MetaSound.UnknownNodeClass` names the registered major); on the existing asset Update Node fixes it |
 | Copy / Cut / Paste / Duplicate | — | Not reproduced | a document is the copy format |
 | New From Selected (collapse) | — | Not reproduced | the 5.7 schema action is unimplemented (`PerformAction` returns null) |
@@ -60,7 +57,7 @@ agreed with apply on all 18 applies, 4 of 6 mistakes were fixed from the message
 | Members panel: add / delete input, output, variable | `Inputs`, `Outputs`, `Graphs.<p>.Variables` (complete over user members) | Supported | `AddGraphInput` / `AddGraphOutput` / `AddGraphVariable`; delete `ClearMemberMetadata` + `RemoveGraph*` |
 | Member Details: name, display name, description, type, constructor, advanced, sort order | member fields, rename by `RenamedFrom` | Supported | `SetGraphInput/OutputName`, `...DisplayName`, `...Description`, `...DataType` (default and widget reset; variables: remove + add, as the editor), `SetGraphInputAccessType`, `...AdvancedDisplay`, `...SortOrderIndex`; errors `MetaSound.DuplicateMember`, `InvalidRename`, `UnknownDataType`, `InvalidMember`, `InvalidName` |
 | Member default value | `Inputs.<n>.Default`, variable `Default` | Supported | `SetGraphInputDefault` / `SetGraphVariableDefault` |
-| Input widget and range (literal object Details: `ClampDefault`, `Range`, `WidgetType`, orientation, unit, volume settings) | `Inputs.<n>.Widget` (complete over the settings object's defaults) | Supported (M2) | `FindOrCreateGraphInputMetadata`, then the Details write (`PreEditChange` / `PostEditChangeProperty`) on that document subobject; `MetaSound.UnknownWidgetProperty`, `InvalidWidgetValue`. Test `Widget` |
+| Input widget and range (literal object Details: `ClampDefault`, `Range`, `WidgetType`, orientation, unit, volume settings) | `Inputs.<n>.Widget` (complete over the settings object's defaults) | Supported | `FindOrCreateGraphInputMetadata`, then the Details write (`PreEditChange` / `PostEditChangeProperty`) on that document subobject; `MetaSound.UnknownWidgetProperty`, `InvalidWidgetValue`. Test `Widget` |
 | Interface members (`UE.Source.OnPlay`, ...): default, page defaults, sort order, advanced, widget | `Inputs` / `Outputs` entries of interface members (only differing fields) | Supported | same calls; type and name fixed (`MetaSound.InvalidMember`) |
 | Interfaces panel: add / remove an interface | `Interfaces` (user-modifiable only) | Supported | `ModifyInterfaces(bSetDefaultNodeLocations=false)`; fixed ones (`UE.Source`, a Source's output format) `MetaSound.InterfaceNotModifiable`, unknown `MetaSound.UnknownInterface`. Inspect lists every declared interface with its version and `AvailableInterfaces` |
 | Class metadata Details (display name, description, author, keywords, categories, Referenceable, Deprecated) | `Metadata` | Supported | `SetDisplayName`, `SetDescription`, `SetAuthor`, `SetKeywords`, `SetCategoryHierarchy`, access flags |
@@ -71,13 +68,13 @@ agreed with apply on all 18 applies, 4 of 6 mistakes were fixed from the message
 |---|---|---|---|
 | New MetaSound Source / Patch (Content Browser) | `Action: Create` | Supported | generic factory lifecycle (`UMetaSoundSourceFactory` / `UMetaSoundFactory` → `InitAsset`), then the Body; a failed Create leaves no asset, builder or registry entry (test `Rollback`) |
 | Source Details (`OutputFormat`, quality, block / sample rate overrides, attenuation, concurrency, sound class, submix sends, ...) | top-level `Properties` | Supported | generic Details admission, written before the Body (`OutputFormat` swaps the output-format interface through `PostEditChangeOutputFormat`); registration / versioning / cache fields `MetaSound.NotAuthoredProperty` |
-| Create Preset (Content Browser) | `Action: Create`, `Body.Preset.Parent` | Supported (M2) | the factory with `ReferencedMetaSoundObject` (restricted-mode Create Preset); parent of another class or missing `MetaSound.InvalidPresetParent`. Test `Preset` |
-| Preset input override checkbox / value | preset `Inputs.<n>` (`Default`, `PageDefaults`; unlisted = inherits) | Supported (M2) | `SetGraphInputDefault` / `SetGraphInputInheritsDefault` |
+| Create Preset (Content Browser) | `Action: Create`, `Body.Preset.Parent` | Supported | the factory with `ReferencedMetaSoundObject` (restricted-mode Create Preset); parent of another class or missing `MetaSound.InvalidPresetParent`. Test `Preset` |
+| Preset input override checkbox / value | preset `Inputs.<n>` (`Default`, `PageDefaults`; unlisted = inherits) | Supported | `SetGraphInputDefault` / `SetGraphInputInheritsDefault` |
 | Preset graph, interfaces, outputs, member settings | — | Read only (derived) | `MetaSound.PresetGraphDerived`; another parent `MetaSound.PresetParentChanged` |
-| Convert From Preset | `"Preset": null` | Supported (M2) | `UMetaSoundBuilderBase::ConvertFromPreset`, then the Body |
-| Make an existing MetaSound a preset | — | Refused | `MetaSound.CannotConvertToPreset` (the editor has no such command; decision §9.4) |
-| Pages Details: Add Page Graph, page delete button | `Graphs.<page>` (`Default` always kept) | Supported (M3) | `AddGraphPage(copy of the last page)` / `RemoveGraphPage`; pages are the project's `UMetaSoundSettings` pages (`MetaSound.UnknownPage`). Tests `Pages`, `PageFreeEdits` |
-| Per-page input default widgets | `Inputs.<n>.PageDefaults` | Supported (M3) | `SetGraphInputDefault(..., page)` / remove per page; `PageDefaults.Default` `MetaSound.InvalidBody` |
+| Convert From Preset | `"Preset": null` | Supported | `UMetaSoundBuilderBase::ConvertFromPreset`, then the Body |
+| Make an existing MetaSound a preset | — | Refused | `MetaSound.CannotConvertToPreset` (the editor has no such command; decision §8.4) |
+| Pages Details: Add Page Graph, page delete button | `Graphs.<page>` (`Default` always kept) | Supported | `AddGraphPage(copy of the last page)` / `RemoveGraphPage`; pages are the project's `UMetaSoundSettings` pages (`MetaSound.UnknownPage`). Tests `Pages`, `PageFreeEdits` |
+| Per-page input default widgets | `Inputs.<n>.PageDefaults` | Supported | `SetGraphInputDefault(..., page)` / remove per page; `PageDefaults.Default` `MetaSound.InvalidBody` |
 | Focused page, audition page / platform | — | Not reproduced | editor view and editor-settings state; every op names its page, the build page is left alone |
 | Page the settings no longer define | `Graphs.<32 hex digits>` | Read, kept and editable; not addable | the read names it by its id |
 | A member read without an input node on a page (older content) | `Inputs.<pin>: "Input:<member>"` | Read only | Apply needs an `Input` node (`MetaSound.InvalidSource`) |
@@ -87,10 +84,10 @@ agreed with apply on all 18 applies, 4 of 6 mistakes were fixed from the message
 | Editor surface | Body location | Class | Mechanism |
 |---|---|---|---|
 | Registration after an edit, node error / warning messages | `Compile {Status, Messages, Registered}` on Extract / Apply / Inspect | Supported | compile primitive: `RegisterGraphWithFrontend(bForceViewSync)` + `ConformObjectToDocument`, the editor's node validation derived from builder queries (`Source: "Validation"`); new errors `MetaSound.ValidationFailed` (rolled back), old ones `MetaSound.ValidationError`, warnings `MetaSound.ValidationWarning` |
-| What Play would log (operator build errors, e.g. a variable Get → Set cycle) | `Compile.Messages` with `Source: "Build"` | Supported (M3) | the registered graph built into an operator; new errors `MetaSound.BuildFailed`, old ones `MetaSound.BuildError`. Test `BuildCheck` |
+| What Play would log (operator build errors, e.g. a variable Get → Set cycle) | `Compile.Messages` with `Source: "Build"` | Supported | the registered graph built into an operator; new errors `MetaSound.BuildFailed`, old ones `MetaSound.BuildError`. Test `BuildCheck` |
 | Loaded MetaSounds that use this one | — | Supported | re-registered as the editor does; `MetaSound.DependentsUpdated`, `MetaSound.DependentHasUnsavedChanges` warnings |
-| Apply into an open MetaSound editor | — | Supported (M2) | edits in place through the asset's builder; the editor's tick resyncs its graph; a failed apply rolls back there too. Tests `OpenEditor`, `PagesOpenEditor` |
-| Undo / Redo | — | Supported | one transaction per edit call; a successful apply clears undo history that references the asset (direction reset §3.1). Tests `Undo`, `Preset`, `Pages`, `OpenEditor` |
+| Apply into an open MetaSound editor | — | Supported | edits in place through the asset's builder; the editor's tick resyncs its graph; a failed apply rolls back there too. Tests `OpenEditor`, `PagesOpenEditor` |
+| Undo / Redo | — | Supported | one transaction per edit call; a successful apply clears undo history that references the asset (design rules §3.1). Tests `Undo`, `Preset`, `Pages`, `OpenEditor` |
 | Opening the editor on older content (input template injection) | Extract shows the injected nodes; Inspect `InjectedNodes` | Supported | the read simulates `FInputNodeTemplate::Inject(false)` on a copy with deterministic ids; the first apply makes it on the asset. Test `EditorOpen` |
 | Play / Stop / audition, analyzers' live display | — | Not reproduced | no audio device is needed by any path |
 | Import / Export JSON (toolbar) | — | Not reproduced | Export writes the frontend JSON, not a document; the 5.7 Import is a stub that only logs |
@@ -101,14 +98,12 @@ agreed with apply on all 18 applies, 4 of 6 mistakes were fixed from the message
 
 The design §6.1 corpus: the Metasound plugin's sources, the TP_UEIntro_BP template's MetaSounds (copied into
 `/Game` as creating a project from the template does) and Harmonix content (the plugin is enabled in the test
-sandboxes only, decision §9.2). Formats: N = paged document (5.5+), L = legacy (serialized editor graph, upgraded on
+sandboxes only, decision §8.2). Formats: N = paged document (5.5+), L = legacy (serialized editor graph, upgraded on
 load), M = between. Read = `MetaSound.Corpus`: the duplicate's extraction is stable read twice, after an unload and
 reload and on a second duplicate; Diff of the extraction is empty; reading dirties, registers and leaves nothing.
 Fidelity = `MetaSound.Fidelity` (§6.2): the extraction applied as `Create` on a new `/Game` asset extracts equal
 (output node ids aside), validates the same, Diffs empty, re-applies as a no-op and extracts the same after a
-reload. Timings in milliseconds, Windows CI PC (Development editor, `-NoSound`, `-j 3`), commit
-`15a5f6a1`: extract / inspect of the read, create / no-op re-apply of the fidelity round trip. Mac (M-series, same
-commit): the same 15 / 15 stable and 15 / 15 fidelity results, timings in the last two columns.
+reload. Timings in milliseconds, Windows PC (Development editor, `-NoSound`, `-j 3`): extract / inspect of the read, create / no-op re-apply of the fidelity round trip. Mac (M-series): the same 15 / 15 stable and 15 / 15 fidelity results, timings in the last two columns.
 
 | # | Asset | Class, format | Nodes / variables / comments | Compile status as read | Read | Fidelity | PC extract / inspect | PC create / no-op | Mac extract / inspect | Mac create / no-op |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -172,9 +167,7 @@ Details edit, page add / remove, the Details writes); graph form and validation 
 
 ### Test results
 
-Commit `15a5f6a1`. PC: the MetaSound and SparseDefaults.MetaSound groups, 20 / 20 Success; against the
-`6d902305` pool baseline the only change is the new `Formats` (`- -> Success`), no regression. Mac:
-the same groups plus `AtomicFile`, 31 / 31 Success. All MetaSound tests log engine warnings
+PC: the MetaSound and SparseDefaults.MetaSound groups, 20 / 20 Success. Mac: the same groups plus `AtomicFile`, 31 / 31 Success. All MetaSound tests log engine warnings
 (`LogMetaSound` PreSaveAsset / unregistered interface versions of the corpus content), which count as Success.
 
 | Test (`UEAssetDoc.MetaSound.*`) | Content | PC | Mac |
@@ -218,7 +211,4 @@ the same groups plus `AtomicFile`, 31 / 31 Success. All MetaSound tests log engi
 - The editor's node validation is derived from builder queries (the private `FGraphBuilder` cannot be linked);
   `EditorOpen` and the fidelity status comparison check it against the editor's own open path.
 - The analyzer node of the editor (`UE.Audio Analyzer`) has no persisted settings; its display is editor-only.
-
-## Follow-ups (not in this matrix's scope)
-
-- Fidelity with an audio device (FusionPatch content) needs an editor run without `-NoSound`.
+- Fidelity of FusionPatch content with an audio device needs an editor run without `-NoSound`; the corpus runs use `-NoSound`.

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.PhysicsAsset.Read: the tutorial mannequin's physics asset (duplicate) and assets generated
 //   as the editor's Create Physics Asset does (capsules; single convex hulls): Extract / Inspect / Diff through the

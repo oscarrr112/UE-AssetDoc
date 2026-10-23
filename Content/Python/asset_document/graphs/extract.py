@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Live snapshot -> GraphDoc extraction.
 
 Node ids are reused from a previously saved sidecar document (matched by

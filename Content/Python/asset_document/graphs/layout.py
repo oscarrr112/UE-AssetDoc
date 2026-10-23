@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Readable automatic layout of graph nodes (pure).
 
 Nodes the document does not place (no ``Position``) and graphs that ask for a relayout

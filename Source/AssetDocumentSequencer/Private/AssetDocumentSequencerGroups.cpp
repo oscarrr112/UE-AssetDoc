@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Groups and cross-sequence references of the Sequencer document (design §3.2, §3.3; phase S5):
+// Groups and cross-sequence references of the Sequencer document (design §3.2, §3.3):
 //   * section groups (UMovieScene::GroupSections, Sequencer's "Group" on selected sections): the section header field
 //     "Group" (a number shared by the sections of one group), written by seq.edit.v1 section_groups.set;
 //   * node groups (the Sequencer's Group Manager filter, UMovieSceneNodeGroup): Body.Groups [{Name, Members}] whose

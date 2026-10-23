@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Rollback rebuilder of the Level Sequence profile (design §4.3): Core restores the sequence package from its snapshot
 // (the movie scene, tracks, sections, bindings and custom bindings are all authored objects of the package); what the

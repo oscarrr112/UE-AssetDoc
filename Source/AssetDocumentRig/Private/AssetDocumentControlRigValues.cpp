@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Values and names of the Control Rig document (design §3.3 "Pin values", §3.2 "Variables"): RigVM stores pin and
 // variable defaults as export text; the document holds typed JSON through the Editor typed value codec, keyed by

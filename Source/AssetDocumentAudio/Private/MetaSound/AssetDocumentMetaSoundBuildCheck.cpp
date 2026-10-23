@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Operator build check of a MetaSound (design §5.1 step 3, phase M3). The MetaSound editor validates its graph
+// Operator build check of a MetaSound (design §5.1 step 3). The MetaSound editor validates its graph
 // view; a graph can still fail to become an operator (a cycle through a variable's Get / Set, duplicate inputs, a
 // connection whose data types the node does not accept), which a human only sees in the log when pressing Play. The
 // check builds the graph the frontend registered (INodeClassRegistry::GetGraph: the document the registration

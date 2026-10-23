@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Control Rig function graphs, node order and Animation Blueprint pins.
 // UEAssetDoc.ControlRig.ReplaceFunctions: the template's CR_Mannequin_FootIK duplicated (and

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -71,7 +72,7 @@ UBehaviorTree* CreateTransientBehaviorTree(const TCHAR* BaseName)
 bool FAssetDocumentAITestFixture::CreateFactoryOwnedScratchBundle(FAutomationTestBase& Test)
 {
 	using namespace AssetDocumentAITestFixture;
-	ScratchTree.Reset(CreateTransientBehaviorTree(TEXT("AssetDocumentAIT0ScratchTree")));
+	ScratchTree.Reset(CreateTransientBehaviorTree(TEXT("AssetDocumentAITestScratchTree")));
 	if (!Test.TestNotNull(TEXT("FactoryCreateNew returned an exact BehaviorTree"), ScratchTree.Get()))
 	{
 		return false;
@@ -85,7 +86,7 @@ bool FAssetDocumentAITestFixture::CreateFactoryOwnedScratchBundle(FAutomationTes
 
 	UEdGraph* CreatedGraph = FBlueprintEditorUtils::CreateNewGraph(
 		ScratchTree.Get(),
-		MakeUniqueObjectName(ScratchTree.Get(), UBehaviorTreeGraph::StaticClass(), TEXT("AssetDocumentAIT0Graph")),
+		MakeUniqueObjectName(ScratchTree.Get(), UBehaviorTreeGraph::StaticClass(), TEXT("AssetDocumentAITestGraph")),
 		UBehaviorTreeGraph::StaticClass(),
 		UEdGraphSchema_BehaviorTree::StaticClass());
 	ScratchGraph.Reset(Cast<UBehaviorTreeGraph>(CreatedGraph));
@@ -176,7 +177,7 @@ bool FAssetDocumentAITestFixture::BootstrapBehaviorTreeEditorCache(FAutomationTe
 	}
 	if (!Module->GetClassCache().IsValid())
 	{
-		BootstrapTree.Reset(CreateTransientBehaviorTree(TEXT("AssetDocumentAIT0BootstrapTree")));
+		BootstrapTree.Reset(CreateTransientBehaviorTree(TEXT("AssetDocumentAITestBootstrapTree")));
 		if (!Test.TestNotNull(TEXT("bootstrap factory tree exists"), BootstrapTree.Get()))
 		{
 			return false;

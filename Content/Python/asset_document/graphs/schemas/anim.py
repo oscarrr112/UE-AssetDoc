@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Animation Blueprint graph schema adapter and Body codec (AnimGraph, anim layers, state machines).
 
 Body shape::

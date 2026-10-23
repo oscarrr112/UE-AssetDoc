@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Sparse-over-defaults verification: an authored value equal to the default a sparse read leaves out, and a
 partial struct (Apply writes it as an edit: members it omits keep their value), compare equal to the read back.
 The editor side (apply + Diff through the production service per Profile) is

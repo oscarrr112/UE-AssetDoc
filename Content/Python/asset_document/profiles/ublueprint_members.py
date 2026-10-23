@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """UBlueprint member regions (pure): canonical shapes, legacy conversion, planning and diff.
 
 Body member regions (AI-friendly canonical shapes)::

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Blueprint graph authoring ergonomics, on the production route
 // (FAssetDocumentService -> Generic Runtime -> Python UBlueprint profile -> graph primitives):

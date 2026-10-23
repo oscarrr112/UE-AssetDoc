@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // edit_level set: properties of actors, native components, Blueprint (SCS) components
 // and instanced subobjects of EditInlineNew components, with float normalisation

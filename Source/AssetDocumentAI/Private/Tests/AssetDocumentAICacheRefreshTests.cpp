@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -389,7 +390,7 @@ TOptional<FFixture> MakeFixture(FAutomationTestBase& Test)
 	const FString AssetName = FString::Printf(TEXT("BT_CacheRefresh_%s"),
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 	Fixture.Package.Reset(CreatePackage(*FString::Printf(
-		TEXT("/Game/AssetDocumentTests/P_AI/%s"), *AssetName)));
+		TEXT("/Game/AssetDocumentTests/AIProvider/%s"), *AssetName)));
 	Fixture.Tree.Reset(NewObject<UBehaviorTree>(Fixture.Package.Get(), *AssetName,
 		RF_Public | RF_Standalone | RF_Transactional));
 	Fixture.ForeignTree.Reset(NewObject<UBehaviorTree>(Fixture.Package.Get(), TEXT("BT_Foreign"),
@@ -518,7 +519,7 @@ bool FAssetDocumentAICacheRefreshTest::RunTest(const FString&)
 			{StringValue(F.Tree->GetPathName()), StringValue(F.BlackboardA->GetPathName()), StringValue(TEXT("DirectSelector")),
 				StringValue(TEXT("ParentKey")), StringValue(F.TaskGraph->NodeGuid.ToString(EGuidFormats::DigitsWithHyphensLower))}),
 		{{TEXT("asset"), EditorHandle.GetValue()}}), Resolver, &Transaction);
-	bool Passed = TestEqual(TEXT("direct Editor handle fails at the P-AI provider boundary"),
+	bool Passed = TestEqual(TEXT("direct Editor handle fails at the AI provider boundary"),
 		DirectEditor.Status, EAssetDocumentPrimitiveOutcomeStatus::Failed);
 	Passed &= TestTrue(TEXT("direct Editor handle preserves ProviderMismatch and zero enlist"),
 		HasDiagnostic(DirectEditor.Diagnostics, TEXT("HandleMetadata.ProviderMismatch"))

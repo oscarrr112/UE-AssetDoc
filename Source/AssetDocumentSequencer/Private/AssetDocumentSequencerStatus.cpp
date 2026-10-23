@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The read status of a Level Sequence ("Compile" of Extract / Inspect, design §5.1). A sequence has no compile button;
 // the status is the profile's structural checks plus checks for the four rules of the editor's Sequence Validator

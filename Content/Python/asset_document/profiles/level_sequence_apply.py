@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Level Sequence apply (profile.level_sequence.v1): the document as Sequencer's own edits (design §4.2, §4.3).
 
 The Body is planned against one read of the sequence and written in ``seq.edit.v1`` op batches:

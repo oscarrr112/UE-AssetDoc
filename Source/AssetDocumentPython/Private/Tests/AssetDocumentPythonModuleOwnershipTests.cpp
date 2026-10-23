@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentRuntimeModule.h"
 
@@ -23,7 +24,7 @@ bool FAssetDocumentPythonGenericOwnershipDormantTest::RunTest(
 	if (Module != nullptr)
 	{
 		TestFalse(
-			TEXT("T1 does not activate a Python runtime revision"),
+			TEXT("module load does not activate a Python runtime revision"),
 			Module->HasActiveRuntimeRegistration());
 	}
 	return true;

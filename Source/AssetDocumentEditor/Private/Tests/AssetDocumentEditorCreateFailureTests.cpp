@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // A Create that fails at any phase after the target was made leaves nothing behind and does not
 // poison the atomic framework (a failed Create's residue made later requests fail
@@ -17,7 +18,7 @@
 // GenericRuntime.Rollback.CreateFailureCompile: a Create whose own content fails to compile (a Niagara
 // module whose custom HLSL node uses an undefined symbol; a Material whose texture sample has no
 // texture) fails, the created asset is deleted (no RollbackCreated.DeleteRejected /
-// Atomic.Poisoned.RollbackFailed: N4 saw that on a failed Niagara script Create), and the corrected
+// Atomic.Poisoned.RollbackFailed: seen on a failed Niagara script Create), and the corrected
 // document then creates the asset.
 
 #include "AssetDocumentModule.h"

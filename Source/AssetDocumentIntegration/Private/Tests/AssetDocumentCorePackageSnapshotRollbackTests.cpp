@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Core package-snapshot rollback through the real generic ApplyFile route.
 // Each row mutates the existing target outside of any typed inverse, then
@@ -323,7 +324,7 @@ public:
 		}
 		// Editor+AI seed: the full generic seed also requires the Animation provider.
 		const FAssetDocumentRequiredPrimitiveProjectionResult Projected = BuildAssetDocumentRequiredPrimitiveProjection(
-			Providers, GetAssetDocumentLegacyGenericRequirementsForTests(), GetG1FrozenAuthorityExceptionRecords(),
+			Providers, GetAssetDocumentLegacyGenericRequirementsForTests(), GetFrozenAuthorityExceptionRecords(),
 			{}, MoveTemp(PreparedInvoke));
 		for (const FAssetDocumentRuntimeDiagnostic& Diagnostic : Projected.Diagnostics)
 		{
@@ -338,7 +339,7 @@ public:
 		Candidate.EntryModuleRelativePath = TEXT("asset_document/bootstrap.py");
 		Candidate.RequiredPrimitives = Projected.Projection->Requirements;
 		Candidate.Providers = Projected.Projection->Providers;
-		Candidate.AuthorityCatalog.Append(GetG1FrozenAuthorityExceptionRecords());
+		Candidate.AuthorityCatalog.Append(GetFrozenAuthorityExceptionRecords());
 		if (!Test.TestTrue(TEXT("revision activates"), Runtime.TryActivateRevision(Candidate).bActivated))
 		{
 			return false;

@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """StateTree Profile: document validation, identity matching, op planning, binding references, extract
 and diff over synthetic ai.state_tree.read.v1 records.  The editor-side behaviour is covered end to end by
 UEAssetDoc.StateTree.* in the editor."""

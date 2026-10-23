@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Module stack ops of fx.niagara.edit.v1 (N3), made through the Niagara stack view models the way the stack widgets
+// Module stack ops of fx.niagara.edit.v1, made through the Niagara stack view models the way the stack widgets
 // make them. Every op re-resolves its stack, group, module and input by name (an edit refreshes or rebuilds the
 // entries), so nothing is cached across ops.
 //

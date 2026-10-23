@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Tests/AssetDocumentSkeletonTestHarness.h"
 #include "Animation/AnimData/IAnimationDataController.h"
@@ -66,7 +67,7 @@ class MontageDispatch(caller.SkeletonS1Dispatch):
 
     def _verify(self, request, context, properties, structural):
         # Native assertions check the structural projection, including in a
-        # separate fresh process. S1 still verifies its real admitted scalar.
+        # separate fresh process. The Skeleton caller still verifies its real admitted scalar.
         super()._verify(request, context, properties, None)
 
 dispatch = MontageDispatch(dispatch.options)

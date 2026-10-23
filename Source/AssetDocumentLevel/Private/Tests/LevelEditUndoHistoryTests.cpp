@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Editor Undo history x AssetDocument apply, seen from the level tools
 // (AssetDocumentUndoHistory.h FinishApply):

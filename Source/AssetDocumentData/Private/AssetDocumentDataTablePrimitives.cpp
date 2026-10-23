@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // data.data_table.read.v1 / data.data_table.edit.v1: rows of a UDataTable (also
 // UCompositeDataTable and UMirrorDataTable), editor-equivalent (see AssetDocumentDataPrimitives.cpp).

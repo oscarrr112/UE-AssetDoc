@@ -1,4 +1,7 @@
-"""Control Rig graph and function planning (profile.control_rig.v1, phases CR2 / CR3 of
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Control Rig graph and function planning (profile.control_rig.v1; see
 docs/architecture/asset-document-controlrig-design.md).
 
 ``Body/Graphs`` and ``Body/Functions`` as the Control Rig editor's edits, through the ``rig.controlrig.edit.v1`` graph

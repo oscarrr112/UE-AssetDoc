@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Factories whose New-asset dialog is only a class picker that keeps the chosen class in factory state reflection
 // does not expose, and whose FactoryCreateNew then makes a plain NewObject of that class:

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #include "AssetDocumentModule.h"
 #include "AssetDocumentGenericRuntimeBootstrap.h"
 #include "Tests/AssetDocumentSkeletonTestHarness.h"
@@ -44,7 +45,7 @@ FString Json(const TSharedRef<FJsonObject>& Object)
 {
 	FString Text;
 	// Canonicalize object key order and number spelling only: scalar values and
-	// array order remain intact, including every C1 bit field and authored name spelling.
+	// array order remain intact, including every curve bit field and authored name spelling.
 	FJsonSerializer::Serialize(OrderedJson(MakeShared<FJsonValueObject>(Object))->AsObject().ToSharedRef(), TJsonWriterFactory<>::Create(&Text));
 	return Text;
 }

@@ -1,6 +1,6 @@
 # StateTree support matrix
 
-Status: 2026-10-05. Governing rules:
+Governing rules:
 [design rules](asset-document-design-rules.md) §3 (rollback = functional
 equivalence), §4 (raw editor-equivalent code + behaviour test) and §5 (support matrix).
 
@@ -90,8 +90,3 @@ complete; transitions are complete values except `Conditions`.
   reload, failed creates), `UEAssetDoc.StateTree.NodeConstruction`
   (raw node construction = the editor's), `UEAssetDoc.StateTree.Undo`, `UEAssetDoc.StateTree.OpenEditorApply`,
   `UEAssetDoc.GenericRuntime.Robustness.FactoryConfiguration` (class context).
-
-## Legacy
-
-The legacy StateTree generator C++ (`Generators/StateTreeGenerator.cpp`, `Generators/StateTree/*`) was removed
-with the other generators; StateTree is authored only through the AssetDocument profile.

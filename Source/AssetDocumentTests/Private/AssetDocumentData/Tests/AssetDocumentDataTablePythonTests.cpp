@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // End-to-end DataTable family through the production Service and the Python Profiles
 // (profile.data_table.v1, profile.composite_data_table.v1, profile.mirror_data_table.v1):

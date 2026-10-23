@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The KI-17 audit: BaseRevision is the hash of the asset's default extract. A property the engine derives when the
 // package loads (PostLoad) but the apply does not set would change it on the next load although nobody changed the

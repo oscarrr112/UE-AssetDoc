@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "Provider/Blackboard/AssetDocumentAIBlackboardMutationInternal.h"
 #include "Provider/Blackboard/AuthorityException/AssetDocumentAIBlackboardStructuralPublication.h"
@@ -391,7 +392,7 @@ FAssetDocumentPrimitiveOutcome NewKeyAuthorityFailure(const TCHAR* Message)
 	FAssetDocumentRuntimeDiagnosticContext& Context = Diagnostic.Context.AddDefaulted_GetRef();
 	Context.Key = TEXT("blocker");
 	Context.Value.Kind = EAssetDocumentRuntimeValueKind::String;
-	Context.Value.StringValue = TEXT("AD.G1.BLOCK.AI.BLACKBOARD_KEY_TYPE_AUTHORITY");
+	Context.Value.StringValue = TEXT("AD.BLOCK.AI.BLACKBOARD_KEY_TYPE_AUTHORITY");
 	return Failure(TEXT("AIProvider.Blackboard.NewKeyTypeRequiresBlockedAuthority"), Message, {Diagnostic});
 }
 

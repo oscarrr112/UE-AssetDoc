@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Applying a dependency must leave the assets that use it on its current types, as the editor's
 // compile of the dependency does: no object, widget, notify or property of a dependent is left on a

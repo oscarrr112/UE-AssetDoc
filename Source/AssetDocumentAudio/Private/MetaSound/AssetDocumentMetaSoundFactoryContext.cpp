@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The preset parent handed to the MetaSound New-asset factories. Engines whose factories take a document template
 // configure them the way the Content Browser's "Create Preset" does: a preset template whose Parent is the parent

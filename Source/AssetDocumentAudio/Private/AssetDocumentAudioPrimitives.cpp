@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Audio asset primitives (provider "audio", owner Audio) of the MetaSound profile
 // (docs/architecture/asset-document-metasound-design.md §4.2):

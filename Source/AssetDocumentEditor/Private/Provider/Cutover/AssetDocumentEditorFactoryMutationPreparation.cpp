@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #include "Provider/Cutover/AssetDocumentEditorFactoryMutationPreparation.h"
 #include "AssetDocumentEditorTargetLifecycleCatalog.h"
 #include "Provider/AssetDocumentEditorNativeIdentity.h"
@@ -44,7 +45,7 @@ FAssetDocumentContractValidationResult ValidateFactoryInvocation(
   || Invocation.Phase != EAssetDocumentRuntimeRequestPhase::Apply || Invocation.RequestId != State.RequestId
   || Invocation.RuntimeRevision != State.Revision || !Invocation.TransactionId.IsValid()
   || Invocation.HandleArguments.Num() != (State.Skeleton.IsValid() ? 2 : 1))
-  return FactoryFailure(TEXT("MutationPreparation.InvocationMismatch"), TEXT("Factory invocation differs from the prepared L1 step."));
+  return FactoryFailure(TEXT("MutationPreparation.InvocationMismatch"), TEXT("Factory invocation differs from the prepared factory step."));
  auto Validation = ValidateAssetDocumentRuntimeValue(Invocation.ValueArguments);
  if (!Validation.bValid) return Validation;
  const FAssetDocumentEditorValueFieldSpec Shape[] = {

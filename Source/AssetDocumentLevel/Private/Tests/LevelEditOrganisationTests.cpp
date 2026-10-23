@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // edit_level organisation (design §7.2 L3): label, tags, folders (create, rename and
 // delete with the Outliner's semantics), layers on a level without World Partition and

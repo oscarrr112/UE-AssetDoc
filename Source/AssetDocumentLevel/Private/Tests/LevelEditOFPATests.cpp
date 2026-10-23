@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // edit_level on a World Partition map with one file per actor (OFPA): dirty_packages are
 // the external packages of the actors the batch changed, "save" writes exactly those

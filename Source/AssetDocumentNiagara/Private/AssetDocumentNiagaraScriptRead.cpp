@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Script graph rows (module / function / dynamic input assets and scratch pads, design §3.5) and parameter
 // collection rows. Every script row carries "scope": "" for the asset's own script, "<emitter>/<scratch pad>"

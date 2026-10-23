@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered Template Sequence Profiles (design §3.2, §3.4.3, §7.2):
 
 * ``profile.template_sequence.v1``          class /Script/TemplateSequence.TemplateSequence

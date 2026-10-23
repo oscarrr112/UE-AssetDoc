@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // State machine schema adapter (UAnimationStateMachineSchema). Keys:
 //   SM:State, SM:Conduit, SM:StateAlias   the graph context menu's "Add State/Conduit/State Alias"

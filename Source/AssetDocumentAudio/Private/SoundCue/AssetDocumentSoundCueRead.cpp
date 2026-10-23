@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // audio.soundcue.read.v1 (read-only): the facts of a SoundCue the profile needs besides its graph (which it reads with
 // graph.query.v1):

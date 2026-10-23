@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """SoundCue document model: shape checks, the live cue (graph.* snapshot + audio.soundcue.read.v1), Extract and Diff.
 
 Document Body (profile.sound_cue.v1)::

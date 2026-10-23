@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """IK Rig / IK Retargeter Profiles: assembling the Body from the rig.* read records, Diff, and the IK Rig apply
 planner (phases, solver stack alignment, refusals, validation outcome, error paths). The editor side (read, edit
 primitive, status, fidelity on the corpus) is covered by UEAssetDoc.IKRig.*."""

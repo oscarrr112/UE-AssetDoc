@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Template / Camera Animation Sequence Profiles: Body.Root <-> the level binding form, comparison form and Diff, the
 apply plan over the root (document paths, root entry, component bindings, class change first), refusals and the create
 context. The editor side (round trips, change of class, camera shake playback) is covered by

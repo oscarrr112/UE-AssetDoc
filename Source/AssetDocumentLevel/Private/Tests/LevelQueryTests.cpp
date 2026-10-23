@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // query_level on maps the tests create: a persistent level with one always-loaded
 // sublevel, and a World Partition map whose far actors are unloaded after a reload.

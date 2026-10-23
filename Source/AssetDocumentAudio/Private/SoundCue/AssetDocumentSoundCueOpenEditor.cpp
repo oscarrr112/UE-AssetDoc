@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Open-editor apply for Sound Cues. The Sound Cue editor (FSoundCueEditor) edits the cue itself: its graph panel shows
 // USoundCue::SoundCueGraph and its Details panel the selected graph nodes (or the cue). Nothing is copied, so an apply

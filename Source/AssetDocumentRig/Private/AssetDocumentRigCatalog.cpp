@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Solver and retarget op types (design §3.6) for list_types (kind=ikrig_solver / ikretarget_op,
 // AssetDocumentTypeListers.h) and for rig.catalog.v1 ({kind: solver|op, name?, path?, offset?, limit?} ->

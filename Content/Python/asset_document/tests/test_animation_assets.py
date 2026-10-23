@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Skeleton, blend space, PoseAsset and AnimComposite Profiles: document validation and op planning.
 The editor side is covered end to end by UEAssetDoc.AnimationAssets.* in the editor."""
 from __future__ import annotations

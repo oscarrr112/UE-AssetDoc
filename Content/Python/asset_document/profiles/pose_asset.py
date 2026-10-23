@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered PoseAsset Profile (profile.pose_asset.v1): the Pose Asset editor's poses and additive
 settings.
 

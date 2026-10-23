@@ -57,12 +57,12 @@ url = "http://127.0.0.1:8559/mcp"
 
 ### Clients that start stdio servers only (stdio bridge)
 
-`ue-assetdoc` relays stdio to the editor's `/mcp` endpoint. It needs Node.js 18 or newer; `npm run build` compiles `src/` into `dist/`:
+`ue-assetdoc` relays stdio to the editor's `/mcp` endpoint. It needs Node.js 20 or newer and its runtime dependency (`@modelcontextprotocol/sdk`), which no copy of the plugin includes: install it with `npm ci` in the `MCP` folder. A copy that already has the built bridge in `dist/` (a packaged plugin can) needs only the runtime dependencies; otherwise install everything and compile `src/` into `dist/`:
 
 ```bash
 cd <plugin>/MCP
-npm install
-npm run build
+npm ci --omit=dev            # dist/ is there: runtime dependencies only
+npm ci && npm run build      # no dist/: all dependencies, then build
 ```
 
 ```json
@@ -79,10 +79,12 @@ npm run build
 
 The bridge finds the editor in this order:
 
-1. `UE_API_BASE`: the editor's address (`http://127.0.0.1:<port>` or its `/mcp` URL); the token is `UE_ASSETDOC_TOKEN`, or the one in the project's discovery file when that file names the same port.
-2. `UE_PROJECT`: the project's `Saved/UEAssetDoc/service.json` names the port the editor bound and its token.
-3. The project that contains the bridge's working directory, through the same file.
-4. `http://127.0.0.1:8559/mcp`.
+1. `UE_API_BASE`: the editor's address (`http://127.0.0.1:<port>` or its `/mcp` URL); the token is `UE_ASSETDOC_TOKEN`, or the one in the project's discovery file when that file names the same protocol, host and port (`127.0.0.1`, `localhost` and `[::1]` count as one host). An editor on another host needs `UE_ASSETDOC_TOKEN`: the local file's token is never sent there.
+2. `UE_PROJECT`: the project's `Saved/UEAssetDoc/service.json` names the port the editor bound and its token. When that file is missing or names no address, the project's editor is not running: the bridge connects to no editor, and every call answers which project and file it looked for.
+3. The project that contains the bridge's working directory: the nearest directory at or above it with a `.uproject` file, found whether or not its editor runs. Its `service.json` names the port and token; when that file is missing or names no address, the bridge connects to no editor, as in step 2.
+4. `http://127.0.0.1:8559/mcp`, only when no project is named and none contains the working directory. No project is checked then.
+
+When a project is known (`UE_PROJECT`, or the working directory's project in step 3), the bridge checks, right after it opens a session, that the editor serves that project (the project directory `health_check` reports). Requests and notifications go to the editor only after that check has succeeded; if opening the session or the check fails in any way, including a connection cut while the editor answers, the session is dropped and the next call starts over. An editor of another project, for example one that took the port after the project's editor closed, gets no requests: every call answers which project the editor serves instead.
 
 The editor writes `service.json` once it has finished starting (its log shows the MCP URL a little earlier); the bridge reads the file again each time it opens a session, so it may start before the editor. When the editor is not running, the bridge still lists the tools (from `tools.json`) and every call answers where it looked and what to do. When the editor restarts, the bridge opens a new session by itself.
 
@@ -92,14 +94,16 @@ The editor listens on port **8559** by default (8558 is the Zen server's); chang
 
 ## Security
 
-The server can run Python and delete assets in your editor, so it accepts requests only from this machine and refuses what a web page could send:
+The security boundary is who can connect to the server: any client that can connect can make the editor run code (Python when `execute_python` is on, Blueprints it authors and runs in Play In Editor, and more; see [SECURITY.md](../SECURITY.md)). So the server accepts requests only from this machine and refuses what a web page could send:
 
 - **Loopback only.** The listener binds the loopback interface. A request whose `Host` is not `localhost`, `127.0.0.1` or `[::1]` is refused (a page on a domain that resolves to 127.0.0.1 sends its own domain), and so is one from another machine.
 - **Origin.** A request that carries an `Origin` header is answered only when that origin is a page served from localhost.
 - **JSON bodies.** `POST`, `PUT` and `PATCH` must declare `Content-Type: application/json`, which a page cannot send to another origin without a CORS preflight (and the server answers none).
 - **Bearer token (optional).** With **Require Auth Token** on, every request needs `Authorization: Bearer <token>`. The editor makes a new token each time it starts and writes it to `Saved/UEAssetDoc/service.json`, which is readable by your user only; the stdio bridge reads it there. A client registered with a URL sends it as a header, for example `claude mcp add --transport http ue-assetdoc http://127.0.0.1:8559/mcp --header "Authorization: Bearer <token>"` (Codex: `bearer_token_env_var`).
 - **Remote connections.** **Allow Remote Connections** binds every interface and accepts other hosts; the token is then always required.
-- **Tools you can switch off.** **Enable Execute Python** and **Enable Delete Assets** (Security category) remove `execute_python` and `delete_assets` from the tool list and make their routes refuse. Both are on by default: Python is how an AI does what no other tool covers, and both were already open to any process of your user on this machine; the checks above keep web pages out.
+- **Tools you can switch off.** **Enable Execute Python** and **Enable Delete Assets** (Security category) remove `execute_python` and `delete_assets` from the tool list and make their routes refuse. They keep honest clients and accidental calls away from those tools; they are not a sandbox. Both are on by default: Python is how an AI does what no other tool covers, and a client that can connect can run code anyway.
+
+As hardening (not a boundary), no tool changes the plugin's own settings or the settings that make the editor run code (`settings` refuses those writes: `Settings.Protected`), and the play tools keep to the game: no Python, no command runners, and `set` / `get` console commands only on objects of the play session (`Play.TargetOutsidePlay`).
 
 These checks apply to every route of the server, `/mcp` and `/assetdoc/*` alike. Settings other than the two tool switches take effect when the editor starts. What the endpoint exposes, what the checks do not cover and how to report a vulnerability: [SECURITY.md](../SECURITY.md).
 
@@ -130,7 +134,7 @@ A profile section starts with a `# Title` line, then a `Classes:` line listing t
 
 ## Packaging
 
-`Config/FilterPlugin.ini` adds `MCP/tools.json`, `MCP/schemas/`, the bridge (`MCP/dist/`, `MCP/package.json`, `MCP/package-lock.json`) and this README to a packaged copy of the plugin; the editor needs `tools.json` and `schemas/` to serve its tools.
+`Config/FilterPlugin.ini` adds `MCP/tools.json`, `MCP/schemas/`, the bridge and this README to a packaged copy of the plugin; the editor needs `tools.json` and `schemas/` to serve its tools. For the bridge it adds what `npm ci && npm run build` needs (`MCP/src/`, `MCP/tsconfig.json`, `MCP/package.json`, `MCP/package-lock.json`) and the built `MCP/dist/`. `dist/` is not in the repository: to ship the bridge built, run `npm ci && npm run build` in `MCP/` before packaging. `node_modules/` is never packaged, so users of the package still install the runtime dependencies (`npm ci --omit=dev`, or `npm ci && npm run build` without `dist/`) as in [the stdio bridge setup](#clients-that-start-stdio-servers-only-stdio-bridge).
 
 ## Development
 

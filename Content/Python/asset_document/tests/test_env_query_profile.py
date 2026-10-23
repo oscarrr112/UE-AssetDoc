@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """EnvQuery Profile (profile.env_query.v1): Body checks, Extract / Diff over new-node defaults, and the Apply op
 sequence against a fake query served through ai.env_query.read / edit / finalize (adds, moves, removals, key renames,
 generator switches, Details, toggles, layout, comment boxes, validation classification, refusals).  The editor side

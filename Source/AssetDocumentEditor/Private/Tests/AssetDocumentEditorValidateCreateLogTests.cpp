@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Validate of a new asset makes its trial target with the class's editor factory, as the Content Browser's New asset
 // does. Editor.ValidateCreate.NoEnsure: for each class an exact profile creates, Validate of a minimal create document

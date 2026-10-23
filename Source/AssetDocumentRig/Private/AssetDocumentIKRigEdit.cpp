@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // rig.ikrig.edit.v1: edits of an IK Rig as the IK Rig editor makes them (design §4.1): every structural edit is the
 // UIKRigController call the editor's UI makes (each its own transaction and re-initialization, nested in the

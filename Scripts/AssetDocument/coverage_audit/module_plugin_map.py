@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Map UE module names to the owning plugin by scanning .uplugin files (Engine plugins + this repo).
-Modules not owned by any plugin belong to the Engine itself. Prints JSON {module: plugin}."""
+Modules not owned by any plugin belong to the Engine itself. Prints JSON {module: plugin}.
+ENGINE_DIR must name the engine's Engine folder."""
 import glob, json, os, sys
 
-ENGINE = os.environ.get("ENGINE_DIR", "/Users/Shared/Epic Games/UE_5.7/Engine")
+ENGINE = os.environ.get("ENGINE_DIR")
+if not ENGINE or not os.path.isdir(ENGINE):
+    sys.exit("ENGINE_DIR must name the Engine folder of an Unreal Engine install "
+             "(<UE_ROOT>/Engine, the folder that holds Source and Plugins)")
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 

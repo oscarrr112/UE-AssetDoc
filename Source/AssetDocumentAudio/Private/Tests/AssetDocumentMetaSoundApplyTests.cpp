@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// MetaSound documents, phase M1 (graph apply), through the production Service as the MCP tools send them
+// MetaSound documents (graph apply), through the production Service as the MCP tools send them
 // (design §6.2-6.4):
 //
 // UEAssetDoc.MetaSound.Fidelity: every corpus asset (pages the project settings lack are given
@@ -9,9 +10,9 @@
 // the interface) with the same validation status; Diff is then empty; the unchanged re-apply saves and dirties
 // nothing; the new asset extracts the same after a reload. MSP_MidiNoteAdsr uses a node class version that is not
 // registered (the editor shows "class not found"): its Create is refused with MetaSound.UnknownNodeClass and leaves
-// nothing (Update Node of an existing node: AssetDocumentMetaSoundM2Tests.cpp). Timings are reported per asset.
+// nothing (Update Node of an existing node: AssetDocumentMetaSoundPresetNodeTests.cpp). Timings are reported per asset.
 // UEAssetDoc.MetaSound.FreeEdits: the §6.3 graph edits (configuration, Update Node, presets and
-// widgets: AssetDocumentMetaSoundM2Tests.cpp; pages: AssetDocumentMetaSoundM3Tests.cpp) on two duplicates of MSS_PlayRandom_Oneshot and of MS_Opera (MSS_PlayRandom_Loop without the
+// widgets: AssetDocumentMetaSoundPresetNodeTests.cpp; pages: AssetDocumentMetaSoundPagesTests.cpp) on two duplicates of MSS_PlayRandom_Oneshot and of MS_Opera (MSS_PlayRandom_Loop without the
 // template content): one is edited by documents, the other by the editor's calls (document builder,
 // FInputNodeTemplate::CreateNode, the Audio Analyzer template as its wire-drag action adds it, ModifyInterfaces as the
 // Interfaces panel, the Details edit of OutputFormat, then
@@ -941,7 +942,7 @@ bool FAssetDocumentMetaSoundFromScratchTest::RunTest(const FString& Parameters)
 		Case.Edit(Document);
 		ExpectRefused(*this, Synth, Document, Case.Code, Case.Path, Case.Stage);
 	}
-	// Trial 7: a Float into UE.Multiply.Audio's AdditionalOperands; the refusal names the variant of the same node
+	// A Float into UE.Multiply.Audio's AdditionalOperands: the refusal names the variant of the same node
 	// that takes it (UE.Multiply.Audio by Float), not only a converter.
 	{
 		const TSharedPtr<FJsonObject> Document = Parse(Serialize(SynthDocument));

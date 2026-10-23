@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Primitive failures keep the primitive id out of the public message (it goes to context/details)."""
 import json
 import unittest

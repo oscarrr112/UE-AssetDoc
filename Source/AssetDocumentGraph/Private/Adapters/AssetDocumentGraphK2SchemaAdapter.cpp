@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // K2 (Blueprint) schema adapter: action keys over FBlueprintActionDatabase,
 // spawn through UBlueprintNodeSpawner::Invoke, node description, user pins,

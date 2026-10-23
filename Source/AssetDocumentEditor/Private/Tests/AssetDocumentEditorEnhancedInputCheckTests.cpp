@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The generic profile's Enhanced Input checks (editor.enhanced_input.check_domain.v1): warnings
 // from Validate and Apply, never refusals (the editor allows all of these):

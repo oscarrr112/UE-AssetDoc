@@ -1,4 +1,7 @@
-"""Niagara scripts and scratch pads (N4): Body checks, the semantic Diff, the script op planner, the graph codec and
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Niagara scripts and scratch pads: Body checks, the semantic Diff, the script op planner, the graph codec and
 the script Apply's call sequence against a fake runtime (dependents, exposed version rule, compile failure path).
 The editor side is covered by UEAssetDoc.Niagara.Script* in the editor."""
 from __future__ import annotations

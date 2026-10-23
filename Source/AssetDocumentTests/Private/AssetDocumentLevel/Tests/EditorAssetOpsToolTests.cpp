@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Asset tools (AssetOps/EditorAssetOps.h): save_assets, reload_assets, asset_editor, export_assets.
 //
@@ -11,9 +12,14 @@
 //     texture as still compiling.
 //   AssetEditor: open / list / close of an asset's editor.
 //   ExportAssets: a sound to .wav and a texture to .png with the engine's exporters; an existing file
-//     needs overwrite; a folder outside the project is refused; a class without a default names formats.
+//     needs overwrite; a folder outside the project is refused, as are a '..' segment and a project folder
+//     that links out of the project; a class without a default names formats.
+//   ExportAssetsLinkedFile: in a valid export folder, an export file that is a link to a file outside the project
+//     is refused, also with overwrite, and the outside file is unchanged; so is a file the exporter writes beside the
+//     main one (a static mesh's lightmap-UV OBJ); once the link is gone the same exports write their files.
 
 #include "AssetDocumentAssetDelete.h"
+#include "AssetDocumentPathsTestSupport.h"
 #include "AssetImportTestSupport.h"
 #include "AssetOps/EditorAssetOps.h"
 #include "AssetToolsModule.h"
@@ -460,9 +466,132 @@ bool FAssetDocumentAssetOpsExportAssetsTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("a folder outside the project is refused"), RunTool(*this, &RunExportAssets, FString::Printf(
 		TEXT(R"({"assets": ["%s"], "folder": "../Outside"})"), *AssetPath(Sound)), TEXT("outside")).HttpStatus, 400);
+	TestEqual(TEXT("a '..' segment is refused"), RunTool(*this, &RunExportAssets, FString::Printf(
+		TEXT(R"({"assets": ["%s"], "folder": "%s/../Up"})"), *AssetPath(Sound), *Folder), TEXT("parent segment")).HttpStatus, 400);
+	{
+		// A folder in the project that links out of it: the files would land outside.
+		using namespace AssetDocumentPathsTestSupport;
+		const FString Outside = MakeOutsideDirectory(TEXT("Export"));
+		const FString Link = FullFolder / TEXT("out");
+		ON_SCOPE_EXIT
+		{
+			RemoveDirectoryLink(Link);
+			IFileManager::Get().DeleteDirectory(*Outside, false, true);
+		};
+		if (TestTrue(TEXT("a linked export folder"), MakeDirectoryLink(Link, Outside)))
+		{
+			const FLevelToolResult Linked = RunTool(*this, &RunExportAssets, FString::Printf(TEXT(R"({"assets": ["%s"], "folder": "%s/out"})"),
+				*AssetPath(Sound), *Folder), TEXT("linked out"));
+			TestEqual(TEXT("a folder that links out of the project is refused"), Linked.HttpStatus, 400);
+			TestFalse(TEXT("nothing is written outside the project"), IFileManager::Get().FileExists(*(Outside / TEXT("SFX_Beep.wav"))));
+			const FLevelToolResult Below = RunTool(*this, &RunExportAssets, FString::Printf(TEXT(R"({"assets": ["%s"], "folder": "%s/out/Audio"})"),
+				*AssetPath(Sound), *Folder), TEXT("below the link"));
+			TestEqual(TEXT("a new folder below that link is refused"), Below.HttpStatus, 400);
+			TestFalse(TEXT("no folder is made outside the project"), IFileManager::Get().DirectoryExists(*(Outside / TEXT("Audio"))));
+		}
+	}
 	const FLevelToolResult NoFormat = RunTool(*this, &RunExportAssets, FString::Printf(TEXT(R"({"assets": ["%s"], "folder": "%s",
 		"format": "fbx"})"), *AssetPath(Sound), *Folder), TEXT("no exporter"));
 	TestTrue(TEXT("Assets.NoExporter"), !NoFormat.bSuccess && HasCode(NoFormat, TEXT("Assets.NoExporter")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAssetOpsExportAssetsLinkedFileTest, "UEAssetDoc.AssetOps.ExportAssetsLinkedFile",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentAssetOpsExportAssetsLinkedFileTest::RunTest(const FString& Parameters)
+{
+	using namespace AssetDocumentAssetOpsToolTests;
+	using namespace AssetDocumentImportTests;
+	using namespace AssetDocumentPathsTestSupport;
+	FScopedImportTest Scope;
+	const FString Png = Scope.Source(TEXT("T_Linked.png"));
+	if (!TestTrue(TEXT("source written"), WriteImage(Png, 16, 8)))
+	{
+		return false;
+	}
+	const TSharedPtr<FJsonObject> Texture = ResultAsset(RunImport(*this, FString::Printf(TEXT(R"({"files": [%s], "destination": "%s"})"),
+		*Quote(Png), *Scope.Folder(TEXT("Src"))), TEXT("import")), TEXT("Texture2D"));
+	if (!TestTrue(TEXT("imported"), Texture.IsValid()))
+	{
+		return false;
+	}
+	const FString Folder = TEXT("Saved/AssetDocumentServerTests/ExportLinked/") + FGuid::NewGuid().ToString(EGuidFormats::Digits).Left(12);
+	const FString FullFolder = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / Folder);
+	const FString Outside = MakeOutsideDirectory(TEXT("ExportLeaf"));
+	ON_SCOPE_EXIT
+	{
+		IFileManager::Get().DeleteDirectory(*FullFolder, false, true);
+		IFileManager::Get().DeleteDirectory(*Outside, false, true);
+	};
+	const FString OutsideText = TEXT("a file outside the project");
+	const auto OutsideUnchanged = [this, &OutsideText](const FString& File, const TCHAR* What)
+	{
+		FString Text;
+		TestTrue(What, FFileHelper::LoadFileToString(Text, *File) && Text == OutsideText);
+	};
+
+	// The file named for the asset links out of the project.
+	const FString Victim = Outside / TEXT("victim.png");
+	const FString Leaf = FullFolder / TEXT("Textures") / TEXT("T_Linked.png");
+	TestTrue(TEXT("an outside file"), FFileHelper::SaveStringToFile(OutsideText, *Victim));
+	const FString TextureRequest = FString::Printf(TEXT(R"({"assets": ["%s"], "folder": "%s/Textures", "overwrite": true})"),
+		*AssetPath(Texture), *Folder);
+	if (!MakeFileLink(Leaf, Victim))
+	{
+		AddInfo(TEXT("this system does not let the test make a file link; the linked-file checks are skipped"));
+		return true;
+	}
+	const FLevelToolResult Linked = RunTool(*this, &RunExportAssets, TextureRequest, TEXT("leaf links out"));
+	TestTrue(TEXT("a file that links out of the project is refused, also with overwrite"), !Linked.bSuccess
+		&& HasCode(Linked, TEXT("Assets.FileOutsideProject")));
+	OutsideUnchanged(Victim, TEXT("the outside file is unchanged"));
+	RemoveFileLink(Leaf);
+	const FLevelToolResult Plain = RunTool(*this, &RunExportAssets, TextureRequest, TEXT("no link"));
+	TestTrue(TEXT("without the link the texture exports"), Plain.bSuccess && IFileManager::Get().FileSize(*Leaf) > 8);
+	OutsideUnchanged(Victim, TEXT("the outside file is still unchanged"));
+
+	// A file the exporter writes beside the main one: the static mesh OBJ exporter writes <Name>_UV1.obj (the
+	// lightmap UVs) next to <Name>.obj.
+	const FString Cube = TEXT("/Engine/BasicShapes/Cube.Cube");
+	const FString MeshRequest = FString::Printf(TEXT(R"({"assets": ["%s"], "folder": "%s/Meshes", "format": "obj", "overwrite": true})"),
+		*Cube, *Folder);
+	const FLevelToolResult Probe = RunTool(*this, &RunExportAssets, MeshRequest, TEXT("mesh"));
+	const FString Beside = FullFolder / TEXT("Meshes") / TEXT("Cube_UV1.obj");
+	if (!TestTrue(TEXT("the cube exports to OBJ"), Probe.bSuccess) || !IFileManager::Get().FileExists(*Beside))
+	{
+		AddInfo(TEXT("the OBJ exporter wrote no lightmap-UV file; the check of files beside the main one is skipped"));
+		return true;
+	}
+	bool bListed = false;
+	const TArray<TSharedPtr<FJsonValue>>* Rows = nullptr;
+	if (Probe.Payload.IsValid() && Probe.Payload->TryGetArrayField(TEXT("exported"), Rows) && Rows->Num() == 1)
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Written = nullptr;
+		if ((*Rows)[0]->AsObject()->TryGetArrayField(TEXT("files"), Written))
+		{
+			bListed = Written->ContainsByPredicate([](const TSharedPtr<FJsonValue>& Value) { return Value->AsString().EndsWith(TEXT("/Cube_UV1.obj")); });
+		}
+	}
+	TestTrue(TEXT("the result lists the file written beside the main one"), bListed);
+	IFileManager::Get().Delete(*Beside);
+	const FString BesideVictim = Outside / TEXT("victim_UV1.obj");
+	TestTrue(TEXT("another outside file"), FFileHelper::SaveStringToFile(OutsideText, *BesideVictim));
+	if (TestTrue(TEXT("a file link beside the main file"), MakeFileLink(Beside, BesideVictim)))
+	{
+		IFileManager::Get().Delete(*(FullFolder / TEXT("Meshes") / TEXT("Cube.obj")));
+		const FLevelToolResult BesideLinked = RunTool(*this, &RunExportAssets, MeshRequest, TEXT("beside links out"));
+		TestTrue(TEXT("an export whose extra file links out of the project is refused"), !BesideLinked.bSuccess
+			&& HasCode(BesideLinked, TEXT("Assets.FileOutsideProject")));
+		OutsideUnchanged(BesideVictim, TEXT("the outside file the extra file links to is unchanged"));
+		TestFalse(TEXT("nothing of that export is written"), IFileManager::Get().FileExists(*(FullFolder / TEXT("Meshes") / TEXT("Cube.obj"))));
+		RemoveFileLink(Beside);
+	}
+	TArray<FString> Left;
+	IFileManager::Get().FindFilesRecursive(Left, *FullFolder, TEXT("*"), false, true);
+	TestFalse(TEXT("no export folder is left behind"), Left.ContainsByPredicate([](const FString& Directory)
+	{
+		return FPaths::GetCleanFilename(Directory).StartsWith(TEXT(".export-"));
+	}));
 	return true;
 }
 #endif

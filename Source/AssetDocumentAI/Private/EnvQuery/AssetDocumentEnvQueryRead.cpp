@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // ai.env_query.read.v1: the query as the Environment Query editor shows it (records, paged like ai.state_tree.read.v1).
 // A query without graph is read as the editor's first open would build it (Root at 0,0; option i at (300·i, 100),

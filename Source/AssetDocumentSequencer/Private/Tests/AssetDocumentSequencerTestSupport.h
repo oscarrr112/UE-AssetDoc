@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Shared fixtures of the Sequencer automation tests: /Game targets, the corpus (design §6.1: template folders copied into
 // /Game at their own paths, as creating a project from the template does, so the sequences' references and locators

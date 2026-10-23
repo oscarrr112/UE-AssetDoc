@@ -1,6 +1,5 @@
 # AssetDocument SoundCue profile: design
 
-Status: design only, 2026-10-06. No product code.
 Governing rules: [design rules](asset-document-design-rules.md) §3 (rollback = functional
 equivalence), §3.1 (Undo history), §4 (editor-equivalent code; raw paths only where the editor does the same, in their
 own file with a behaviour test; no private headers, no unexported symbols) and §5 (support matrix); the shared graph
@@ -223,7 +222,7 @@ Python: `profiles/sound_cue.py` (regions, keys, `Inputs` ↔ pin index, per-chil
 - **Create.** Generic factory lifecycle with `USoundCueFactoryNew` (no dialog; `InitialSoundWaves` empty → an empty
   cue whose `PostInitProperties` made the graph and Root). The Content Browser's "Create Cue" from selected waves
   (one wave → a player wired to Root; several → a Random over players) is just a document the AI writes; Inspect on
-  a SoundWave could later suggest it, not needed now.
+  a SoundWave could suggest it; not needed.
 - **Open editor.** A cue open in the Sound Cue editor is edited in place. The editor works on the real asset; after
   the apply (or its rollback) the editor is refreshed as after its own Undo: selection cleared (the schema's
   `ConnectToSelectedNodes` reacts to it) and `NotifyGraphChanged` (test `SoundCue.OpenEditorApply`).
@@ -331,43 +330,31 @@ Undo test: human edit in the Sound Cue editor, save, AI apply, Ctrl+Z behaviour 
   `UpToDate`; the cue is playable (`IsPlayable`, `Duration` > 0). Then error cases at document paths with rollback:
   unknown class, cycle, 33 inputs, Branch with 2 inputs, `Weights` length mismatch, unknown key in `Inputs`, a Delay
   with no slot, a wave path that is not a SoundWave.
-- **Black-box trial** (MCP tools + schema section only): "make a footstep cue with 4 random variations and slight
+- **AI from scratch, black-box** (MCP tools + schema section only): "make a footstep cue with 4 random variations and slight
   pitch variation", "add distance-based crossfade between a near and a far loop", "add a looping ambience with a
   random one-shot layer mixed in".
 
-## 7. Risks, unknowns and phases
+## 7. Risks and unknowns
 
-### 7.1 Risks
-
-| Risk | Effect | Answer |
+| Risk | Effect | Handling |
 |---|---|---|
 | Node delete lives in the private `FSoundCueEditor` | same result needed | small isolated raw file (`BreakAllNodeLinks`, `FBlueprintEditorUtils::RemoveNode`, `AllNodes.Remove`, compile) + behaviour test against the editor's own delete |
 | Rename of sound node objects to keys is not something the editor does | unusual object names | Material already does it; names are only identity; behaviour test covers save / reload / duplicate / play |
 | `InsertChildNode` overrides (Mixer, Concatenator) grow their arrays even when the base refuses past 32 | array / child mismatch | we never call `InsertChildNode` directly: pins change through `AddInputPin` (guarded by `CanAddInputPin`) and compile; the 32 limit is checked in Python first |
 | Quality Level child count depends on project settings | documents not portable between projects | validated against the current settings (`SoundCue.ChildCount` names the levels); Inspect lists them |
-| `PerformAction` reacts to the editor's selection | spurious links | open editors refused until S2; spawn never passes a `FromPin` |
+| `PerformAction` reacts to the editor's selection | spurious links | an open editor is edited in place and refreshed with its selection cleared; spawn never passes a `FromPin` |
 | Thin real corpus (4 node types; 3 cues need non-default plugins) | coverage | editor-built fixtures cover every node class; plugins optional (§8) |
-| Graph-primitive gaps (positional pins, a property container other than `template`) | contract change | `input_pins` extras and the `sound_node` container are additive (adapter-specific values the contract already allows); `graph.node.rename.v1` meaning for SoundCue documented in the contract's adapter section (Root approval needed per the contract header) |
-
-### 7.2 Phases (each independently mergeable)
-
-| Phase | Content | Acceptance |
-|---|---|---|
-| **S0 adapters + read** | schema + host adapters in `AssetDocumentAudio`, `graph.*` read paths for cues, Python Extract / Inspect / Diff (Apply refused `SoundCue.ReadOnly`), node-class discovery, compile-status describer | extract stable on #1–#8 and the fixtures; `graph.query.v1` snapshots of the fixtures match the editor's pins |
-| **S1 apply** | all regions, spawn / connect / break / dynamic pins / remove / rename / properties / layout / comments, finalize + validation, rebuilder, open-editor refusal, create through the factory | §6.2 on all assets; §6.3 edits; §6.4 Python test; rollback after a failed validation and a failed connect; Undo test |
-| **S2 AI surface** | `MCP/schemas/assetdocument/SoundCue.md`, apply into an open Sound Cue editor (refresh with `NotifyGraphChanged`) if decided, black-box trial | §6.4 trial; matrix approved |
+| Graph-primitive gaps (positional pins, a property container other than `template`) | contract change | `input_pins` extras and the `sound_node` container are additive (adapter-specific values the contract already allows); `graph.node.rename.v1` meaning for SoundCue documented in the contract's adapter section (§5); like any contract change it updates the C++ provider, the Python graph model and the graph DTO fixtures together, as the contract's header requires |
 
 ## 8. Decisions
-
-Decided by Root / the user on 2026-10-06 (recorded with S0 / S1):
 
 1. **Node identity = the sound node's object name**, renamed to the document key on create (as Material names its
    expressions); graph `NodeGuid`s are neither keys nor emitted. Comment boxes: the comment node's object name.
 2. **Inputs are positional**: `Inputs` has one entry per input pin (child slot), never pin names.
 3. **Corpus plugins**: `NetworkPredictionExtras` is enabled in the test sandboxes; `VirtualScouting` is optional
    (its cues run when mounted). Node coverage comes from the editor-built fixtures.
-4. **Graph contract additions approved**: the `sound_node` property container, the `input_pins` / `child_limits` /
+4. **Graph contract additions**: the `sound_node` property container, the `input_pins` / `child_limits` /
    `reachable` extras, and the SoundCue meaning of `graph.node.rename.v1` (rename the identity object; the shared
    handler asks the schema adapter first through `IAssetDocumentGraphSchemaAdapter::RenameNode`). Input pin *i* also
    answers to the pin alias `"#<i>"` (direction input).
-5. **Open-editor apply** is in place plus the editor's Undo refresh (`SoundCue.OpenEditorApply`).
+5. **Open-editor apply** is done in place, followed by the editor's Undo refresh (`SoundCue.OpenEditorApply`).

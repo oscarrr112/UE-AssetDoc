@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Top-level Properties of the exact profiles (data_table_common.PropertiesRegion): names a profile owns
 (Body-owned, editor state, not extracted, derived) are never read through the generic property codec, so
 Extract, Diff and the save's fresh verification read the same set and a Body-owned value larger than one

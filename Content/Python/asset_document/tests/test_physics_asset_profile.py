@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Physics Asset Profile: assembling the Body from the physics.asset.read.v1 records, canonical form, Diff, and the
 apply planner (phases, profile renames, refusals, validation outcome, error paths). The editor side (read, edit
 primitive, status, fidelity on the corpus) is covered by UEAssetDoc.PhysicsAsset.*."""

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "Runtime/AssetDocumentAuthorityExceptionRegistry.h"
 
@@ -62,8 +63,8 @@ static_assert(std::is_same_v<decltype(&IsAssetDocumentAuthorityTransitionAllowed
 static_assert(std::is_same_v<decltype(&FindAssetDocumentAuthorityCandidateRecord), FFindCandidateSignature>);
 static_assert(std::is_same_v<decltype(&FindAssetDocumentAuthorityReviewRecord), FFindReviewSignature>);
 static_assert(std::is_same_v<decltype(&ValidateAssetDocumentAuthorityExceptionCatalog), FValidateCatalogSignature>);
-static_assert(std::is_same_v<decltype(&GetG1FrozenAuthorityExceptionRecords), FGetFrozenSignature>);
-static_assert(std::is_same_v<decltype(&ValidateG1FrozenAuthorityExceptionRecords), FValidateFrozenSignature>);
+static_assert(std::is_same_v<decltype(&GetFrozenAuthorityExceptionRecords), FGetFrozenSignature>);
+static_assert(std::is_same_v<decltype(&ValidateFrozenAuthorityExceptionRecords), FValidateFrozenSignature>);
 
 struct FFrozenExpectation
 {
@@ -87,7 +88,7 @@ static const FFrozenExpectation FrozenExpectations[] = {
 		TEXT("UMG-DESIGNER-BINDING-APPLY-DELTA-v1"), EAssetDocumentPrimitiveOwner::UMG,
 		EAssetDocumentIndependentVerdict::Rework, EAssetDocumentAuthorityState::NeedsMoreEvidence,
 		TEXT("(WidgetName, PropertyName)-identified Designer Binding add/update/remove"), TEXT(""),
-		TEXT("p-umg-provider-owner"),
+		TEXT("umg-provider-owner"),
 		TEXT("Freeze binding permission, extension policy, derived GUID, typed DTO/symbol, rollback, compile, and fresh-load evidence before independent re-review."), TEXT(""),
 		TEXT("candidate-review.rereview/UMG-DESIGNER-BINDING-APPLY-DELTA-v1"),
 		TEXT("umg-authority-exception-candidate-rereviewer"),
@@ -99,7 +100,7 @@ static const FFrozenExpectation FrozenExpectations[] = {
 		EAssetDocumentIndependentVerdict::Pass, EAssetDocumentAuthorityState::CandidateApproved,
 		TEXT("one UWidgetAnimation plus owned UMovieScene creation and installation"),
 		TEXT("AssetDocumentUMG::CreateWidgetAnimationHelperFirst"),
-		TEXT("p-umg-provider-owner"), TEXT(""),
+		TEXT("umg-provider-owner"), TEXT(""),
 		TEXT("Replace with an exported UMGEditor CreateWidgetAnimation lifecycle helper when available; no bridge is admitted."),
 		TEXT("candidate-review.initial/UMG-WIDGET-ANIMATION-CREATE-v1"),
 		TEXT("authority-exception-candidate-reviewer"),
@@ -110,7 +111,7 @@ static const FFrozenExpectation FrozenExpectations[] = {
 		TEXT("UMG-WIDGET-ANIMATION-DELETE-v1"), EAssetDocumentPrimitiveOwner::UMG,
 		EAssetDocumentIndependentVerdict::Rework, EAssetDocumentAuthorityState::NeedsMoreEvidence,
 		TEXT("one installed WidgetAnimation removal and variable/compile lifecycle"), TEXT(""),
-		TEXT("p-umg-provider-owner"),
+		TEXT("umg-provider-owner"),
 		TEXT("Freeze referenced-animation policy, transient GC retention, rollback order, typed DTO/symbol, compile, and fresh-load evidence before independent re-review."), TEXT(""),
 		TEXT("candidate-review.rereview/UMG-WIDGET-ANIMATION-DELETE-v1"),
 		TEXT("umg-authority-exception-candidate-rereviewer"),
@@ -121,7 +122,7 @@ static const FFrozenExpectation FrozenExpectations[] = {
 		TEXT("UMG-ANIMATION-BINDING-APPLY-DELTA-v1"), EAssetDocumentPrimitiveOwner::UMG,
 		EAssetDocumentIndependentVerdict::Reject, EAssetDocumentAuthorityState::CandidateRejected,
 		TEXT("MovieScene possessable to Widget/root/slot binding add/update/remove"), TEXT(""),
-		TEXT("p-umg-provider-owner"), TEXT(""), TEXT(""),
+		TEXT("umg-provider-owner"), TEXT(""), TEXT(""),
 		TEXT("candidate-review.initial/UMG-ANIMATION-BINDING-APPLY-DELTA-v1"),
 		TEXT("authority-exception-candidate-reviewer"),
 		TEXT("e06474f8da5605da77cbad596ba6ea1c0014d79ede162b68b0c96f546f64009a"),
@@ -132,7 +133,7 @@ static const FFrozenExpectation FrozenExpectations[] = {
 		EAssetDocumentIndependentVerdict::Pass, EAssetDocumentAuthorityState::CandidateApproved,
 		TEXT("one Timeline track lifecycle, distinct from template lifecycle and key replacement"),
 		TEXT("AssetDocumentBlueprint::ApplyTimelineTrackDeltaHelperFirst"),
-		TEXT("p-blueprint-provider-owner"), TEXT(""),
+		TEXT("blueprint-provider-owner"), TEXT(""),
 		TEXT("Replace with an exported UnrealEd/Kismet Timeline track lifecycle helper when available; no bridge is admitted."),
 		TEXT("candidate-review.initial/BLUEPRINT-TIMELINE-TRACK-APPLY-DELTA-v1"),
 		TEXT("authority-exception-candidate-reviewer"),
@@ -143,7 +144,7 @@ static const FFrozenExpectation FrozenExpectations[] = {
 		TEXT("BLUEPRINT-TIMELINE-CURVE-APPLY-KEYS-v1"), EAssetDocumentPrimitiveOwner::Blueprint,
 		EAssetDocumentIndependentVerdict::Reject, EAssetDocumentAuthorityState::CandidateRejected,
 		TEXT("key replacement on an already resolved owned Timeline curve"), TEXT(""),
-		TEXT("p-blueprint-provider-owner"), TEXT(""), TEXT(""),
+		TEXT("blueprint-provider-owner"), TEXT(""), TEXT(""),
 		TEXT("candidate-review.initial/BLUEPRINT-TIMELINE-CURVE-APPLY-KEYS-v1"),
 		TEXT("authority-exception-candidate-reviewer"),
 		TEXT("e06474f8da5605da77cbad596ba6ea1c0014d79ede162b68b0c96f546f64009a"),
@@ -167,18 +168,18 @@ static const FBridgeExpectation BridgeExpectations[] = {
 		TEXT("AD.AI.BLACKBOARD.KEYTYPE-STAGING-v1"),
 		TEXT("One NewObject<UBlackboardKeyType> staging/materialization callsite for add and replace-class only."),
 		TEXT("AssetDocumentAIBlackboardStructuralPublication::StageKeyType"),
-		TEXT("/root/main_keytype_candidate_review"),
+		TEXT("blackboard-keytype-candidate-reviewer"),
 		TEXT("d53888bc04f986eb835e442e7fa87389700a1e9fe8f4b465c11ed6fef38b6d65"),
-		TEXT("/root/main_keytype_bridge_review"),
+		TEXT("blackboard-keytype-bridge-reviewer"),
 		TEXT("7ecd0a82233442960c4097248442eb0aa6aca0c0287af98ace9490fd6b8c4217"),
 	},
 	{
 		TEXT("AD.AI.BLACKBOARD.LOCAL-KEYS-PUBLICATION-v1"),
 		TEXT("One complete UBlackboardData::Keys snapshot publication callsite for the four v2 rows and the exact immutable v1 compatibility caller."),
 		TEXT("AssetDocumentAIBlackboardStructuralPublication::PublishLocalKeysSnapshot"),
-		TEXT("/root/main_local_keys_candidate_review"),
+		TEXT("blackboard-local-keys-candidate-reviewer"),
 		TEXT("c67dc7df1cf67317bf9e10e1f1ff41a2d07a8b329d4081406806be5cbcd60746"),
-		TEXT("/root/main_local_keys_bridge_review"),
+		TEXT("blackboard-local-keys-bridge-reviewer"),
 		TEXT("66f0e1194458077c4ae50c3150e5b9556a383d85d32b08efddd3dd6153debd5d"),
 	},
 };
@@ -276,8 +277,8 @@ void TestFrozenExpectation(
 	Test.TestEqual(TEXT("P: state is exact"), Candidate->State, Expected.State);
 	Test.TestEqual(TEXT("P: reviewed surface is exact"), Candidate->ExactSurface, FString(Expected.Surface));
 	Test.TestEqual(TEXT("P: implementation symbol is exact"), Candidate->ImplementationSymbol, FString(Expected.ImplementationSymbol));
-	Test.TestEqual(TEXT("P: researcher identity is exact"), Candidate->ResearcherId, FString(TEXT("w0-umg-candidate-researcher")));
-	Test.TestEqual(TEXT("P: implementer identity is exact"), Candidate->ImplementerId, FString(TEXT("g1-contract-owner")));
+	Test.TestEqual(TEXT("P: researcher identity is exact"), Candidate->ResearcherId, FString(TEXT("umg-candidate-researcher")));
+	Test.TestEqual(TEXT("P: implementer identity is exact"), Candidate->ImplementerId, FString(TEXT("contract-owner")));
 	Test.TestEqual(TEXT("P: provider owner identity is exact"), Candidate->ProviderOwnerId, FString(Expected.ProviderOwnerId));
 	Test.TestEqual(TEXT("P: resubmission condition is exact"), Candidate->ResubmissionCondition, FString(Expected.ResubmissionCondition));
 	Test.TestEqual(TEXT("P: helper replacement condition is exact"), Candidate->HelperReplacementCondition, FString(Expected.HelperReplacementCondition));
@@ -339,23 +340,53 @@ void TestFrozenBridgeExpectation(
 	Test.TestEqual(TEXT("P: candidate review kind is exact"), CandidateReview->ReviewKind, EAssetDocumentAuthorityReviewKind::Candidate);
 	Test.TestEqual(TEXT("P: candidate review verdict is Pass"), CandidateReview->Verdict, EAssetDocumentIndependentVerdict::Pass);
 	Test.TestEqual(TEXT("P: candidate review state is CandidateApproved"), CandidateReview->ReviewedState, EAssetDocumentAuthorityState::CandidateApproved);
-	Test.TestEqual(TEXT("P: candidate reviewer is the eligible Task-2 reviewer"), CandidateReview->ReviewerId, FString(Expected.CandidateReviewerId));
+	Test.TestEqual(TEXT("P: candidate reviewer is the eligible reviewer"), CandidateReview->ReviewerId, FString(Expected.CandidateReviewerId));
 	Test.TestEqual(TEXT("P: candidate review evidence digest is exact"), CandidateReview->EvidenceHash, FString(Expected.CandidateEvidenceHash));
 	Test.TestEqual(TEXT("P: candidate review head is exact"), CandidateReview->ReviewedHead, FString(TEXT("aebdffa6c30242629d4cd0df6156fc9e23eadc68")));
 	Test.TestEqual(TEXT("P: bridge review kind is exact"), BridgeReview->ReviewKind, EAssetDocumentAuthorityReviewKind::Bridge);
 	Test.TestEqual(TEXT("P: bridge review verdict is Pass"), BridgeReview->Verdict, EAssetDocumentIndependentVerdict::Pass);
 	Test.TestEqual(TEXT("P: bridge review state is BridgeAdmitted"), BridgeReview->ReviewedState, EAssetDocumentAuthorityState::BridgeAdmitted);
-	Test.TestEqual(TEXT("P: bridge reviewer is the distinct eligible Task-2 reviewer"), BridgeReview->ReviewerId, FString(Expected.BridgeReviewerId));
+	Test.TestEqual(TEXT("P: bridge reviewer is the distinct eligible reviewer"), BridgeReview->ReviewerId, FString(Expected.BridgeReviewerId));
 	Test.TestEqual(TEXT("P: bridge review evidence digest is exact"), BridgeReview->EvidenceHash, FString(Expected.BridgeEvidenceHash));
 	Test.TestEqual(TEXT("P: bridge review head is exact"), BridgeReview->ReviewedHead, FString(TEXT("aebdffa6c30242629d4cd0df6156fc9e23eadc68")));
 	Test.TestNotEqual(TEXT("P: candidate and bridge reviewers are distinct"), CandidateReview->ReviewerId, BridgeReview->ReviewerId);
 }
 
+// A role identity in the catalog is a lowercase hyphenated role name ("montage-source-reviewer"): a stable name a
+// reader can understand, never a path or a team-internal code.
+bool IsRoleName(const FString& Identity)
+{
+	if (Identity.IsEmpty() || Identity.StartsWith(TEXT("-")) || Identity.EndsWith(TEXT("-")) || Identity.Contains(TEXT("--")))
+	{
+		return false;
+	}
+	for (const TCHAR Char : Identity)
+	{
+		if (!(FChar::IsLower(Char) || FChar::IsDigit(Char) || Char == TEXT('-')))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+void TestFrozenRoleNames(FAutomationTestBase& Test, const FAssetDocumentAuthorityCandidateRecord& Candidate)
+{
+	for (const FString* Identity : {&Candidate.ResearcherId, &Candidate.ImplementerId, &Candidate.ProviderOwnerId})
+	{
+		Test.TestTrue(*FString::Printf(TEXT("P: %s role identity '%s' is a role name"), *Candidate.GovernanceId, **Identity), IsRoleName(*Identity));
+	}
+	for (const FAssetDocumentAuthorityReviewRecord& Review : Candidate.Reviews)
+	{
+		Test.TestTrue(*FString::Printf(TEXT("P: %s reviewer '%s' is a role name"), *Review.ReviewId, *Review.ReviewerId), IsRoleName(Review.ReviewerId));
+	}
+}
+
 void TestFrozenCatalog(FAutomationTestBase& Test)
 {
-	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Catalog = GetG1FrozenAuthorityExceptionRecords();
+	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Catalog = GetFrozenAuthorityExceptionRecords();
 	Test.TestEqual(TEXT("P: frozen catalog contains fifteen governance rows"), Catalog.Num(), 15);
-	Test.TestTrue(TEXT("P: frozen catalog validates"), ValidateG1FrozenAuthorityExceptionRecords().bValid);
+	Test.TestTrue(TEXT("P: frozen catalog validates"), ValidateFrozenAuthorityExceptionRecords().bValid);
 	Test.TestTrue(TEXT("P: generic validator accepts the frozen catalog"), ValidateAssetDocumentAuthorityExceptionCatalog(Catalog).bValid);
 	Test.TestNull(TEXT("P: unknown governance id is absent"), FindAssetDocumentAuthorityCandidateRecord(Catalog, TEXT("UMG-UNKNOWN-v1")));
 	int32 Approved = 0;
@@ -368,6 +399,7 @@ void TestFrozenCatalog(FAutomationTestBase& Test)
 		NeedsEvidence += Candidate.State == EAssetDocumentAuthorityState::NeedsMoreEvidence;
 		Rejected += Candidate.State == EAssetDocumentAuthorityState::CandidateRejected;
 		BridgeAdmitted += Candidate.State == EAssetDocumentAuthorityState::BridgeAdmitted;
+		TestFrozenRoleNames(Test, Candidate);
 		Test.TestEqual(TEXT("P: only four exact approved AI governance ids contain dots"),
 			Candidate.GovernanceId.Contains(TEXT(".")), (IsExpectedBridgeGovernanceId(Candidate.GovernanceId)
              || Candidate.GovernanceId == TEXT("AD.AI.BT.GRAPH_INSTALL.v1")
@@ -406,15 +438,15 @@ void TestFrozenCatalog(FAutomationTestBase& Test)
  if (Catalog.Num() == 15)
  {
   const auto& C = Catalog[10];
-  Test.TestEqual(TEXT("C0 exact append identity"), C.GovernanceId, FString(TEXT("ANIMATION-FLOAT-CURVE-EXACT-STATE-v1")));
-  Test.TestEqual(TEXT("C0 physical owner"), C.PhysicalOwner, EAssetDocumentPrimitiveOwner::Animation);
-  Test.TestEqual(TEXT("C0 actual source reviews"), C.Reviews.Num(), 2);
+  Test.TestEqual(TEXT("exact append identity"), C.GovernanceId, FString(TEXT("ANIMATION-FLOAT-CURVE-EXACT-STATE-v1")));
+  Test.TestEqual(TEXT("physical owner"), C.PhysicalOwner, EAssetDocumentPrimitiveOwner::Animation);
+  Test.TestEqual(TEXT("actual source reviews"), C.Reviews.Num(), 2);
   if (C.Reviews.Num() == 2)
   {
-   Test.TestNotEqual(TEXT("C0 reviewers differ"), C.Reviews[0].ReviewerId, C.Reviews[1].ReviewerId);
-   Test.TestEqual(TEXT("C0 candidate source head"), C.Reviews[0].ReviewedHead, FString(TEXT("1e3f186d5ee49e20d5a402026450dc1284d09942")));
-   Test.TestEqual(TEXT("C0 bridge source head"), C.Reviews[1].ReviewedHead, FString(TEXT("2ec1903b0672f82b1a45c928184bc2a1b5b8ccd0")));
-   Test.TestEqual(TEXT("C0 bridge review kind"), C.Reviews[1].ReviewKind, EAssetDocumentAuthorityReviewKind::Bridge);
+   Test.TestNotEqual(TEXT("reviewers differ"), C.Reviews[0].ReviewerId, C.Reviews[1].ReviewerId);
+   Test.TestEqual(TEXT("candidate source head"), C.Reviews[0].ReviewedHead, FString(TEXT("1e3f186d5ee49e20d5a402026450dc1284d09942")));
+   Test.TestEqual(TEXT("bridge source head"), C.Reviews[1].ReviewedHead, FString(TEXT("2ec1903b0672f82b1a45c928184bc2a1b5b8ccd0")));
+   Test.TestEqual(TEXT("bridge review kind"), C.Reviews[1].ReviewKind, EAssetDocumentAuthorityReviewKind::Bridge);
   }
  }
  for (int32 I = 11; I < FMath::Min(13, Catalog.Num()); ++I)
@@ -483,9 +515,9 @@ FAssetDocumentAuthorityCandidateRecord MakeSyntheticBridgeCandidate()
 	Candidate.ExactSurface = TEXT("intentional test-only bridge governance fixture");
 	Candidate.ImplementationSymbol = TEXT("AssetDocumentUMG::SyntheticBridgeFixture");
 	Candidate.State = EAssetDocumentAuthorityState::BridgeAdmitted;
-	Candidate.ResearcherId = TEXT("w0-umg-synthetic-researcher");
-	Candidate.ImplementerId = TEXT("p-umg-synthetic-implementer");
-	Candidate.ProviderOwnerId = TEXT("p-umg-synthetic-owner");
+	Candidate.ResearcherId = TEXT("umg-synthetic-researcher");
+	Candidate.ImplementerId = TEXT("umg-synthetic-implementer");
+	Candidate.ProviderOwnerId = TEXT("umg-synthetic-owner");
 	Candidate.HelperReplacementCondition = TEXT("Remove this fixture after the bridge evidence contract changes.");
 	Candidate.Reviews.Add(MakeReview(
 		TEXT("synthetic-candidate-review"), EAssetDocumentAuthorityReviewKind::Candidate,
@@ -744,7 +776,7 @@ void TestCatalogStateEvidenceRejections(FAutomationTestBase& Test)
 
 void TestFrozenReworkHistory(FAutomationTestBase& Test)
 {
-	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Catalog = GetG1FrozenAuthorityExceptionRecords();
+	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Catalog = GetFrozenAuthorityExceptionRecords();
 	static const TCHAR* ReworkedIds[] = {
 		TEXT("UMG-DESIGNER-BINDING-APPLY-DELTA-v1"),
 		TEXT("UMG-WIDGET-ANIMATION-DELETE-v1"),

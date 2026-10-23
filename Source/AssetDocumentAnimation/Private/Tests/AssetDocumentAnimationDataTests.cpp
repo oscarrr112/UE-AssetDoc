@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Animation data reads:
 // AnimationAssets.BoneSampling: sample_animation_bones (AnimData::SampleBones) returns bone and socket transforms of a

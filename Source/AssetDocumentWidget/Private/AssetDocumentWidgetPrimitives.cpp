@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Widget Blueprint primitives (provider "umg", owner UMG). Each handler does what the
 // Widget Blueprint editor does for the same edit (Palette drop, Hierarchy drag/delete,

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Tests/AssetDocumentSkeletonTestHarness.h"
 #include "Animation/AnimData/CurveIdentifier.h"
@@ -20,7 +21,7 @@ FOptions Options(const FString& Failure = {})
  O.ExtraRequirements.Add({Replace, 2, TEXT("animation_profile")});
  O.ExtraRequirements.Add({Enumerate, 2, TEXT("animation_profile")});
  // Reuse the real host, preparation, transaction and persistence. Authority
- // admission still comes from the production catalog consumed by S1.
+ // admission still comes from the production catalog consumed by the Skeleton caller.
  O.EntrySuffix = TEXT(R"PY(
 REPLACE = 'animation.curve.float.replace.v2'
 ENUMERATE = 'animation.curve.float.enumerate.v2'
@@ -32,7 +33,7 @@ _original_interpret = caller.interpret
 
 def curve_wire(value):
     # Canonical JSON adapters may supply integer-valued doubles. Every numeric
-    # leaf of C1's bit-preserving wire schema is an integer, never a float value.
+    # leaf of the bit-preserving curve wire schema is an integer, never a float value.
     if type(value) in (list, tuple):
         return [curve_wire(item) for item in value]
     if type(value) is dict:
@@ -81,8 +82,8 @@ class CurveDispatch(caller.SkeletonS1Dispatch):
         asset = context.handoff(source_handle=read, target_provider_id='animation', access='read_only')
         result = caller._invoke(context, ENUMERATE, {'curve_names': ()}, asset=asset)
         if curve_wire(result.value) != curves:
-            raise caller._error('Full C1 snapshot differs from authored curves.', 'CurveVerificationMismatch')
-        # Staged verify injection follows an actual successful C1 comparison.
+            raise caller._error('Full curve snapshot differs from authored curves.', 'CurveVerificationMismatch')
+        # Staged verify injection follows an actual successful snapshot comparison.
         super()._verify(request, context, properties, None)
 
 dispatch = CurveDispatch(dispatch.options)
@@ -233,7 +234,7 @@ bool Apply(FAutomationTestBase& T, FHarness& H, FFixture& F, int32 Variant)
  if (!T.TestTrue(TEXT("complete curve sidecar written"), F.Document(Variant))) return false;
  const auto Result = H.Apply(F.Base.Sidecar);
  for (const auto& D : Result.Diagnostics) T.AddInfo(D.Code + TEXT(": ") + D.Message);
- return T.TestTrue(TEXT("real C0 ApplyFile and C1 staged canonical verification commit"), Result.IsSuccess()) && Check(T, *F.Base.Montage, Variant);
+ return T.TestTrue(TEXT("real ApplyFile and staged canonical curve verification commit"), Result.IsSuccess()) && Check(T, *F.Base.Montage, Variant);
 }
 }
 

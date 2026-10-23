@@ -1,3 +1,6 @@
+// Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
+
 #include "Runtime/AssetDocumentRuntimeTypes.h"
 #include "Runtime/AssetDocumentPrimitiveProvider.h"
 #include "Runtime/AssetDocumentPrimitiveRegistry.h"
@@ -265,8 +268,8 @@ void ExerciseAllContractLinkAnchors(FAutomationTestBase& Test)
 	Test.TestFalse(TEXT("outcome validator links"), ValidateAssetDocumentPrimitiveOutcome(Invocation, Descriptor, Outcome).bValid);
 	Test.TestFalse(TEXT("empty registry freeze links"), ValidateAssetDocumentPrimitiveFreezeInput({}, {}, {}, {}).bValid);
 
-	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Catalog = GetG1FrozenAuthorityExceptionRecords();
-	Test.TestTrue(TEXT("frozen authority catalog links"), ValidateG1FrozenAuthorityExceptionRecords().bValid);
+	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Catalog = GetFrozenAuthorityExceptionRecords();
+	Test.TestTrue(TEXT("frozen authority catalog links"), ValidateFrozenAuthorityExceptionRecords().bValid);
 	Test.TestTrue(TEXT("generic authority validator links"), ValidateAssetDocumentAuthorityExceptionCatalog(Catalog).bValid);
 	const FAssetDocumentAuthorityCandidateRecord* Candidate = FindAssetDocumentAuthorityCandidateRecord(
 		Catalog, TEXTVIEW("UMG-WIDGET-ANIMATION-CREATE-v1"));

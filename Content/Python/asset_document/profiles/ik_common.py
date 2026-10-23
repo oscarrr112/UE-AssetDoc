@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared pieces of the IK Rig, IK Retargeter and Control Rig Profiles (route "rig_profile", provider "rig", AssetDocumentRig).
 
 Transport over the ``rig.*`` primitives, paged record reads, the Properties region (viewport / preview Details

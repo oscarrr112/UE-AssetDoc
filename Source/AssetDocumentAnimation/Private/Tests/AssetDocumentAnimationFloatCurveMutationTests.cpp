@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Provider/Curve/AssetDocumentAnimationFloatCurveOperations.h"
 #include "Provider/Curve/AssetDocumentAnimationFloatCurveExactState.h"
@@ -212,7 +213,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFloatCurveMutationDescriptorTest,
 bool FFloatCurveMutationDescriptorTest::RunTest(const FString&)
 {
  const auto D = MakeAnimationFloatCurveReplaceDescriptor();
- TestTrue(TEXT("bridge descriptor structurally validates; review is a separate gate"), ValidateAssetDocumentPrimitiveDescriptor(D).bValid);
+ TestTrue(TEXT("bridge descriptor structurally validates; review is separate"), ValidateAssetDocumentPrimitiveDescriptor(D).bValid);
  TestTrue(TEXT("exact curve descriptor"), IsFloatCurveReplaceAdmissionShape(D));
  auto Drift = D; Drift.Admission.GovernanceId = TEXT("unapproved");
  TestFalse(TEXT("governance drift rejected"), IsFloatCurveReplaceAdmissionShape(Drift));

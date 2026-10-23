@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // import_assets (POST /assetdoc/import), the Content Browser's Import / Reimport without UI:
 // UEAssetDoc.Import.StaticMesh.ObjAndFbx: OBJ and FBX static meshes with the import dialog's options
@@ -8,12 +9,14 @@
 // UEAssetDoc.Import.Texture.Formats: PNG, JPG, TGA and EXR textures; normal map, sRGB and
 //   compression options.
 // UEAssetDoc.Import.Sound.Wav: a WAV imports as a sound wave through the editor's sound factory.
-// UEAssetDoc.Import.Reimport: reimport from the changed source, from a new source, refusals.
-// UEAssetDoc.Import.Refusals: non-local, missing and unsupported sources, bad destinations, clashes,
-//   unknown options and pipeline settings.
+// UEAssetDoc.Import.Reimport: reimport from the changed source, from a new source, refusals (including a recorded
+//   source on a network share).
+// UEAssetDoc.Import.Refusals: non-local (URLs, network shares in every separator spelling, device paths), missing and
+//   unsupported sources, bad destinations, clashes, unknown options and pipeline settings.
 
 #include "Animation/AnimSequence.h"
 #include "Animation/Skeleton.h"
+#include "EditorFramework/AssetImportData.h"
 #include "AssetImportTestSupport.h"
 #include "Misc/EngineVersionComparison.h"
 #include "Engine/SkeletalMesh.h"
@@ -377,6 +380,34 @@ bool FAssetDocumentImportReimportTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("reimported from the recorded new source"), Again.bSuccess);
 	TestTrue(TEXT("four times the size"), FMath::IsNearlyEqual(FactSize(ResultAsset(Again, TEXT("StaticMesh")), 0), Size * 4.0, 0.01));
 
+	// A recorded source on a network share is refused like a given one, and nothing is imported.
+	UStaticMesh* const MeshAsset = LoadObject<UStaticMesh>(nullptr, *MeshPath);
+	if (TestNotNull(TEXT("the mesh asset"), MeshAsset) && TestNotNull(TEXT("its import data"), MeshAsset->GetAssetImportData()))
+	{
+		const FString Recorded = FString(TEXT("//server/share/")) + FPaths::GetCleanFilename(Bigger);
+		UAssetImportData* const ImportData = MeshAsset->GetAssetImportData();
+		TArray<FAssetImportInfo::FSourceFile> RecordedFiles;
+		RecordedFiles.Emplace(Recorded);
+		ImportData->SetSourceFiles(MoveTemp(RecordedFiles));
+		TArray<FString> Stored;
+		ImportData->ExtractFilenames(Stored);
+		AddInfo(FString::Printf(TEXT("recorded source on a share reads back as: %s"), Stored.IsEmpty() ? TEXT("(none)") : *Stored[0]));
+		TestTrue(TEXT("the share path is the recorded source"), Stored.Num() == 1 && Stored[0] == Recorded);
+		const FLevelToolResult OnShare = RunImport(*this, FString::Printf(TEXT(R"({"action": "reimport", "assets": ["%s"]})"), *MeshPath),
+			TEXT("recorded on a share"));
+		TestFalse(TEXT("a recorded network source is refused"), OnShare.bSuccess);
+		TestTrue(TEXT("Import.SourceNotLocal for the recorded source"), HasDiagnostic(OnShare, TEXT("Import.SourceNotLocal"),
+			TEXT("/assets/0")));
+		const FAssetDocumentDiagnostic* Diagnostic = OnShare.Diagnostics.FindByPredicate([](const FAssetDocumentDiagnostic& Entry)
+		{
+			return Entry.Code == TEXT("Import.SourceNotLocal");
+		});
+		TestTrue(TEXT("the error names the asset and the recorded path"), Diagnostic != nullptr
+			&& Diagnostic->Message.Contains(MeshPath) && Diagnostic->Message.Contains(Recorded));
+		TestTrue(TEXT("no import ran: no asset in the result"), !OnShare.Payload.IsValid() || !OnShare.Payload->HasField(TEXT("assets")));
+		MeshAsset->GetAssetImportData()->Update(Bigger);
+	}
+
 	// The recorded source is gone: refused, naming 'source'.
 	IFileManager::Get().Delete(*Bigger);
 	TestTrue(TEXT("Import.SourceNotFound"), HasDiagnostic(RunImport(*this, FString::Printf(TEXT(R"({"action": "reimport", "assets": ["%s"]})"),
@@ -423,6 +454,23 @@ bool FAssetDocumentImportRefusalsTest::RunTest(const FString& Parameters)
 		return Result;
 	};
 	Refused(TEXT("\"https://example.com/models/crate.fbx\""), FString(), TEXT("Import.SourceNotLocal"), TEXT("/files/0"));
+	// Network shares are refused whatever the separators, and so are the Windows device spellings of a drive path.
+	for (const TCHAR* Share : {TEXT("\\\\server\\share\\a.wav"), TEXT("//server/share/a.wav"), TEXT("/\\server/share/Beep.wav"),
+		TEXT("\\/server\\share\\Beep.wav"), TEXT("file://server/share/a.wav"), TEXT("\\\\?\\UNC\\server\\share\\a.wav"),
+		TEXT("//?/UNC/server/share/a.wav"), TEXT("\\\\?\\C:\\Art\\a.wav"), TEXT("//./C:/Art/a.wav")})
+	{
+		const FLevelToolResult Result = Refused(Quote(Share), FString(), TEXT("Import.SourceNotLocal"), TEXT("/files/0"));
+		const FAssetDocumentDiagnostic* Diagnostic = Result.Diagnostics.FindByPredicate([](const FAssetDocumentDiagnostic& Entry)
+		{
+			return Entry.Code == TEXT("Import.SourceNotLocal");
+		});
+		TestTrue(*FString::Printf(TEXT("%s: the error names the path"), Share), Diagnostic != nullptr && Diagnostic->Message.Contains(Share));
+	}
+	const FLevelToolResult Device = Refused(Quote(TEXT("\\\\?\\C:\\Art\\a.wav")), FString(), TEXT("Import.SourceNotLocal"), TEXT("/files/0"));
+	TestTrue(TEXT("a device path says it is unsupported"), Device.Diagnostics.ContainsByPredicate([](const FAssetDocumentDiagnostic& Entry)
+	{
+		return Entry.Message.Contains(TEXT("device path")) && Entry.Message.Contains(TEXT("not supported"));
+	}));
 	Refused(TEXT("\"Models/crate.fbx\""), FString(), TEXT("Import.InvalidRequest"), TEXT("/files/0"));
 	Refused(Quote(Scope.Source(TEXT("Missing.fbx"))), FString(), TEXT("Import.SourceNotFound"), TEXT("/files/0"));
 	Refused(Quote(Scope.SourceDir), FString(), TEXT("Import.SourceNotFile"), TEXT("/files/0"));

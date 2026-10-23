@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentBlackboardFootprintProjection.h"
 
@@ -86,7 +87,7 @@ bool FAssetDocumentBlackboardFootprintProjectionTest::RunTest(const FString& Par
 {
 	(void)Parameters;
 	using namespace AssetDocumentBlackboardFootprintProjectionTests;
-	// RED contract: the private parser must accept only the closed Python projection,
+	// The private parser must accept only the closed Python projection,
 	// preserve raw rows, and derive unique operation-qualified receipt identities.
 	FAssetDocumentRuntimeRequestDto Request;
 	Request.RequestId = FGuid::NewGuid();

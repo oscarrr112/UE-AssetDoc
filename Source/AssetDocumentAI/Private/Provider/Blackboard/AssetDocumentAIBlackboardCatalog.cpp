@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "Provider/Blackboard/AssetDocumentAIBlackboardPrimitives.h"
 
@@ -170,7 +171,7 @@ FAssetDocumentPrimitiveDescriptor MakeEntryReadbackDescriptor()
 	Admission.ExportedAuthoritativeApi = TEXT("UBlackboardData::GetKey>FBlackboardEntry::KeyType>UBlackboardKeyType_Object::BaseClass>UBlackboardKeyType_Object::DefaultValue>UBlackboardKeyType_Class::BaseClass>UBlackboardKeyType_Class::DefaultValue>UBlackboardKeyType_Enum::EnumType>UBlackboardKeyType_Enum::EnumName>UBlackboardKeyType_Enum::DefaultValue>UEnum::GetIndexByValue>UEnum::GetNameStringByValue>UBlackboardKeyType_Struct::DefaultValue>FInstancedStruct::IsValid>FInstancedStruct::GetScriptStruct>FInstancedStruct::GetMemory>TFieldIterator<FProperty>>FField::GetAuthoredName>FProperty::ContainerPtrToValuePtr>FScriptArrayHelper>FScriptSetHelper>FScriptMapHelper>FTextInspector>FPropertyEditorModule::CreatePropertyRowGenerator>IPropertyRowGenerator::SetObjects>IDetailTreeNode::CreatePropertyHandle>IPropertyHandle::GetValue");
 	Admission.AuthorityContextId = Descriptor.PrimitiveId + TEXT(".context.game-thread-editor-ready.v2");
 	Admission.PrimaryOperationId = Descriptor.PrimitiveId;
-	Admission.IdentityLifetimeContractId = TEXT("P.identity.h0-path-resolve-single-invocation.v2");
+	Admission.IdentityLifetimeContractId = TEXT("P.identity.path-resolve-single-invocation.v2");
 	Admission.TransactionContractId = TEXT("P.transaction.no-active-transaction.v2");
 	Admission.RollbackContractId = TEXT("ai.blackboard.entry.readback.v2.rollback.read_only.v2");
 	Admission.CompletionContractId = TEXT("ai.blackboard.entry.readback.v2.completion.canonical_readback.v2");
@@ -397,7 +398,7 @@ FAssetDocumentPrimitiveDescriptor MakeEntryAddV2Descriptor()
 		TEXT("UEAssetDoc.AIProvider.BlackboardV2.Add.Failure")};
 	A.VerificationTestIds = {
 		TEXT("UEAssetDoc.AIProvider.Authority.PublicSurface"),
-		TEXT("UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceGate"),
+		TEXT("UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceCheck"),
 		TEXT("UEAssetDoc.AIProvider.BlackboardV2.Add")};
 	A.SourceMarker = TEXT("ASSETDOCUMENT_AUTHORITY_BRIDGE_ADMISSION(AD.AI.BLACKBOARD.KEYTYPE-STAGING-v1)");
 	A.RawLifecycleAllowlistId = TEXT("ASSETDOCUMENT_AUTHORITY_BRIDGE_CALLSITE(AD.AI.BLACKBOARD.KEYTYPE-STAGING-v1|ai.blackboard.entry.add.v2)");
@@ -478,7 +479,7 @@ FAssetDocumentPrimitiveDescriptor MakeEntryReplaceClassV2Descriptor()
 		TEXT("UEAssetDoc.AIProvider.BlackboardV2.ReplaceClass.Failure")};
 	A.VerificationTestIds = {
 		TEXT("UEAssetDoc.AIProvider.Authority.PublicSurface"),
-		TEXT("UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceGate"),
+		TEXT("UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceCheck"),
 		TEXT("UEAssetDoc.AIProvider.BlackboardV2.ReplaceClass")};
 	A.SourceMarker =
 		TEXT("ASSETDOCUMENT_AUTHORITY_BRIDGE_ADMISSION(AD.AI.BLACKBOARD.KEYTYPE-STAGING-v1)");
@@ -557,7 +558,7 @@ void AppendAssetDocumentAIBlackboardPrimitiveDescriptors(
 			TEXT("AIProvider.Blackboard.PropertyEvidenceUnavailable")}));
 	OutDescriptors.Add(MakeBlockerDescriptor(
 		TEXT("ai.blackboard.key_type.create.v1"),
-		TEXT("AD.G1.BLOCK.AI.BLACKBOARD_KEY_TYPE_AUTHORITY")));
+		TEXT("AD.BLOCK.AI.BLACKBOARD_KEY_TYPE_AUTHORITY")));
 	OutDescriptors.Add(MakeOrdinaryDescriptor(
 		TEXT("ai.blackboard.key_type.apply_properties.v1"),
 		EAssetDocumentPrimitiveAccess::Mutating,

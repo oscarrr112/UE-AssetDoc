@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentUMGPrimitiveProvider.h"
 #include "AssetDocumentUMGProviderTestSupport.h"
@@ -542,7 +543,7 @@ bool FAssetDocumentUMGWidgetTreeLifecycleTest::RunTest(const FString& Parameters
 		const FAssetDocumentPrimitiveOutcome Blocked = Provider->Invoke(
 			BlockedInvocation, Handles, &Transaction);
 		TestTrue(TEXT("widget tree replacement remains an exact blocker"),
-			HasCode(Blocked, TEXT("AD.G1.BLOCK.UMG.WIDGET_REPLACE_HEADLESS_AUTHORITY")));
+			HasCode(Blocked, TEXT("AD.BLOCK.UMG.WIDGET_REPLACE_HEADLESS_AUTHORITY")));
 	}
 	{
 		FAssetDocumentUMGProviderTestContext Context;

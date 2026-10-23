@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Shared fixtures of the SoundCue automation tests (AssetDocumentSoundCueTests.cpp: read, corpus, editor delete,
 // renamed nodes; AssetDocumentSoundCueApplyTests.cpp: free edits, from scratch, rollback, undo, open editor): /Game

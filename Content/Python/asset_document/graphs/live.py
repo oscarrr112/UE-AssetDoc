@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Typed decoding of ``graph.list.v1`` / ``graph.query.v1`` result values.
 
 Follows docs/architecture/asset-document-graph-primitives.md section 3/4.

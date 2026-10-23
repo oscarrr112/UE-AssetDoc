@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.HttpServer.Mcp.Tools: the editor's MCP tools, read from the plugin's tool manifest
 //   (MCP/tools.json), against a stub of the editor's routes. tools/list is the manifest (name, description, input

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.AI.Blackboard.OpenEditorApply: a Blackboard open in the Behavior Tree editor's
 // Blackboard mode, with a key selected, takes an apply that adds a key and removes the selected one. The editor's

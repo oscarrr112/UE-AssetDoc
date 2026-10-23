@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Settings values (design §3.4) and type names of the rig primitives. Settings structs go through the Editor typed
 // value codec, so they read and write exactly as Properties do on the generic route.

@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered DataTable Profiles: UDataTable, UCompositeDataTable and UMirrorDataTable.
 
 Document (docs/architecture/asset-document-datatable-matrix.md)::

@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// UEAssetDoc.Niagara.Stack.*: module stack free edits (N3), document path vs the Niagara editor's own
+// UEAssetDoc.Niagara.Stack.*: module stack free edits, document path vs the Niagara editor's own
 // API on two duplicates of one system. The editor copy is edited with the stack view models the way the stack
 // widgets do it; its extract (Set Parameters names masked) is applied to the second copy; both documents must be
 // equal, the apply clears undo history that references the system, re-applying is a no-op and the saved package

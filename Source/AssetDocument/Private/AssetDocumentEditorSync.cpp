@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentEditorSync.h"
 
@@ -100,7 +101,14 @@ bool LoadAndRetargetSidecar(const FString& SourceSidecarPath, const FString& Des
 	}
 
 	Document->SetStringField(TEXT("Target"), NewTarget);
-	IFileManager::Get().MakeDirectory(*FPaths::GetPath(DestinationSidecarPath), true);
+	// Checked before its folder is made: no folder is created through a link that leads out of Content.
+	FString DestinationRealPath;
+	if (!FAssetDocumentSidecar::ResolveSidecarFile(DestinationSidecarPath, DestinationRealPath, Error))
+	{
+		UE_LOG(LogAssetDocument, Warning, TEXT("AssetDocument sidecar '%s' not written: %s"), *DestinationSidecarPath, *Error);
+		return false;
+	}
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(DestinationRealPath), true);
 
 	FAssetDocumentEditorSync::FScopedSidecarWrite Guard(DestinationSidecarPath);
 	if (!FAssetDocumentSidecar::WriteJsonFile(DestinationSidecarPath, Document, Error))
@@ -123,7 +131,6 @@ FString MakeUniqueArchivePath(const FString& SourceSidecarPath)
 	const FString Extension = TEXT(".assetdoc.json");
 
 	const FString ArchiveDirectory = FPaths::Combine(FPaths::ProjectContentDir(), TEXT("_DeletedAssetDocs"), RelativeDirectory);
-	IFileManager::Get().MakeDirectory(*ArchiveDirectory, true);
 
 	FString ArchivePath = FPaths::Combine(ArchiveDirectory, BaseName + Extension);
 	if (!FileExists(ArchivePath))
@@ -335,9 +342,20 @@ bool FAssetDocumentEditorSync::ArchiveSidecarForDeletedAsset(const FString& Obje
 		return false;
 	}
 
+	// The sidecar and its archive place are both checked before the archive folder is made and the file moved.
 	const FString ArchivePath = MakeUniqueArchivePath(SidecarPath);
+	FString SidecarRealPath;
+	FString ArchiveRealPath;
+	FString Error;
+	if (!FAssetDocumentSidecar::ResolveSidecarFile(SidecarPath, SidecarRealPath, Error)
+		|| !FAssetDocumentSidecar::ResolveSidecarFile(ArchivePath, ArchiveRealPath, Error))
+	{
+		UE_LOG(LogAssetDocument, Warning, TEXT("Deleted AssetDocument sidecar '%s' not archived: %s"), *SidecarPath, *Error);
+		return false;
+	}
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(ArchiveRealPath), true);
 	FScopedSidecarWrite Guard(TArray<FString>{ SidecarPath, ArchivePath });
-	if (!IFileManager::Get().Move(*ArchivePath, *SidecarPath, false, true))
+	if (!IFileManager::Get().Move(*ArchiveRealPath, *SidecarPath, false, true))
 	{
 		UE_LOG(LogAssetDocument, Warning, TEXT("Failed to archive deleted AssetDocument sidecar '%s' to '%s'"), *SidecarPath, *ArchivePath);
 		return false;

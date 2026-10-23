@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Parameter sections (design §3.5.3): sections whose channels live in arrays of per-parameter structs, created per
 // parameter as the editor's "+ Parameter" menus (UMovieSceneParameterSection::AddScalarParameterKey and siblings, the

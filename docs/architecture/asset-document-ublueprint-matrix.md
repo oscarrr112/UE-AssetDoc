@@ -1,13 +1,13 @@
-# UBlueprint 支持矩阵（Step 2 切换）
+# UBlueprint 支持矩阵
 
-**状态：** 2026-10-03 切换切片。上位规则：[设计规则](asset-document-design-rules.md) §3（回滚 = 功能等价）、§5（支持矩阵、能力不倒退）。
+上位规则：[设计规则](asset-document-design-rules.md) §3（回滚 = 功能等价）、§5（支持矩阵、能力不倒退）。
 图原子操作契约：[graph primitives v1](asset-document-graph-primitives.md)。
 
 `/Script/Engine.Blueprint`（精确类；Widget/Anim Blueprint 不在本矩阵内）由 Python Profile
 `profile.ublueprint.v2`（`Content/Python/asset_document/profiles/ublueprint_runtime.py`）承担读 / 新建 / 修改。
 旧 C++ `FUBlueprintAssetDocumentProfile` 代码保留但不再注册（同一类型只有一个可写 runtime）。
 
-列说明：**旧 C++** = 被替换的 `FUBlueprintAssetDocumentProfile`；**Python** = 本切片交付；
+列说明：**旧 C++** = 被替换的 `FUBlueprintAssetDocumentProfile`；**Python** = 当前 Profile；
 ✅ 支持，➖ 不支持（返回稳定 diagnostic），— 不适用。
 
 ## 1. Body key 与常见编辑
@@ -90,7 +90,7 @@
   - 同一次 Apply 里同时删除输入和连线（或把 pin 值也写回默认）：无孤立 pin、无诊断。
   - Extract 不写出孤立 pin 的值，但保留指向它的连线；原样重新应用 extract 是 no-op（不编译、不保存）。
   失败诊断来自 `graph.finalize.v1`（编译消息带 `orphaned` 标记）；裸编译（Repair 阶段）通过 executor 的 `binder` 把 GUID 映射回文档节点。
-- **变量改名（不同名字）保引用**：需要 `FBlueprintEditorUtils::RenameMemberVariable` 与文档内节点 id 的对应关系，留待后续。
+- **变量改名（不同名字）保引用**：需要 `FBlueprintEditorUtils::RenameMemberVariable` 与文档内节点 id 的对应关系，目前不支持。
 - **split pin**：图原子操作 v1 范围外。
 
 ## 5. 已知限制（Diff）

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -22,12 +23,12 @@ struct FRigElementKey;
 struct FRigModuleReference;
 struct FRigVMMemoryStorageStruct;
 
-// Control Rig documents (docs/architecture/asset-document-controlrig-design.md) on the "rig" provider. Reads (phase
-// CR0): rig.controlrig.read.v1 (AssetDocumentControlRigRead.cpp, AssetDocumentControlRigGraphRead.cpp),
+// Control Rig documents (docs/architecture/asset-document-controlrig-design.md) on the "rig" provider. Reads:
+// rig.controlrig.read.v1 (AssetDocumentControlRigRead.cpp, AssetDocumentControlRigGraphRead.cpp),
 // rig.controlrig.catalog.v1 and the list_types kinds rigvm_node / rigvm_type / controlrig_module
 // (AssetDocumentControlRigCatalog.cpp), the compile status describer (AssetDocumentControlRigStatus.cpp) and the
 // shape library facts of Inspect; they read the stored, load-patched state as the Control Rig editor shows it and
-// never compile, initialize a VM, open an editor or dirty a package. Edits (phases CR1-CR3): rig.controlrig.edit.v1
+// never compile, initialize a VM, open an editor or dirty a package. Edits: rig.controlrig.edit.v1
 // (AssetDocumentControlRigEdit.cpp, graph ops in AssetDocumentControlRigGraphEdit.cpp, function ops in
 // AssetDocumentControlRigFunctionEdit.cpp) and rig.controlrig.compile.v1 plus the rollback rebuilder
 // (AssetDocumentControlRigCompile.cpp).
@@ -189,7 +190,7 @@ void PointVariableNodesAtVariables(URigVMBlueprint& Blueprint);
 bool SetFunctionVariableMapping(URigVMController& Controller, URigVMFunctionReferenceNode& Reference, FName Inner, FName Outer,
 	bool bSetupUndoRedo);
 
-// Graph ops of rig.controlrig.edit.v1 (AssetDocumentControlRigGraphEdit.cpp, phases CR2 / CR3): models, nodes of every
+// Graph ops of rig.controlrig.edit.v1 (AssetDocumentControlRigGraphEdit.cpp): models, nodes of every
 // graph, links, pin values, bindings, pin types, aggregate pins, traits and function variable maps through
 // URigVMController with undo and Python print off.
 struct FGraphEditState
@@ -241,7 +242,7 @@ private:
 	bool bPrevious;
 };
 
-// Function ops of rig.controlrig.edit.v1 (AssetDocumentControlRigFunctionEdit.cpp, phase CR3): the local function
+// Function ops of rig.controlrig.edit.v1 (AssetDocumentControlRigFunctionEdit.cpp): the local function
 // library (functions, access, colour), the exposed pins and header of function and collapse graphs, function local
 // variables, function reference variable remaps and the dependents report of public functions.
 bool IsFunctionOp(const FString& Kind);
@@ -260,7 +261,7 @@ TSharedRef<IAssetDocumentDerivedStateRebuilder> MakeRebuilder();
 // ---- modular ops (AssetDocumentControlRigModularEdit.cpp) --------------------------------------------------------
 
 // module.add / remove / rename / reparent / reorder / swap / config / bind, connect, disconnect, modular.settings and
-// hierarchy.import ops of rig.controlrig.edit.v1 (design §3.7, phase CR4).
+// hierarchy.import ops of rig.controlrig.edit.v1 (design §3.7).
 bool IsModularOp(const FString& Kind);
 const TArray<FString>* ModularOpFields(const FString& Kind);
 bool RunModularOp(UControlRigBlueprint& Blueprint, FReader& Op, const FString& Kind, bool& bChanged, TArray<FValue>& Notes, int32 OpIndex);

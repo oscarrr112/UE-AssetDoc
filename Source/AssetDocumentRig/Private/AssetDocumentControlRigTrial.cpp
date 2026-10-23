@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Validate's trial target of a Control Rig (FAssetDocumentEditorTrialScope::RegisterTrialTargetMaker): Validate runs
 // the profile's apply on a transient copy of the rig (or a new transient rig), so pin, node, element and compile

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // ai.state_tree.edit.v1: the ops of one call run in one editor transaction, in the order given (DTO in
 // AssetDocumentStateTreeCatalog.cpp). Every write goes through the owner's Details-panel change

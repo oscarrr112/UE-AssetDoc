@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// fx.niagara.edit.v1 on a Niagara parameter collection (N5): the collection editor's parameter list and default values.
+// fx.niagara.edit.v1 on a Niagara parameter collection: the collection editor's parameter list and default values.
 // Raw editor-equivalent code: the collection editor's view models (FNiagaraParameterCollectionAssetViewModel,
 // FNiagaraCollectionParameterViewModel) are private to NiagaraEditor, so their effect is made here with the exported
 // collection API. Behaviour tests: UEAssetDoc.Niagara.Collection.*.

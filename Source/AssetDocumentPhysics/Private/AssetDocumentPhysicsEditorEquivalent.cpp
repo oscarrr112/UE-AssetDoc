@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Structural edits of a Physics Asset: adding and removing bodies and joints and switching collision between two
 // bodies. Each leaves the asset as the Physics Asset Editor leaves it after the same command (the bodies, joints, joint

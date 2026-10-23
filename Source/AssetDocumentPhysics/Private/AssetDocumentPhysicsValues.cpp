@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Values of the Physics Asset document (design §3): sparse Details of bodies, constraints and profile data through
 // the Editor typed value codec, shapes, constraint frames, document order.

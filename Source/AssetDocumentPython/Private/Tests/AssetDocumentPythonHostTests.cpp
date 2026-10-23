@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentPythonRuntime.h"
 
@@ -209,7 +210,7 @@ void TestResultProjection(
 	Test.TestEqual(TEXT("successful dispatch has no public diagnostic code"),
 		Result.Diagnostics.IsEmpty() ? FString() : Result.Diagnostics[0].Code, FString());
 	// The bytes below are fixture-only transport markers; this test asserts field fidelity
-	// and G1 tuple shape, not production encoding, hashing, or DocumentCodec semantics.
+	// and runtime-result tuple shape, not production encoding, hashing, or DocumentCodec semantics.
 	Test.TestTrue(TEXT("fixture-only marker bytes survive independently"),
 		Result.CanonicalBytes == MakeRevisionOneTransportMarker());
 	Test.TestEqual(TEXT("semantic marker survives"), Result.SemanticHash, FString(TEXT("revision-one")));
@@ -217,7 +218,7 @@ void TestResultProjection(
 		Result.CodecVersion, uint32{1});
 	Test.TestEqual(TEXT("changed set survives independently"),
 		Result.ChangedSet.Num(), 0);
-	Test.TestTrue(TEXT("decoded result passes G1"),
+	Test.TestTrue(TEXT("decoded result passes runtime-result validation"),
 		ValidateAssetDocumentRuntimeResult(Request, Result).bValid);
 }
 

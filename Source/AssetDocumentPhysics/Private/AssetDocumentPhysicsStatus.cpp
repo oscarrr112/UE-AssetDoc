@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // physics.status.v1 and the "Compile" describer of Physics Assets (design §5.1). There is no compile; the status is
 // what data validation and cook report (UBodySetup::IsDataValid per body) plus the structural checks under which

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Applying a component Blueprint must leave the Actor Blueprints that hold it as an SCS
 // component (and their children) exactly as an editor compile of the component Blueprint would:

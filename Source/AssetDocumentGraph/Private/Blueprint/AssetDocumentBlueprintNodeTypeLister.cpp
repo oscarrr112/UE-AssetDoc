@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // list_types kind=blueprint_node: the pins of the node an action key places, read from the Blueprint
 // palette's own template node (FBlueprintNodeTemplateCache, the node its tooltips and pin filters read), so

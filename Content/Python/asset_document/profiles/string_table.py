@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered StringTable Profile (profile.string_table.v1): read, create and update UStringTables.
 
 Document (docs/architecture/asset-document-datatable-matrix.md)::

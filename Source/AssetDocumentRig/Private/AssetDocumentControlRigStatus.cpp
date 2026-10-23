@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Compile status of a Control Rig without compiling (design §5.2) and the Inspect facts of a Shape Library
 // (design §3.8, generic route). The status is what the editor shows after its last compile (the VM is recompiled on

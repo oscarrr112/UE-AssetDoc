@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -546,7 +547,7 @@ bool FAssetDocumentAnimationDataControllerTest::RunTest(const FString&)
 	const FAssetDocumentPrimitiveOutcome ReplacementOutcome = Provider->Invoke(
 		Replacement, ReplacementHandles, nullptr);
 	AssertTerminalFailure(*this, ReplacementOutcome,
-		TEXTVIEW("AD.PANIM.BLOCK.ROLLBACK_COMPOSITION"));
+		TEXTVIEW("AD.ANIMATION.BLOCK.ROLLBACK_COMPOSITION"));
 	TestEqual(TEXT("replacement blocker issues no Curve handles"),
 		ReplacementHandles.GetIssueCount(), 0);
 

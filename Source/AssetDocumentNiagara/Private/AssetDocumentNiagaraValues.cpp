@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Niagara type tokens and value forms (design §3.2): plain-data values as JSON, the scalar wrapper
 // structs unwrapped, enums by authored name (user-defined Niagara enums: the names the editor shows),

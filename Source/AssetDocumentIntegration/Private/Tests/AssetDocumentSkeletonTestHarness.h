@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 #if WITH_DEV_AUTOMATION_TESTS
 #include "AssetDocumentGenericRuntimeRoute.h"
@@ -130,7 +131,7 @@ struct FOptions
  bool bMissingAnimationPreparation = false;
  bool bMontageNotifyRequestProvider = false;
  FString SabotageOldPath;
- // Optional test-owned caller extension; empty defaults preserve S1 exactly.
+ // Optional test-owned caller extension; empty defaults preserve the Skeleton caller exactly.
  TArray<FAssetDocumentPrimitiveRequirement> ExtraRequirements;
  FString EntrySuffix;
 };
@@ -170,14 +171,14 @@ public:
   const FString Plugin = FPaths::ConvertRelativePathToFull(GetAssetDocumentPluginBaseDir());
   const FString PythonRoot = FPaths::Combine(Temp, TEXT("Python"));
   if (!FPlatformFileManager::Get().GetPlatformFile().CopyDirectoryTree(*PythonRoot, *FPaths::Combine(Plugin, TEXT("Content/Python")), false)) return false;
-  FString Entry = FString::Printf(TEXT("import importlib.util, sys\nspec = importlib.util.spec_from_file_location('_s1caller', __file__.rsplit('/', 1)[0] + '/asset_document/tests/fixtures/skeleton_s1_caller.py')\ncaller = importlib.util.module_from_spec(spec)\nsys.modules['_s1caller'] = caller\nspec.loader.exec_module(caller)\ndispatch = caller.configure(order='%s', factory_skeleton_path=%s, fail_after=%s)\n"),
+  FString Entry = FString::Printf(TEXT("import importlib.util, sys\nspec = importlib.util.spec_from_file_location('_s1caller', __file__.rsplit('/', 1)[0] + '/asset_document/tests/fixtures/skeleton_caller.py')\ncaller = importlib.util.module_from_spec(spec)\nsys.modules['_s1caller'] = caller\nspec.loader.exec_module(caller)\ndispatch = caller.configure(order='%s', factory_skeleton_path=%s, fail_after=%s)\n"),
    *Options.Order, Options.FactorySkeleton.IsEmpty() ? TEXT("None") : *(TEXT("'") + Options.FactorySkeleton + TEXT("'")), Options.FailAfter.IsEmpty() ? TEXT("None") : *(TEXT("'") + Options.FailAfter + TEXT("'")));
   Entry += Options.EntrySuffix;
   if (!FFileHelper::SaveStringToFile(Entry, *FPaths::Combine(PythonRoot, TEXT("s1_entry.py")))) return false;
   FAssetDocumentPythonRuntimeConfiguration Config; Config.RepositoryRoot = Temp; Config.PackageRootRelativePath = TEXT("Python");
   Runtime = CreateAssetDocumentPythonRuntime(Config);
   auto Binding = Runtime->InitializePythonBinding(); Diagnostics(Test, Binding.Diagnostics);
-  if (!Test.TestTrue(TEXT("S1 real Python initialized"), Binding.bValid)) return false;
+  if (!Test.TestTrue(TEXT("real Python initialized"), Binding.bValid)) return false;
   Route = MakeShared<FAssetDocumentGenericRuntimeRoute>(*Runtime);
   TSharedPtr<IAssetDocumentAnimationRequestProvider> NotifyOwner;
   if (Options.bMontageNotifyRequestProvider) NotifyOwner = CreateAssetDocumentAnimationRequestProvider();
@@ -212,7 +213,7 @@ public:
   TArray<FAssetDocumentMutationPreparationBinding> Bindings;
   Bindings.Add({Providers[0], [Capture](const auto& R, auto I, auto& B) { return Capture(R, I, B, true); }});
   if (!Options.bMissingAnimationPreparation) Bindings.Add({Providers[1], [Capture](const auto& R, auto I, auto& B) { return Capture(R, I, B, false); }});
-  auto Built = BuildAssetDocumentRequiredPrimitiveProjection(Providers, Seed, GetG1FrozenAuthorityExceptionRecords(), Bindings,
+  auto Built = BuildAssetDocumentRequiredPrimitiveProjection(Providers, Seed, GetFrozenAuthorityExceptionRecords(), Bindings,
    [this](const FString& Provider, const FAssetDocumentPrimitiveInvocation& I, IAssetDocumentHandleResolver& H, IAssetDocumentAtomicTransaction* T, TFunctionRef<FAssetDocumentPrimitiveOutcome()> Forward)
    {
     return Route->InvokePreparedMutation(Provider, I, H, T, [&]()
@@ -228,13 +229,13 @@ public:
     });
    });
   Diagnostics(Test, Built.Diagnostics);
-  if (!Test.TestTrue(TEXT("S1 exact real provider projection"), Built.Projection.IsValid())) return false;
+  if (!Test.TestTrue(TEXT("exact real provider projection"), Built.Projection.IsValid())) return false;
   Projection = Built.Projection;
   FAssetDocumentPythonRevisionCandidate Candidate; Candidate.RuntimeRevision = Revision;
   Candidate.EntryModuleRelativePath = TEXT("s1_entry.py");
-  Candidate.Providers = Projection->Providers; Candidate.RequiredPrimitives = Projection->Requirements; Candidate.AuthorityCatalog.Append(GetG1FrozenAuthorityExceptionRecords());
+  Candidate.Providers = Projection->Providers; Candidate.RequiredPrimitives = Projection->Requirements; Candidate.AuthorityCatalog.Append(GetFrozenAuthorityExceptionRecords());
   auto Activated = Runtime->TryActivateRevision(Candidate); Diagnostics(Test, Activated.Diagnostics);
-  if (!Test.TestTrue(TEXT("S1 test-owned exact revision activates"), Activated.bActivated)) return false;
+  if (!Test.TestTrue(TEXT("test-owned exact revision activates"), Activated.bActivated)) return false;
   Route->BindMutationPreparationProjection(Projection);
   TArray<FAssetDocumentRuntimeTargetActivation> Activations; TArray<FAssetDocumentRuntimeDiagnostic> D;
   for (const auto& Row : Runtime->GetActiveRuntimeRegistrationProjection().Elements)
@@ -243,7 +244,7 @@ public:
    if (!A) { Diagnostics(Test, D); return false; } Activations.Add(MoveTemp(A.GetValue()));
   }
   auto Bound = Route->BindRuntimeTargetActivations(MoveTemp(Activations)); Diagnostics(Test, Bound.Diagnostics);
-  if (!Test.TestTrue(TEXT("S1 L1 target activation bound"), Bound.bValid)) return false;
+  if (!Test.TestTrue(TEXT("target activation bound"), Bound.bValid)) return false;
   Registry = MakeUnique<FRegistry>(*Runtime->GetActivePrimitiveRegistry());
   FAssetDocumentCoreRuntimeDependencies Dependencies{*Route, *Registry, Cancellation, Observer,
    [this](const auto& M, const FGuid& Id, IAssetDocumentAtomicTransaction* T, TArray<FAssetDocumentRuntimeDiagnostic>& D)
@@ -254,7 +255,7 @@ public:
    },
    [this](const auto& Event) { Invalidations.Add(Event); return Runtime->InvalidateHandles(Event); }};
   Core = MakeUnique<FAssetDocumentCoreRuntimeComposition>(MoveTemp(Dependencies));
-  if (!Test.TestTrue(TEXT("S1 real Core composition valid"), Core->IsValid())) return false;
+  if (!Test.TestTrue(TEXT("real Core composition valid"), Core->IsValid())) return false;
   Route->BindComposition(*Core); Service = MakeUnique<FAssetDocumentService>(); Service->BindGenericRuntimeRoute(Route.ToSharedRef());
   return true;
  }
@@ -262,7 +263,7 @@ public:
  {
   SourcePaths.Add(Sidecar);
   FAssetDocumentApplyFileRequest Request; Request.FilePath = Sidecar; Request.bSaveAsset = true;
-  // The legacy exact Montage Service profile remains registered. S1 exercises
+  // The legacy exact Montage Service profile remains registered. The Skeleton harness exercises
   // the approved private route with the real sidecar adapter and persistence.
   auto Result = WithAssetDocumentSidecarWriteForTest(Sidecar, [&] { return Route->DispatchApplyFile(Request); });
   UE_LOG(LogTemp, Display, TEXT("SkeletonS1 ApplyFile terminal: %s"), *Result.Message);

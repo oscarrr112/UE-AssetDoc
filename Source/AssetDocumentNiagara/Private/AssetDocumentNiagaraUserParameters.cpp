@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // User parameters, the way the system's User Parameters panel (FNiagaraSystemUserParameterBuilder) and its
 // hierarchy editor (UNiagaraUserParametersHierarchyViewModel) edit them. Raw editor-equivalent code, isolated

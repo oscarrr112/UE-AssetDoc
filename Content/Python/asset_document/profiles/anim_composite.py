@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered AnimComposite Profile (profile.anim_composite.v1): the Anim Composite editor's segment
 track.
 

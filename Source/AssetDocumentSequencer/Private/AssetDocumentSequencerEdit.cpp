@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // seq.edit.v1: edits of a Level Sequence as Sequencer's UI makes them (design §4.2), without an open Sequencer (an open
 // sequence is refused, §5.4). Each call is one FScopedTransaction with Modify() on every touched object; the data

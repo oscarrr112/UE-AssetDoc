@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Read-only extract of engine and plugin content: while an Extract reads it, the exact
 read-only Target is admitted by the profiles, so it extracts and canonicalizes as the same
 document under /Game would. The editor side (extract of engine assets, re-target and

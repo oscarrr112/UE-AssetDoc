@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """A document the editor accepts and stores verifies against its read-back, whatever order its items are
 written in and whatever default-valued fields it states or omits; a failing verification names the real first
 difference. The editor side is UEAssetDoc.*.Verification.*."""

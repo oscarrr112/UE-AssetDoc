@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // edit_level add_component / remove_component / reparent_component (design §7.2 L3): the
 // Details panel's component tree (USubobjectDataSubsystem) on placed actors. Instance

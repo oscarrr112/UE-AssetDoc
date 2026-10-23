@@ -1,7 +1,6 @@
 # DataTable family support matrix
 
-Status: 2026-10-04 (large tables, composite
-non-interactive scope). Governing rules:
+Governing rules:
 [design rules](asset-document-design-rules.md) §3 (rollback = functional
 equivalence), §4 (raw editor-equivalent code + behaviour test) and §5 (support matrix).
 
@@ -135,51 +134,39 @@ failed create leaves nothing.
   (`RuntimeValueMaximumNodes`: invocation values, outcomes, changed sets, diagnostics). Reads are
   paged by that budget (`AppendPaged`), and the Profile chunks edits below it (`chunk_ops`,
   3000 nodes per call; the row order goes as segments). A 20-field row costs about 23 nodes.
-- **Before (811a1681).** The document cap was 4096 nodes, so Extract and Apply both stopped at about
-  177 rows × 20 fields (`Codec.NodeLimitExceeded` at `/Body/Rows/177/...`). An edit of a table over
-  about 4,000 rows would also have failed: it always sent one `order` op naming every row, larger
-  than the per-call budget. A create recorded the whole table once per row
-  (`FDataTableEditorUtils` opens a transaction per row), so 5,000 rows took 417 s.
-- **Then (ec7eecbf).** The binding limit was an 8 MiB host transport limit on the result's
-  canonical bytes (`MaximumBytesLeaf`): about 20,000 rows × 20 scalar fields (18,000 passed,
-  22,000 failed) and about 13,000 rows of the FText and object-reference row. Every table
-  primitive call also recorded the whole table into the transaction buffer twice (pre-image and
-  the finalize diff), so a chunked create cost O(rows²): 10,000 rows took 46.8 s on the PC.
-- **Now.** Table primitives do not record undo (`FTableUndoRecordingSuppression`: the table's
+- Table primitives do not record undo (`FTableUndoRecordingSuppression`: the table's
   `RF_Transactional` flag is cleared for the call). An AI apply is not part of the user's Undo stack
-  (direction reset §3.1) and its rollback restores the package snapshot, so those records were never
+  (design rules §3.1) and its rollback restores the package snapshot, so those records were never
   used; with no record the transaction buffer drops the empty transaction. The transport limit is
   64 MiB, so the binding limit is the 2^20-node document budget: about 45,500 rows × 20 scalar
   fields (Extract of 44,000 rows passes in 11.7 s; 47,000 rows fails with
   `Codec.NodeLimitExceeded` at `/Body/Rows/45589`, about 18 MiB of JSON). Rows whose values are
   nested (FText, struct or reference objects) cost more nodes per row and stop earlier.
-  Create from the full document, PC sandbox editor (`DataTable.LargeTableScaling` asserts the
-  per-row time of 25,000 rows stays under twice that of 1,000 rows):
+  Create from the full document (`DataTable.LargeTableScaling` asserts the per-row time of 25,000
+  rows stays under twice that of 1,000 rows):
 
-  | Rows | Before | After |
-  |---|---|---|
-  | 1,000 | 2.5 s | 1.5–1.9 s |
-  | 5,000 | 18.0 s | 8.3 s |
-  | 10,000 | 46.8 s | 17.5 s |
-  | 20,000 | not measured (near the 8 MiB limit) | 35.3 s |
-  | 30,000 (12 MiB JSON) | (over the transport limit) | 48.6 s |
+  | Rows | Create |
+  |---|---|
+  | 1,000 | 1.5–1.9 s |
+  | 5,000 | 8.3 s |
+  | 10,000 | 17.5 s |
+  | 20,000 | 35.3 s |
+  | 30,000 (12 MiB JSON) | 48.6 s |
 
-  At 10,000 rows the editor primitive calls went from 26.4 s to 0.67 s; what is left is the
-  linear Python document work and the save/verify.
-- **Measured before the undo change** (`UEAssetDoc.DataTable.LargeTable` /
-  `LargeRichTable`, 5,000 rows × 20 fields, sandbox editor on macOS). Resident memory is the process delta; it is noisy and is
+  At 10,000 rows the editor primitive calls take 0.67 s; the rest is the linear Python document
+  work and the save/verify.
+- **Per-stage cost** (`UEAssetDoc.DataTable.LargeTable` /
+  `LargeRichTable`, 5,000 rows × 20 fields). Resident memory is the process delta; it is noisy and is
   only a rough guide.
 
-  | Stage | Scalar row (2.0 MiB JSON) | FText + hard/soft refs (3.1 MiB JSON) | Scalar, 18,000 rows (7.3 MiB) |
-  |---|---|---|---|
-  | Extract | 0.48 s, +47 MiB | 0.51 s, +56 MiB | 2.3 s |
-  | Diff | 0.87 s, +18 MiB | 0.92 s, +27 MiB | 4.8 s |
-  | Unchanged re-apply (no-op, no save) | 1.31 s, +27 MiB | 1.37 s, +33 MiB | 5.7 s |
-  | One-row edit (save included) | 4.46 s, +73 MiB | 4.81 s, +98 MiB | 18.2 s |
-  | Create from the full document | 5.83 s, +197 MiB | 6.98 s, +145 MiB | 46.7 s |
+  | Stage | Scalar row (2.0 MiB JSON) | FText + hard/soft refs (3.1 MiB JSON) |
+  |---|---|---|
+  | Extract | 0.48 s, +47 MiB | 0.51 s, +56 MiB |
+  | Diff | 0.87 s, +18 MiB | 0.92 s, +27 MiB |
+  | Unchanged re-apply (no-op, no save) | 1.31 s, +27 MiB | 1.37 s, +33 MiB |
+  | One-row edit (save included) | 4.46 s, +73 MiB | 4.81 s, +98 MiB |
 
-  The 18,000-row column is the ec7eecbf build (the create figure includes the quadratic undo
-  recording described above). A full reversal of a large table moves almost every row, and each
+  A full reversal of a large table moves almost every row, and each
   `MoveRow` re-sorts the row map, so it is O(rows² log rows).
 - **One row or curve per op.** A single row (or curve with its keys) larger than the per-call
   budget cannot be sent: about 4,000 value nodes in one row.

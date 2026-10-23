@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentEditorSync.h"
 #include "AssetDocumentService.h"
@@ -147,7 +148,7 @@ void BTTestAddObjectBlackboardKey(UBlackboardData* Blackboard, FName Name, UClas
 	Blackboard->Keys.Add(Entry);
 }
 
-UBlackboardData* BTTestMakeTask7BlackboardAsset(const FString& Target)
+UBlackboardData* BTTestMakeDecoratorBlackboardAsset(const FString& Target)
 {
 	UBlackboardData* Blackboard = BTTestMakeExistingBlackboardAsset(Target);
 	BTTestAddObjectBlackboardKey(Blackboard, TEXT("TargetActor"));
@@ -1031,7 +1032,7 @@ TSharedPtr<FJsonObject> BTTestMakeTreeWithSelectorTask(
 	return Tree;
 }
 
-TSharedPtr<FJsonObject> BTTestMakeTask7BehaviorTree(
+TSharedPtr<FJsonObject> BTTestMakeDecoratorBehaviorTree(
 	const FString& SubtreeTarget,
 	bool bIncludeRootDecorator)
 {
@@ -1175,7 +1176,7 @@ TSharedPtr<FJsonObject> BTTestMakeBlackboardDataDocument(const FString& Target, 
 	Document->SetNumberField(TEXT("SchemaVersion"), 1);
 	Document->SetStringField(TEXT("Target"), Target);
 	Document->SetStringField(TEXT("Class"), TEXT("/Script/AIModule.BlackboardData"));
-	// Task10 creates GUID-unique Blackboard prerequisites through the existing
+	// This creates GUID-unique Blackboard prerequisites through the existing
 	// Blackboard Create route, including its exact Editor creation footprint.
 	Document->SetStringField(TEXT("Action"), TEXT("Create"));
 	Document->SetObjectField(TEXT("Definitions"), MakeShared<FJsonObject>());
@@ -1246,7 +1247,7 @@ void BTTestAddSecondDecoratorSet(TSharedPtr<FJsonObject> Tree)
 	Tree->SetArrayField(TEXT("RootDecorators"), UpdatedRootDecorators);
 }
 
-bool BTTestApplyTask7TreeFixture(
+bool BTTestApplyDecoratorTreeFixture(
 	FAutomationTestBase& Test,
 	FAssetDocumentService& Service,
 	FScopedBehaviorTreeMutationFixture& Fixture,
@@ -1259,15 +1260,15 @@ bool BTTestApplyTask7TreeFixture(
 	{
 		return false;
 	}
-	UBlackboardData* Blackboard = BTTestMakeTask7BlackboardAsset(BlackboardTarget);
-	Test.TestNotNull(TEXT("Task7 fixture blackboard exists"), Blackboard);
+	UBlackboardData* Blackboard = BTTestMakeDecoratorBlackboardAsset(BlackboardTarget);
+	Test.TestNotNull(TEXT("fixture blackboard exists"), Blackboard);
 	if (!Blackboard)
 	{
 		return false;
 	}
 
 	UBehaviorTree* Subtree = BTTestMakeExistingBehaviorTreeAsset(SubtreeTarget);
-	Test.TestNotNull(TEXT("Task7 fixture subtree exists"), Subtree);
+	Test.TestNotNull(TEXT("fixture subtree exists"), Subtree);
 	if (!Subtree)
 	{
 		return false;
@@ -1276,10 +1277,10 @@ bool BTTestApplyTask7TreeFixture(
 
 	TSharedPtr<FJsonObject> Body = BTTestMakeBehaviorTreeBody(
 		BTTestMakeAssetRef(BTTestMakeObjectPathFromTarget(BlackboardTarget)),
-		BTTestMakeTask7BehaviorTree(SubtreeTarget, bIncludeRootDecorator),
+		BTTestMakeDecoratorBehaviorTree(SubtreeTarget, bIncludeRootDecorator),
 		MakeShared<FJsonObject>());
 	const FAssetDocumentResult ApplyResult = Fixture.Apply(Service, Target, BTTestMakeBehaviorTreeDocument(Target, Body));
-	Test.TestTrue(TEXT("Task7 fixture apply succeeds"), ApplyResult.IsSuccess());
+	Test.TestTrue(TEXT("fixture apply succeeds"), ApplyResult.IsSuccess());
 	if (!ApplyResult.IsSuccess())
 	{
 		Test.AddError(ApplyResult.Message);
@@ -1510,7 +1511,7 @@ bool BTTestExpectDocumentSync(
 	return true;
 }
 
-bool BTTestApplyTask10BlackboardFixture(
+bool BTTestApplyFullBlackboardFixture(
 	FAutomationTestBase& Test,
 	FAssetDocumentService& Service,
 	FScopedBehaviorTreeMutationFixture& Fixture,
@@ -1527,7 +1528,7 @@ bool BTTestApplyTask10BlackboardFixture(
 				TEXT(""),
 				TEXT("Inherited visibility gate")),
 		})));
-	Test.TestTrue(TEXT("Task10 parent blackboard apply succeeds"), ParentApply.IsSuccess());
+	Test.TestTrue(TEXT("parent blackboard apply succeeds"), ParentApply.IsSuccess());
 	if (!ParentApply.IsSuccess())
 	{
 		Test.AddError(ParentApply.Message);
@@ -1539,7 +1540,7 @@ bool BTTestApplyTask10BlackboardFixture(
 		BTTestMakeBlackboardKeyJson(TEXT("SpareTargetActor"), TEXT("Object"), AActor::StaticClass()->GetPathName()),
 	});
 	const FAssetDocumentResult LocalApply = Fixture.Apply(Service, BlackboardTarget, BTTestMakeBlackboardDataDocument(BlackboardTarget, LocalBody));
-	Test.TestTrue(TEXT("Task10 local blackboard apply succeeds"), LocalApply.IsSuccess());
+	Test.TestTrue(TEXT("local blackboard apply succeeds"), LocalApply.IsSuccess());
 	if (!LocalApply.IsSuccess())
 	{
 		Test.AddError(LocalApply.Message);
@@ -1547,7 +1548,7 @@ bool BTTestApplyTask10BlackboardFixture(
 	return LocalApply.IsSuccess();
 }
 
-TSharedPtr<FJsonObject> BTTestMakeTask10EditorLayout()
+TSharedPtr<FJsonObject> BTTestMakeFullEditorLayout()
 {
 	return BTTestMakeEditorLayout(
 		{
@@ -1569,79 +1570,79 @@ TSharedPtr<FJsonObject> BTTestMakeTask10EditorLayout()
 		});
 }
 
-TSharedPtr<FJsonObject> BTTestMakeReflectedTask10NodeProperties(UClass* NodeClass, const TSharedRef<FJsonObject>& SparseProperties)
+TSharedPtr<FJsonObject> BTTestMakeReflectedFullNodeProperties(UClass* NodeClass, const TSharedRef<FJsonObject>& SparseProperties)
 {
 	// Node properties are authored sparsely (only the fields that differ from the class default).
 	return SparseProperties;
 }
 
-TSharedRef<FJsonObject> BTTestMakeTask10SparseNodeProperties(const FString& NodeName)
+TSharedRef<FJsonObject> BTTestMakeFullSparseNodeProperties(const FString& NodeName)
 {
 	TSharedRef<FJsonObject> Properties = MakeShared<FJsonObject>();
 	Properties->SetStringField(TEXT("NodeName"), NodeName);
 	return Properties;
 }
 
-TSharedPtr<FJsonObject> BTTestMakeTask10CompositeProperties(const FString& NodeName)
+TSharedPtr<FJsonObject> BTTestMakeFullCompositeProperties(const FString& NodeName)
 {
-	return BTTestMakeReflectedTask10NodeProperties(UBTComposite_Selector::StaticClass(), BTTestMakeTask10SparseNodeProperties(NodeName));
+	return BTTestMakeReflectedFullNodeProperties(UBTComposite_Selector::StaticClass(), BTTestMakeFullSparseNodeProperties(NodeName));
 }
 
-TSharedPtr<FJsonObject> BTTestMakeTask10DefaultFocusProperties(const FString& NodeName)
+TSharedPtr<FJsonObject> BTTestMakeFullDefaultFocusProperties(const FString& NodeName)
 {
-	TSharedRef<FJsonObject> Properties = BTTestMakeTask10SparseNodeProperties(NodeName);
+	TSharedRef<FJsonObject> Properties = BTTestMakeFullSparseNodeProperties(NodeName);
 	Properties->SetNumberField(TEXT("Interval"), 1.25);
 	Properties->SetObjectField(TEXT("BlackboardKey"), BTTestMakeSelectorProperty(TEXT("TargetActor")));
-	return BTTestMakeReflectedTask10NodeProperties(UBTService_DefaultFocus::StaticClass(), Properties);
+	return BTTestMakeReflectedFullNodeProperties(UBTService_DefaultFocus::StaticClass(), Properties);
 }
 
-TSharedPtr<FJsonObject> BTTestMakeTask10BlackboardDecoratorProperties(const FString& NodeName)
+TSharedPtr<FJsonObject> BTTestMakeFullBlackboardDecoratorProperties(const FString& NodeName)
 {
-	TSharedRef<FJsonObject> Properties = BTTestMakeTask10SparseNodeProperties(NodeName);
+	TSharedRef<FJsonObject> Properties = BTTestMakeFullSparseNodeProperties(NodeName);
 	Properties->SetObjectField(TEXT("BlackboardKey"), BTTestMakeSelectorProperty(TEXT("TargetActor")));
-	return BTTestMakeReflectedTask10NodeProperties(UBTDecorator_Blackboard::StaticClass(), Properties);
+	return BTTestMakeReflectedFullNodeProperties(UBTDecorator_Blackboard::StaticClass(), Properties);
 }
 
-TSharedPtr<FJsonObject> BTTestMakeTask10MoveToProperties(const FString& NodeName)
+TSharedPtr<FJsonObject> BTTestMakeFullMoveToProperties(const FString& NodeName)
 {
-	TSharedRef<FJsonObject> Properties = BTTestMakeTask10SparseNodeProperties(NodeName);
+	TSharedRef<FJsonObject> Properties = BTTestMakeFullSparseNodeProperties(NodeName);
 	Properties->SetObjectField(TEXT("BlackboardKey"), BTTestMakeSelectorProperty(TEXT("TargetActor")));
-	return BTTestMakeReflectedTask10NodeProperties(UBTTask_MoveTo::StaticClass(), Properties);
+	return BTTestMakeReflectedFullNodeProperties(UBTTask_MoveTo::StaticClass(), Properties);
 }
 
-TSharedPtr<FJsonObject> BTTestMakeTask10RunBehaviorProperties(const FString& NodeName, const FString& SubtreeTarget)
+TSharedPtr<FJsonObject> BTTestMakeFullRunBehaviorProperties(const FString& NodeName, const FString& SubtreeTarget)
 {
-	TSharedRef<FJsonObject> Properties = BTTestMakeTask10SparseNodeProperties(NodeName);
+	TSharedRef<FJsonObject> Properties = BTTestMakeFullSparseNodeProperties(NodeName);
 	Properties->SetObjectField(TEXT("BehaviorAsset"), BTTestMakeAssetRef(BTTestMakeObjectPathFromTarget(SubtreeTarget)));
-	return BTTestMakeReflectedTask10NodeProperties(UBTTask_RunBehavior::StaticClass(), Properties);
+	return BTTestMakeReflectedFullNodeProperties(UBTTask_RunBehavior::StaticClass(), Properties);
 }
 
-TSharedPtr<FJsonObject> BTTestMakeTask10BehaviorTree(const FString& SubtreeTarget)
+TSharedPtr<FJsonObject> BTTestMakeFullBehaviorTree(const FString& SubtreeTarget)
 {
 	TArray<TSharedPtr<FJsonValue>> Services;
 	Services.Add(BTTestMakeObjectValue(BTTestMakeBtNode(
 		TEXT("FocusService"),
 		TEXT("/Script/AIModule.BTService_DefaultFocus"),
-		BTTestMakeTask10DefaultFocusProperties(TEXT("FocusService")))));
+		BTTestMakeFullDefaultFocusProperties(TEXT("FocusService")))));
 
 	TArray<TSharedPtr<FJsonValue>> EdgeDecorators;
 	EdgeDecorators.Add(BTTestMakeObjectValue(BTTestMakeBtNode(
 		TEXT("HasTarget"),
 		TEXT("/Script/AIModule.BTDecorator_Blackboard"),
-		BTTestMakeTask10BlackboardDecoratorProperties(TEXT("HasTarget")))));
+		BTTestMakeFullBlackboardDecoratorProperties(TEXT("HasTarget")))));
 
 	TSharedPtr<FJsonObject> MoveEdge = MakeShared<FJsonObject>();
 	MoveEdge->SetObjectField(TEXT("Child"), BTTestMakeBtNode(
 		TEXT("MoveToTarget"),
 		TEXT("/Script/AIModule.BTTask_MoveTo"),
-		BTTestMakeTask10MoveToProperties(TEXT("MoveToTarget"))));
+		BTTestMakeFullMoveToProperties(TEXT("MoveToTarget"))));
 	MoveEdge->SetArrayField(TEXT("Decorators"), EdgeDecorators);
 
 	TSharedPtr<FJsonObject> RunSubtreeEdge = MakeShared<FJsonObject>();
 	RunSubtreeEdge->SetObjectField(TEXT("Child"), BTTestMakeBtNode(
 		TEXT("RunSubtree"),
 		TEXT("/Script/AIModule.BTTask_RunBehavior"),
-		BTTestMakeTask10RunBehaviorProperties(TEXT("RunSubtree"), SubtreeTarget)));
+		BTTestMakeFullRunBehaviorProperties(TEXT("RunSubtree"), SubtreeTarget)));
 
 	TArray<TSharedPtr<FJsonValue>> Children;
 	Children.Add(BTTestMakeObjectValue(MoveEdge));
@@ -1650,7 +1651,7 @@ TSharedPtr<FJsonObject> BTTestMakeTask10BehaviorTree(const FString& SubtreeTarge
 	TSharedPtr<FJsonObject> Root = BTTestMakeBtNode(
 		TEXT("RootSelector"),
 		TEXT("/Script/AIModule.BTComposite_Selector"),
-		BTTestMakeTask10CompositeProperties(TEXT("RootSelector")));
+		BTTestMakeFullCompositeProperties(TEXT("RootSelector")));
 	Root->SetArrayField(TEXT("Services"), Services);
 	Root->SetArrayField(TEXT("Children"), Children);
 
@@ -1658,7 +1659,7 @@ TSharedPtr<FJsonObject> BTTestMakeTask10BehaviorTree(const FString& SubtreeTarge
 	RootDecorators.Add(BTTestMakeObjectValue(BTTestMakeBtNode(
 		TEXT("RootHasTarget"),
 		TEXT("/Script/AIModule.BTDecorator_Blackboard"),
-		BTTestMakeTask10BlackboardDecoratorProperties(TEXT("RootHasTarget")))));
+		BTTestMakeFullBlackboardDecoratorProperties(TEXT("RootHasTarget")))));
 
 	TSharedPtr<FJsonObject> Tree = MakeShared<FJsonObject>();
 	Tree->SetObjectField(TEXT("Root"), Root);
@@ -1666,17 +1667,17 @@ TSharedPtr<FJsonObject> BTTestMakeTask10BehaviorTree(const FString& SubtreeTarge
 	return Tree;
 }
 
-TSharedPtr<FJsonObject> BTTestMakeTask10BehaviorTreeBody(
+TSharedPtr<FJsonObject> BTTestMakeFullBehaviorTreeBody(
 	const FString& BlackboardTarget,
 	const FString& SubtreeTarget)
 {
 	return BTTestMakeBehaviorTreeBody(
 		BTTestMakeAssetRef(BTTestMakeObjectPathFromTarget(BlackboardTarget)),
-		BTTestMakeTask10BehaviorTree(SubtreeTarget),
-		BTTestMakeTask10EditorLayout());
+		BTTestMakeFullBehaviorTree(SubtreeTarget),
+		BTTestMakeFullEditorLayout());
 }
 
-bool BTTestPrepareTask10BehaviorTreeFixture(
+bool BTTestPrepareFullBehaviorTreeFixture(
 	FAutomationTestBase& Test,
 	FAssetDocumentService& Service,
 	FScopedBehaviorTreeMutationFixture& Fixture,
@@ -1688,7 +1689,7 @@ bool BTTestPrepareTask10BehaviorTreeFixture(
 	OutParentBlackboardTarget = Target + TEXT("_ParentBB");
 	OutBlackboardTarget = Target + TEXT("_BB");
 	OutSubtreeTarget = Target + TEXT("_Subtree");
-	if (!BTTestApplyTask10BlackboardFixture(Test, Service, Fixture, OutParentBlackboardTarget, OutBlackboardTarget))
+	if (!BTTestApplyFullBlackboardFixture(Test, Service, Fixture, OutParentBlackboardTarget, OutBlackboardTarget))
 	{
 		return false;
 	}
@@ -1698,14 +1699,14 @@ bool BTTestPrepareTask10BehaviorTreeFixture(
 		return false;
 	}
 	UBehaviorTree* Subtree = BTTestMakeExistingBehaviorTreeAsset(OutSubtreeTarget);
-	Test.TestNotNull(TEXT("Task10 subtree asset exists"), Subtree);
+	Test.TestNotNull(TEXT("subtree asset exists"), Subtree);
 	if (!Subtree)
 	{
 		return false;
 	}
 
 	Subtree->BlackboardAsset = LoadObject<UBlackboardData>(nullptr, *BTTestMakeObjectPathFromTarget(OutBlackboardTarget));
-	Test.TestNotNull(TEXT("Task10 subtree blackboard resolves"), Subtree->BlackboardAsset.Get());
+	Test.TestNotNull(TEXT("subtree blackboard resolves"), Subtree->BlackboardAsset.Get());
 	return Subtree->BlackboardAsset != nullptr;
 }
 }
@@ -1892,10 +1893,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeTreeTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task7_Tree"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Tree"));
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	FScopedBehaviorTreeMutationFixture Fixture;
-	if (!BTTestApplyTask7TreeFixture(*this, Service, Fixture, Target))
+	if (!BTTestApplyDecoratorTreeFixture(*this, Service, Fixture, Target))
 	{
 		return false;
 	}
@@ -1948,7 +1949,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeEmptyTreeExtractTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task7_EmptyExtract"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_EmptyExtract"));
 	FScopedBehaviorTreeMutationFixture Cleanup;
 	if (!Cleanup.ReserveTarget(Target)) return false;
 	UBehaviorTree* EmptyTree = NewObject<UBehaviorTree>(
@@ -1991,10 +1992,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeRootDecoratorsTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task7_RootDecorators"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_RootDecorators"));
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	FScopedBehaviorTreeMutationFixture Fixture;
-	if (!BTTestApplyTask7TreeFixture(*this, Service, Fixture, Target, true))
+	if (!BTTestApplyDecoratorTreeFixture(*this, Service, Fixture, Target, true))
 	{
 		return false;
 	}
@@ -2006,7 +2007,7 @@ bool FAssetDocumentBehaviorTreeRootDecoratorsTest::RunTest(const FString&)
 
 	TSharedPtr<FJsonObject> DesiredBody = BTTestMakeBehaviorTreeBody(
 		BTTestMakeAssetRef(BehaviorTree->BlackboardAsset->GetPathName()),
-		BTTestMakeTask7BehaviorTree(Target + TEXT("_Subtree"), true),
+		BTTestMakeDecoratorBehaviorTree(Target + TEXT("_Subtree"), true),
 		MakeShared<FJsonObject>());
 	TSharedPtr<FJsonObject> DesiredRoot = BTTestGetObjectField(BTTestGetObjectField(DesiredBody, TEXT("Tree")), TEXT("Root"));
 	const TArray<TSharedPtr<FJsonValue>>* DesiredDecorators = nullptr;
@@ -2034,10 +2035,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeDecoratorLogicTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task7_DecoratorLogic"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_DecoratorLogic"));
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	FScopedBehaviorTreeMutationFixture Fixture;
-	if (!BTTestApplyTask7TreeFixture(*this, Service, Fixture, Target, true))
+	if (!BTTestApplyDecoratorTreeFixture(*this, Service, Fixture, Target, true))
 	{
 		return false;
 	}
@@ -2049,7 +2050,7 @@ bool FAssetDocumentBehaviorTreeDecoratorLogicTest::RunTest(const FString&)
 
 	TSharedPtr<FJsonObject> LegacyLogicBody = BTTestMakeBehaviorTreeBody(
 		BTTestMakeAssetRef(BehaviorTree->BlackboardAsset->GetPathName()),
-		BTTestMakeTask7BehaviorTree(Target + TEXT("_Subtree"), true),
+		BTTestMakeDecoratorBehaviorTree(Target + TEXT("_Subtree"), true),
 		MakeShared<FJsonObject>());
 	BTTestGetObjectField(BTTestGetObjectField(LegacyLogicBody, TEXT("Tree")), TEXT("Root"))->SetArrayField(TEXT("DecoratorLogic"), {});
 	FAssetDocumentValidateRequest Request;
@@ -2067,10 +2068,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeDecoratorLogicRejectsInvalidShapeTest::RunTest(const FString&)
 {
-	const FString Target = TEXT("/Game/AssetDocumentTests/BT_AD_Task7_InvalidDecoratorLogic");
+	const FString Target = TEXT("/Game/AssetDocumentTests/BT_AD_InvalidDecoratorLogic");
 	const FString BlackboardTarget = Target + TEXT("_BB");
 	const FString SubtreeTarget = Target + TEXT("_Subtree");
-	UBlackboardData* FixtureBlackboard = BTTestMakeTask7BlackboardAsset(BlackboardTarget);
+	UBlackboardData* FixtureBlackboard = BTTestMakeDecoratorBlackboardAsset(BlackboardTarget);
 	BTTestMakeExistingBehaviorTreeAsset(SubtreeTarget)->BlackboardAsset = FixtureBlackboard;
 
 	const auto MakeBoundNode = [](const FString& Id, const FString& Kind)
@@ -2125,7 +2126,7 @@ bool FAssetDocumentBehaviorTreeDecoratorLogicRejectsInvalidShapeTest::RunTest(co
 
 	TSharedPtr<FJsonObject> Body = BTTestMakeBehaviorTreeBody(
 		BTTestMakeAssetRef(BTTestMakeObjectPathFromTarget(BlackboardTarget)),
-		BTTestMakeTask7BehaviorTree(SubtreeTarget, true),
+		BTTestMakeDecoratorBehaviorTree(SubtreeTarget, true),
 		MakeShared<FJsonObject>());
 	SetFirstChildComposite(Body, MakeComposite(
 		{
@@ -2145,7 +2146,7 @@ bool FAssetDocumentBehaviorTreeDecoratorLogicRejectsInvalidShapeTest::RunTest(co
 
 	Body = BTTestMakeBehaviorTreeBody(
 		BTTestMakeAssetRef(BTTestMakeObjectPathFromTarget(BlackboardTarget)),
-		BTTestMakeTask7BehaviorTree(SubtreeTarget, true),
+		BTTestMakeDecoratorBehaviorTree(SubtreeTarget, true),
 		MakeShared<FJsonObject>());
 	TSharedPtr<FJsonValue> DanglingLink = MakeLink(TEXT("Test"), TEXT("Missing"), 0);
 	SetFirstChildComposite(Body, MakeComposite(
@@ -2169,15 +2170,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeRejectsNodeLevelDecoratorsTest::RunTest(const FString&)
 {
-	const FString Target = TEXT("/Game/AssetDocumentTests/BT_AD_Task7_NodeLevelDecorators");
+	const FString Target = TEXT("/Game/AssetDocumentTests/BT_AD_NodeLevelDecorators");
 	const FString BlackboardTarget = Target + TEXT("_BB");
 	const FString SubtreeTarget = Target + TEXT("_Subtree");
-	UBlackboardData* FixtureBlackboard = BTTestMakeTask7BlackboardAsset(BlackboardTarget);
+	UBlackboardData* FixtureBlackboard = BTTestMakeDecoratorBlackboardAsset(BlackboardTarget);
 	BTTestMakeExistingBehaviorTreeAsset(SubtreeTarget)->BlackboardAsset = FixtureBlackboard;
 
 	TSharedPtr<FJsonObject> Body = BTTestMakeBehaviorTreeBody(
 		BTTestMakeAssetRef(BTTestMakeObjectPathFromTarget(BlackboardTarget)),
-		BTTestMakeTask7BehaviorTree(SubtreeTarget, true),
+		BTTestMakeDecoratorBehaviorTree(SubtreeTarget, true),
 		MakeShared<FJsonObject>());
 	FAssetDocumentValidateRequest DecoratorsRequest;
 	DecoratorsRequest.Document = BTTestMakeBehaviorTreeDocument(Target, Body);
@@ -2201,10 +2202,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeSemanticDiffPathsTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task7_SemanticDiffPaths"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_SemanticDiffPaths"));
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	FScopedBehaviorTreeMutationFixture Fixture;
-	if (!BTTestApplyTask7TreeFixture(*this, Service, Fixture, Target, true))
+	if (!BTTestApplyDecoratorTreeFixture(*this, Service, Fixture, Target, true))
 	{
 		return false;
 	}
@@ -2216,7 +2217,7 @@ bool FAssetDocumentBehaviorTreeSemanticDiffPathsTest::RunTest(const FString&)
 		return false;
 	}
 
-	TSharedPtr<FJsonObject> DesiredTree = BTTestMakeTask7BehaviorTree(Target + TEXT("_Subtree"), true);
+	TSharedPtr<FJsonObject> DesiredTree = BTTestMakeDecoratorBehaviorTree(Target + TEXT("_Subtree"), true);
 	TSharedPtr<FJsonObject> Root = BTTestGetObjectField(DesiredTree, TEXT("Root"));
 	const TArray<TSharedPtr<FJsonValue>>* Children = nullptr;
 	if (Root.IsValid() && Root->TryGetArrayField(TEXT("Children"), Children) && Children && Children->Num() > 0)
@@ -2260,7 +2261,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeOrderDiffPathsTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task7_OrderDiffPaths"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_OrderDiffPaths"));
 	const FString BlackboardTarget = Target + TEXT("_BB");
 	const FString SubtreeTarget = Target + TEXT("_Subtree");
 	FScopedBehaviorTreeMutationFixture Fixture;
@@ -2268,11 +2269,11 @@ bool FAssetDocumentBehaviorTreeOrderDiffPathsTest::RunTest(const FString&)
 	{
 		return false;
 	}
-	UBlackboardData* FixtureBlackboard = BTTestMakeTask7BlackboardAsset(BlackboardTarget);
+	UBlackboardData* FixtureBlackboard = BTTestMakeDecoratorBlackboardAsset(BlackboardTarget);
 	BTTestMakeExistingBehaviorTreeAsset(SubtreeTarget)->BlackboardAsset = FixtureBlackboard;
 
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
-	TSharedPtr<FJsonObject> AppliedTree = BTTestMakeTask7BehaviorTree(SubtreeTarget, true);
+	TSharedPtr<FJsonObject> AppliedTree = BTTestMakeDecoratorBehaviorTree(SubtreeTarget, true);
 	BTTestAddSecondDecoratorSet(AppliedTree);
 	TSharedPtr<FJsonObject> Body = BTTestMakeBehaviorTreeBody(
 		BTTestMakeAssetRef(BTTestMakeObjectPathFromTarget(BlackboardTarget)),
@@ -2286,7 +2287,7 @@ bool FAssetDocumentBehaviorTreeOrderDiffPathsTest::RunTest(const FString&)
 		return false;
 	}
 
-	TSharedPtr<FJsonObject> DesiredTree = BTTestMakeTask7BehaviorTree(SubtreeTarget, true);
+	TSharedPtr<FJsonObject> DesiredTree = BTTestMakeDecoratorBehaviorTree(SubtreeTarget, true);
 	BTTestAddSecondDecoratorSet(DesiredTree);
 	TSharedPtr<FJsonObject> Root = BTTestGetObjectField(DesiredTree, TEXT("Root"));
 	BTTestSwapArrayEntries(Root, TEXT("Children"), 0, 1);
@@ -2323,7 +2324,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeExtractsUniqueIdsForDuplicateDisplayNamesTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task7_DuplicateDisplayNames"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_DuplicateDisplayNames"));
 	const FString BlackboardTarget = Target + TEXT("_BB");
 	const FString SubtreeTarget = Target + TEXT("_Subtree");
 	FScopedBehaviorTreeMutationFixture Fixture;
@@ -2332,10 +2333,10 @@ bool FAssetDocumentBehaviorTreeExtractsUniqueIdsForDuplicateDisplayNamesTest::Ru
 		return false;
 	}
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
-	UBlackboardData* Blackboard = BTTestMakeTask7BlackboardAsset(BlackboardTarget);
+	UBlackboardData* Blackboard = BTTestMakeDecoratorBlackboardAsset(BlackboardTarget);
 	UBehaviorTree* Subtree = BTTestMakeExistingBehaviorTreeAsset(SubtreeTarget);
 	Subtree->BlackboardAsset = Blackboard;
-	TSharedPtr<FJsonObject> LegacyTree = BTTestMakeTask7BehaviorTree(SubtreeTarget, true);
+	TSharedPtr<FJsonObject> LegacyTree = BTTestMakeDecoratorBehaviorTree(SubtreeTarget, true);
 	BTTestAddSecondDecoratorSet(LegacyTree);
 	TSharedPtr<FJsonObject> LegacyRoot = BTTestGetObjectField(LegacyTree, TEXT("Root"));
 	const TArray<TSharedPtr<FJsonValue>>* Services = nullptr;
@@ -2438,7 +2439,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeEditorLayoutTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task9_EditorLayout"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_EditorLayout"));
 	const FString BlackboardTarget = Target + TEXT("_BB");
 	const FString SubtreeTarget = Target + TEXT("_Subtree");
 	FScopedBehaviorTreeMutationFixture Fixture;
@@ -2446,7 +2447,7 @@ bool FAssetDocumentBehaviorTreeEditorLayoutTest::RunTest(const FString&)
 	{
 		return false;
 	}
-	UBlackboardData* FixtureBlackboard = BTTestMakeTask7BlackboardAsset(BlackboardTarget);
+	UBlackboardData* FixtureBlackboard = BTTestMakeDecoratorBlackboardAsset(BlackboardTarget);
 	BTTestMakeExistingBehaviorTreeAsset(SubtreeTarget)->BlackboardAsset = FixtureBlackboard;
 
 	const FString CommentId = TEXT("11111111-2222-3333-4444-555555555555");
@@ -2462,7 +2463,7 @@ bool FAssetDocumentBehaviorTreeEditorLayoutTest::RunTest(const FString&)
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	TSharedPtr<FJsonObject> Body = BTTestMakeBehaviorTreeBody(
 		BTTestMakeAssetRef(BTTestMakeObjectPathFromTarget(BlackboardTarget)),
-		BTTestMakeTask7BehaviorTree(SubtreeTarget, true),
+		BTTestMakeDecoratorBehaviorTree(SubtreeTarget, true),
 		Layout);
 	const FAssetDocumentResult ApplyResult = Fixture.Apply(Service, Target, BTTestMakeBehaviorTreeDocument(Target, Body));
 	TestTrue(TEXT("semantic tree and editor layout apply succeeds"), ApplyResult.IsSuccess());
@@ -2547,7 +2548,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeEditorLayoutSparsePreservesCommentsTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task9_SparseLayoutComments"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_SparseLayoutComments"));
 	const FString BlackboardTarget = Target + TEXT("_BB");
 	const FString SubtreeTarget = Target + TEXT("_Subtree");
 	FScopedBehaviorTreeMutationFixture Fixture;
@@ -2555,14 +2556,14 @@ bool FAssetDocumentBehaviorTreeEditorLayoutSparsePreservesCommentsTest::RunTest(
 	{
 		return false;
 	}
-	UBlackboardData* FixtureBlackboard = BTTestMakeTask7BlackboardAsset(BlackboardTarget);
+	UBlackboardData* FixtureBlackboard = BTTestMakeDecoratorBlackboardAsset(BlackboardTarget);
 	BTTestMakeExistingBehaviorTreeAsset(SubtreeTarget)->BlackboardAsset = FixtureBlackboard;
 
 	const FString CommentId = TEXT("22222222-3333-4444-5555-666666666666");
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	TSharedPtr<FJsonObject> InitialBody = BTTestMakeBehaviorTreeBody(
 		BTTestMakeAssetRef(BTTestMakeObjectPathFromTarget(BlackboardTarget)),
-		BTTestMakeTask7BehaviorTree(SubtreeTarget, true),
+		BTTestMakeDecoratorBehaviorTree(SubtreeTarget, true),
 		BTTestMakeEditorLayout(
 			{
 				BTTestMakeObjectValue(BTTestMakeEditorLayoutNode(TEXT("RootSelector"), 100, 200)),
@@ -2606,7 +2607,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeEditorLayoutExplicitEmptyCommentsDeletesTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task9_DeleteLayoutComments"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_DeleteLayoutComments"));
 	const FString BlackboardTarget = Target + TEXT("_BB");
 	const FString SubtreeTarget = Target + TEXT("_Subtree");
 	FScopedBehaviorTreeMutationFixture Fixture;
@@ -2614,14 +2615,14 @@ bool FAssetDocumentBehaviorTreeEditorLayoutExplicitEmptyCommentsDeletesTest::Run
 	{
 		return false;
 	}
-	UBlackboardData* FixtureBlackboard = BTTestMakeTask7BlackboardAsset(BlackboardTarget);
+	UBlackboardData* FixtureBlackboard = BTTestMakeDecoratorBlackboardAsset(BlackboardTarget);
 	BTTestMakeExistingBehaviorTreeAsset(SubtreeTarget)->BlackboardAsset = FixtureBlackboard;
 
 	const FString CommentId = TEXT("44444444-5555-6666-7777-888888888888");
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	TSharedPtr<FJsonObject> InitialBody = BTTestMakeBehaviorTreeBody(
 		BTTestMakeAssetRef(BTTestMakeObjectPathFromTarget(BlackboardTarget)),
-		BTTestMakeTask7BehaviorTree(SubtreeTarget, true),
+		BTTestMakeDecoratorBehaviorTree(SubtreeTarget, true),
 		BTTestMakeEditorLayout(
 			{
 				BTTestMakeObjectValue(BTTestMakeEditorLayoutNode(TEXT("RootSelector"), 100, 200)),
@@ -2690,7 +2691,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeEditorLayoutCommentColorOptionalDiffTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task9_OptionalCommentColor"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_OptionalCommentColor"));
 	const FString BlackboardTarget = Target + TEXT("_BB");
 	const FString SubtreeTarget = Target + TEXT("_Subtree");
 	FScopedBehaviorTreeMutationFixture Fixture;
@@ -2698,12 +2699,12 @@ bool FAssetDocumentBehaviorTreeEditorLayoutCommentColorOptionalDiffTest::RunTest
 	{
 		return false;
 	}
-	UBlackboardData* FixtureBlackboard = BTTestMakeTask7BlackboardAsset(BlackboardTarget);
+	UBlackboardData* FixtureBlackboard = BTTestMakeDecoratorBlackboardAsset(BlackboardTarget);
 	BTTestMakeExistingBehaviorTreeAsset(SubtreeTarget)->BlackboardAsset = FixtureBlackboard;
 
 	const FString CommentId = TEXT("33333333-4444-5555-6666-777777777777");
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
-	TSharedPtr<FJsonObject> Tree = BTTestMakeTask7BehaviorTree(SubtreeTarget, true);
+	TSharedPtr<FJsonObject> Tree = BTTestMakeDecoratorBehaviorTree(SubtreeTarget, true);
 	TSharedPtr<FJsonObject> LayoutWithoutColor = BTTestMakeEditorLayout(
 		{
 			BTTestMakeObjectValue(BTTestMakeEditorLayoutNode(TEXT("RootSelector"), 100, 200)),
@@ -2726,7 +2727,7 @@ bool FAssetDocumentBehaviorTreeEditorLayoutCommentColorOptionalDiffTest::RunTest
 
 	TSharedPtr<FJsonObject> DesiredBody = BTTestMakeBehaviorTreeBody(
 		BTTestMakeAssetRef(BTTestMakeObjectPathFromTarget(BlackboardTarget)),
-		BTTestMakeTask7BehaviorTree(SubtreeTarget, true),
+		BTTestMakeDecoratorBehaviorTree(SubtreeTarget, true),
 		LayoutWithoutColor);
 	const FAssetDocumentResult DiffResult = Service.Diff(BTTestMakeDiffRequest(BTTestMakeBehaviorTreeDocument(Target, DesiredBody)));
 	TestTrue(TEXT("diff for comment without Color succeeds"), DiffResult.IsSuccess());
@@ -2751,7 +2752,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeEditorLayoutRejectsDanglingNodeTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task9_DanglingLayout"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_DanglingLayout"));
 	const FString BlackboardTarget = Target + TEXT("_BB");
 	const FString SubtreeTarget = Target + TEXT("_Subtree");
 	FScopedBehaviorTreeMutationFixture Fixture;
@@ -2759,13 +2760,13 @@ bool FAssetDocumentBehaviorTreeEditorLayoutRejectsDanglingNodeTest::RunTest(cons
 	{
 		return false;
 	}
-	UBlackboardData* FixtureBlackboard = BTTestMakeTask7BlackboardAsset(BlackboardTarget);
+	UBlackboardData* FixtureBlackboard = BTTestMakeDecoratorBlackboardAsset(BlackboardTarget);
 	BTTestMakeExistingBehaviorTreeAsset(SubtreeTarget)->BlackboardAsset = FixtureBlackboard;
 
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	TSharedPtr<FJsonObject> Body = BTTestMakeBehaviorTreeBody(
 		BTTestMakeAssetRef(BTTestMakeObjectPathFromTarget(BlackboardTarget)),
-		BTTestMakeTask7BehaviorTree(SubtreeTarget, true),
+		BTTestMakeDecoratorBehaviorTree(SubtreeTarget, true),
 		MakeShared<FJsonObject>());
 	TSharedPtr<FJsonObject> Root = BTTestGetObjectField(BTTestGetObjectField(Body, TEXT("Tree")), TEXT("Root"));
 	BTTestGetObjectField(BTTestGetObjectField(Root, TEXT("Editor")), TEXT("Position"))->SetNumberField(TEXT("X"), 10.5);
@@ -2785,7 +2786,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeEditorLayoutOnlyDiffTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task9_LayoutOnlyDiff"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_LayoutOnlyDiff"));
 	const FString BlackboardTarget = Target + TEXT("_BB");
 	const FString SubtreeTarget = Target + TEXT("_Subtree");
 	FScopedBehaviorTreeMutationFixture Fixture;
@@ -2793,11 +2794,11 @@ bool FAssetDocumentBehaviorTreeEditorLayoutOnlyDiffTest::RunTest(const FString&)
 	{
 		return false;
 	}
-	UBlackboardData* FixtureBlackboard = BTTestMakeTask7BlackboardAsset(BlackboardTarget);
+	UBlackboardData* FixtureBlackboard = BTTestMakeDecoratorBlackboardAsset(BlackboardTarget);
 	BTTestMakeExistingBehaviorTreeAsset(SubtreeTarget)->BlackboardAsset = FixtureBlackboard;
 
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
-	TSharedPtr<FJsonObject> AppliedTree = BTTestMakeTask7BehaviorTree(SubtreeTarget, true);
+	TSharedPtr<FJsonObject> AppliedTree = BTTestMakeDecoratorBehaviorTree(SubtreeTarget, true);
 	TSharedPtr<FJsonObject> AppliedLayout = BTTestMakeEditorLayout(
 		{
 			BTTestMakeObjectValue(BTTestMakeEditorLayoutNode(TEXT("RootSelector"), 100, 200)),
@@ -2815,7 +2816,7 @@ bool FAssetDocumentBehaviorTreeEditorLayoutOnlyDiffTest::RunTest(const FString&)
 		return false;
 	}
 
-	TSharedPtr<FJsonObject> DesiredTree = BTTestMakeTask7BehaviorTree(SubtreeTarget, true);
+	TSharedPtr<FJsonObject> DesiredTree = BTTestMakeDecoratorBehaviorTree(SubtreeTarget, true);
 	TSharedPtr<FJsonObject> DesiredLayout = BTTestMakeEditorLayout(
 		{
 			BTTestMakeObjectValue(BTTestMakeEditorLayoutNode(TEXT("RootSelector"), 180, 260)),
@@ -2846,10 +2847,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeDynamicNodeClassesTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task7_DynamicClasses"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_DynamicClasses"));
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	FScopedBehaviorTreeMutationFixture Fixture;
-	if (!BTTestApplyTask7TreeFixture(*this, Service, Fixture, Target, true))
+	if (!BTTestApplyDecoratorTreeFixture(*this, Service, Fixture, Target, true))
 	{
 		return false;
 	}
@@ -2869,10 +2870,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeApplyFailureDoesNotMutateExistingTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task7_FailureAtomicity"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_FailureAtomicity"));
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	FScopedBehaviorTreeMutationFixture Fixture;
-	if (!BTTestApplyTask7TreeFixture(*this, Service, Fixture, Target, false))
+	if (!BTTestApplyDecoratorTreeFixture(*this, Service, Fixture, Target, false))
 	{
 		return false;
 	}
@@ -2885,7 +2886,7 @@ bool FAssetDocumentBehaviorTreeApplyFailureDoesNotMutateExistingTest::RunTest(co
 	UBlackboardData* OriginalBlackboard = BehaviorTree ? BehaviorTree->BlackboardAsset : nullptr;
 	TestNotNull(TEXT("original root exists"), OriginalRoot);
 
-	TSharedPtr<FJsonObject> InvalidTree = BTTestMakeTask7BehaviorTree(Target + TEXT("_Subtree"), false);
+	TSharedPtr<FJsonObject> InvalidTree = BTTestMakeDecoratorBehaviorTree(Target + TEXT("_Subtree"), false);
 	TSharedPtr<FJsonObject> InvalidRoot = BTTestGetObjectField(InvalidTree, TEXT("Root"));
 	if (InvalidRoot.IsValid())
 	{
@@ -2902,7 +2903,7 @@ bool FAssetDocumentBehaviorTreeApplyFailureDoesNotMutateExistingTest::RunTest(co
 	TestTrue(TEXT("RootNode pointer survives failed apply"), BehaviorTree->RootNode == OriginalRoot);
 	TestEqual(TEXT("existing children survive failed apply"), OriginalRoot ? OriginalRoot->Children.Num() : -1, OriginalChildren);
 
-	TSharedPtr<FJsonObject> LateInvalidTree = BTTestMakeTask7BehaviorTree(Target + TEXT("_Subtree"), false);
+	TSharedPtr<FJsonObject> LateInvalidTree = BTTestMakeDecoratorBehaviorTree(Target + TEXT("_Subtree"), false);
 	TSharedPtr<FJsonObject> LateInvalidRoot = BTTestGetObjectField(LateInvalidTree, TEXT("Root"));
 	const TArray<TSharedPtr<FJsonValue>>* Children = nullptr;
 	if (LateInvalidRoot.IsValid() && LateInvalidRoot->TryGetArrayField(TEXT("Children"), Children) && Children && Children->Num() > 1)
@@ -2943,7 +2944,7 @@ bool FAssetDocumentBehaviorTreeCrossRegionValidationUsesTransientOuterTest::RunT
 	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_CrossRegionTransientOuter"));
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	FScopedBehaviorTreeMutationFixture Fixture;
-	if (!BTTestApplyTask7TreeFixture(*this, Service, Fixture, Target, false))
+	if (!BTTestApplyDecoratorTreeFixture(*this, Service, Fixture, Target, false))
 	{
 		return false;
 	}
@@ -2984,7 +2985,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeBlackboardKeySelectorsTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task8_KeySelectors"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_KeySelectors"));
 	const FString ParentBlackboardTarget = Target + TEXT("_ParentBB");
 	const FString BlackboardTarget = Target + TEXT("_BB");
 	FScopedBehaviorTreeMutationFixture Cleanup;
@@ -3024,7 +3025,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeSubtreeBlackboardCompatibilityTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task8_SubtreeCompatibility"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_SubtreeCompatibility"));
 	FScopedBehaviorTreeMutationFixture Fixture;
 	if (!TestTrue(TEXT("subtree compatibility fixture reserves target"), Fixture.ReserveTarget(Target)))
 	{
@@ -3157,7 +3158,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeUnknownBlackboardKeyRejectsTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task8_UnknownKey"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_UnknownKey"));
 	const FString BlackboardTarget = Target + TEXT("_BB");
 	FScopedBehaviorTreeMutationFixture Cleanup;
 	if (!Cleanup.ReserveTarget(BlackboardTarget)) return false;
@@ -3219,7 +3220,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeIncompatibleBlackboardKeyTypeRejectsTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task8_KeyTypeMismatch"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_KeyTypeMismatch"));
 	const FString BlackboardTarget = Target + TEXT("_BB");
 	FScopedBehaviorTreeMutationFixture Cleanup;
 	if (!Cleanup.ReserveTarget(BlackboardTarget)) return false;
@@ -3292,18 +3293,18 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeFullApplyExtractDiffTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task10_FullApplyExtractDiff"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_FullApplyExtractDiff"));
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	FScopedBehaviorTreeMutationFixture Fixture;
 	FString ParentBlackboardTarget;
 	FString BlackboardTarget;
 	FString SubtreeTarget;
-	if (!BTTestPrepareTask10BehaviorTreeFixture(*this, Service, Fixture, Target, ParentBlackboardTarget, BlackboardTarget, SubtreeTarget))
+	if (!BTTestPrepareFullBehaviorTreeFixture(*this, Service, Fixture, Target, ParentBlackboardTarget, BlackboardTarget, SubtreeTarget))
 	{
 		return false;
 	}
 
-	TSharedPtr<FJsonObject> Body = BTTestMakeTask10BehaviorTreeBody(BlackboardTarget, SubtreeTarget);
+	TSharedPtr<FJsonObject> Body = BTTestMakeFullBehaviorTreeBody(BlackboardTarget, SubtreeTarget);
 	TSharedPtr<FJsonObject> Document = BTTestMakeBehaviorTreeDocument(Target, Body);
 	const FAssetDocumentResult ApplyResult = Fixture.Apply(Service, Target, Document);
 	TestTrue(TEXT("full BehaviorTree apply succeeds"), ApplyResult.IsSuccess());
@@ -3375,18 +3376,18 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeApplyFileCanonicalWritebackTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task10_ApplyFileWriteback"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_ApplyFileWriteback"));
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	FScopedBehaviorTreeMutationFixture Fixture;
 	FString ParentBlackboardTarget;
 	FString BlackboardTarget;
 	FString SubtreeTarget;
-	if (!BTTestPrepareTask10BehaviorTreeFixture(*this, Service, Fixture, Target, ParentBlackboardTarget, BlackboardTarget, SubtreeTarget))
+	if (!BTTestPrepareFullBehaviorTreeFixture(*this, Service, Fixture, Target, ParentBlackboardTarget, BlackboardTarget, SubtreeTarget))
 	{
 		return false;
 	}
 
-	TSharedPtr<FJsonObject> Document = BTTestMakeBehaviorTreeDocument(Target, BTTestMakeTask10BehaviorTreeBody(BlackboardTarget, SubtreeTarget));
+	TSharedPtr<FJsonObject> Document = BTTestMakeBehaviorTreeDocument(Target, BTTestMakeFullBehaviorTreeBody(BlackboardTarget, SubtreeTarget));
 	TestFalse(TEXT("primary ApplyFile target is absent before full fixture projection"), FPackageName::DoesPackageExist(Target));
 	TestNull(TEXT("primary ApplyFile target is not loaded before full fixture projection"), FindObject<UBehaviorTree>(nullptr, *BTTestMakeObjectPathFromTarget(Target)));
 	// Complete omitted defaults through the existing production projection on an
@@ -3469,7 +3470,7 @@ bool FAssetDocumentBehaviorTreeApplyFileCanonicalWritebackTest::RunTest(const FS
 	TestTrue(TEXT("BehaviorTree ApplyFile diff succeeds"), DiffResult.IsSuccess());
 	TestTrue(TEXT("BehaviorTree ApplyFile diff has no changed or failed entries"), BTTestDiffPayloadHasNoChangedOrFailedEntries(DiffResult.Payload));
 
-	TSharedPtr<FJsonObject> DerivedAllowedTypesDocument = BTTestMakeBehaviorTreeDocument(Target, BTTestMakeTask10BehaviorTreeBody(BlackboardTarget, SubtreeTarget));
+	TSharedPtr<FJsonObject> DerivedAllowedTypesDocument = BTTestMakeBehaviorTreeDocument(Target, BTTestMakeFullBehaviorTreeBody(BlackboardTarget, SubtreeTarget));
 	TSharedPtr<FJsonObject> DerivedAllowedTypesBody = BTTestGetObjectField(DerivedAllowedTypesDocument, TEXT("Body"));
 	TSharedPtr<FJsonObject> DerivedAllowedTypesTree = BTTestGetObjectField(DerivedAllowedTypesBody, TEXT("Tree"));
 	TSharedPtr<FJsonObject> DerivedAllowedTypesRoot = BTTestGetObjectField(DerivedAllowedTypesTree, TEXT("Root"));
@@ -3488,7 +3489,7 @@ bool FAssetDocumentBehaviorTreeApplyFileCanonicalWritebackTest::RunTest(const FS
 	TestFalse(TEXT("BehaviorTree rejects authored selector AllowedTypes"), AllowedTypesDiffResult.IsSuccess());
 	TestTrue(TEXT("BehaviorTree selector AllowedTypes diagnostic is exact"), BTTestResultHasDiagnostic(AllowedTypesDiffResult, TEXT("NonAuthoredProperty"), TEXT("/Body/Tree/Root/Children/0/Properties/BlackboardKey/AllowedTypes")));
 
-	TSharedPtr<FJsonObject> ChangedServiceSelectorDocument = BTTestMakeBehaviorTreeDocument(Target, BTTestMakeTask10BehaviorTreeBody(BlackboardTarget, SubtreeTarget));
+	TSharedPtr<FJsonObject> ChangedServiceSelectorDocument = BTTestMakeBehaviorTreeDocument(Target, BTTestMakeFullBehaviorTreeBody(BlackboardTarget, SubtreeTarget));
 	TSharedPtr<FJsonObject> ChangedBody = BTTestGetObjectField(ChangedServiceSelectorDocument, TEXT("Body"));
 	TSharedPtr<FJsonObject> ChangedTree = BTTestGetObjectField(ChangedBody, TEXT("Tree"));
 	TSharedPtr<FJsonObject> ChangedRoot = BTTestGetObjectField(ChangedTree, TEXT("Root"));
@@ -3516,18 +3517,18 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeApplyFailureRollsBackTest::RunTest(const FString&)
 {
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_Task10_FailureRollback"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_AD_FailureRollback"));
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	FScopedBehaviorTreeMutationFixture Fixture;
 	FString ParentBlackboardTarget;
 	FString BlackboardTarget;
 	FString SubtreeTarget;
-	if (!BTTestPrepareTask10BehaviorTreeFixture(*this, Service, Fixture, Target, ParentBlackboardTarget, BlackboardTarget, SubtreeTarget))
+	if (!BTTestPrepareFullBehaviorTreeFixture(*this, Service, Fixture, Target, ParentBlackboardTarget, BlackboardTarget, SubtreeTarget))
 	{
 		return false;
 	}
 
-	TSharedPtr<FJsonObject> InitialDocument = BTTestMakeBehaviorTreeDocument(Target, BTTestMakeTask10BehaviorTreeBody(BlackboardTarget, SubtreeTarget));
+	TSharedPtr<FJsonObject> InitialDocument = BTTestMakeBehaviorTreeDocument(Target, BTTestMakeFullBehaviorTreeBody(BlackboardTarget, SubtreeTarget));
 	const FAssetDocumentResult InitialApply = Fixture.Apply(Service, Target, InitialDocument);
 	TestTrue(TEXT("initial full BehaviorTree apply succeeds"), InitialApply.IsSuccess());
 	if (!InitialApply.IsSuccess())
@@ -3547,7 +3548,7 @@ bool FAssetDocumentBehaviorTreeApplyFailureRollsBackTest::RunTest(const FString&
 	UBehaviorTreeGraph* OriginalGraph = BehaviorTree ? Cast<UBehaviorTreeGraph>(BehaviorTree->BTGraph) : nullptr;
 	TestNotNull(TEXT("original full tree root exists"), OriginalRoot);
 
-	TSharedPtr<FJsonObject> InvalidBody = BTTestMakeTask10BehaviorTreeBody(BlackboardTarget, SubtreeTarget);
+	TSharedPtr<FJsonObject> InvalidBody = BTTestMakeFullBehaviorTreeBody(BlackboardTarget, SubtreeTarget);
 	TSharedPtr<FJsonObject> InvalidTree = BTTestGetObjectField(InvalidBody, TEXT("Tree"));
 	TSharedPtr<FJsonObject> InvalidRoot = BTTestGetObjectField(InvalidTree, TEXT("Root"));
 	if (InvalidRoot.IsValid())
@@ -3616,7 +3617,7 @@ bool FAssetDocumentBehaviorTreeProfileInspectionListsAllRegionsTest::RunTest(con
 	return true;
 }
 
-namespace Task4GraphSourceTests
+namespace BTGraphSourceTests
 {
 class FPublicGraphFixture;
 static FPublicGraphFixture* ActiveFixture = nullptr;
@@ -3709,7 +3710,7 @@ FAssetDocumentCapabilityResult DiffTree(const FAssetDocumentRegionContext& Conte
 	return Out;
 }
 
-// Task 4 contract fixtures intentionally author graph identity, topology, and layout together.
+// Contract fixtures intentionally author graph identity, topology, and layout together.
 constexpr const TCHAR* GraphGuid = TEXT("0102030405060708090A0B0C0D0E0F10");
 constexpr const TCHAR* RootGuid = TEXT("11111111222222223333333344444444");
 constexpr const TCHAR* FirstTaskGuid = TEXT("AAAAAAAA11111111BBBBBBBB22222222");
@@ -3947,7 +3948,7 @@ TSharedPtr<FJsonObject> ExtractTree(FAutomationTestBase& Test, UBehaviorTree* Be
 {
 	FAssetDocumentRegionContext Context = MakeTreeContext(BehaviorTree);
 	TSharedRef<FJsonObject> Extracted = MakeShared<FJsonObject>();
-	const FAssetDocumentCapabilityResult Result = Task4GraphSourceTests::ExtractTree(Context, Extracted);
+	const FAssetDocumentCapabilityResult Result = BTGraphSourceTests::ExtractTree(Context, Extracted);
 	Test.TestTrue(TEXT("graph-source extraction succeeds"), Result.bSuccess);
 	if (!Result.bSuccess)
 	{
@@ -3990,9 +3991,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeGraphSourceIdentityTest::RunTest(const FString&)
 {
-	Task4GraphSourceTests::FPublicGraphFixture PublicGraphFixture;
-	using namespace Task4GraphSourceTests;
-	UBehaviorTree* BehaviorTree = Task4GraphSourceTests::CreateTree();
+	BTGraphSourceTests::FPublicGraphFixture PublicGraphFixture;
+	using namespace BTGraphSourceTests;
+	UBehaviorTree* BehaviorTree = BTGraphSourceTests::CreateTree();
 	bool bChanged = false;
 	FAssetDocumentCapabilityResult Result = ApplyTree(BehaviorTree, MakeGraphSourceTree(), bChanged);
 	TestTrue(TEXT("graph-source apply succeeds"), Result.bSuccess);
@@ -4054,9 +4055,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeGraphSourceTopologyAndOrderTest::RunTest(const FString&)
 {
-	Task4GraphSourceTests::FPublicGraphFixture PublicGraphFixture;
-	using namespace Task4GraphSourceTests;
-	UBehaviorTree* BehaviorTree = Task4GraphSourceTests::CreateTree();
+	BTGraphSourceTests::FPublicGraphFixture PublicGraphFixture;
+	using namespace BTGraphSourceTests;
+	UBehaviorTree* BehaviorTree = BTGraphSourceTests::CreateTree();
 	bool bChanged = false;
 	const FAssetDocumentCapabilityResult ApplyResult = ApplyTree(BehaviorTree, MakeGraphSourceTree(), bChanged);
 	TestTrue(TEXT("ordered graph apply succeeds"), ApplyResult.bSuccess);
@@ -4099,7 +4100,7 @@ bool FAssetDocumentBehaviorTreeGraphSourceTopologyAndOrderTest::RunTest(const FS
 
 	TSharedPtr<FJsonObject> GeneratedLayoutTree = MakeGraphSourceTree();
 	RemoveEditorLayoutRecursively(BTTestGetObjectField(GeneratedLayoutTree, TEXT("Root")));
-	UBehaviorTree* GeneratedLayoutAsset = Task4GraphSourceTests::CreateTree();
+	UBehaviorTree* GeneratedLayoutAsset = BTGraphSourceTests::CreateTree();
 	const FAssetDocumentCapabilityResult GeneratedLayoutResult = ApplyTree(GeneratedLayoutAsset, GeneratedLayoutTree, bChanged);
 	TestTrue(TEXT("omitted layout generates deterministic graph coordinates"), GeneratedLayoutResult.bSuccess);
 	UBehaviorTreeGraph* GeneratedLayoutGraph = Cast<UBehaviorTreeGraph>(GeneratedLayoutAsset->BTGraph);
@@ -4120,14 +4121,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeGraphSourceValidationTest::RunTest(const FString&)
 {
-	Task4GraphSourceTests::FPublicGraphFixture PublicGraphFixture;
-	using namespace Task4GraphSourceTests;
-	UBehaviorTree* BehaviorTree = Task4GraphSourceTests::CreateTree();
+	BTGraphSourceTests::FPublicGraphFixture PublicGraphFixture;
+	using namespace BTGraphSourceTests;
+	UBehaviorTree* BehaviorTree = BTGraphSourceTests::CreateTree();
 	FAssetDocumentRegionContext Context = MakeTreeContext(BehaviorTree);
 
 	TSharedPtr<FJsonObject> NameIdTree = MakeGraphSourceTree();
 	BTTestGetObjectField(NameIdTree, TEXT("Root"))->SetStringField(TEXT("Id"), TEXT("RootByName"));
-	FAssetDocumentCapabilityResult Result = Task4GraphSourceTests::ValidateTree(Context, NameIdTree.ToSharedRef());
+	FAssetDocumentCapabilityResult Result = BTGraphSourceTests::ValidateTree(Context, NameIdTree.ToSharedRef());
 	TestFalse(TEXT("legacy name identity is rejected"), Result.bSuccess);
 	TestTrue(TEXT("legacy name identity diagnostic is exact"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/Root/Id"), TEXT("InvalidBehaviorTreeNodeGuid")));
 
@@ -4138,32 +4139,32 @@ bool FAssetDocumentBehaviorTreeGraphSourceValidationTest::RunTest(const FString&
 	{
 		(*DuplicateChildren)[1]->AsObject()->SetStringField(TEXT("Id"), FirstTaskGuid);
 	}
-	Result = Task4GraphSourceTests::ValidateTree(Context, DuplicateGuidTree.ToSharedRef());
+	Result = BTGraphSourceTests::ValidateTree(Context, DuplicateGuidTree.ToSharedRef());
 	TestFalse(TEXT("duplicate NodeGuid is rejected"), Result.bSuccess);
 	TestTrue(TEXT("duplicate NodeGuid diagnostic is exact"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/Root/Children/1/Id"), TEXT("DuplicateBehaviorTreeNodeGuid")));
 
 	TSharedPtr<FJsonObject> OrderConflictTree = MakeGraphSourceTree(TEXT("first"), 400.0, 100.0);
-	Result = Task4GraphSourceTests::ValidateTree(Context, OrderConflictTree.ToSharedRef());
+	Result = BTGraphSourceTests::ValidateTree(Context, OrderConflictTree.ToSharedRef());
 	TestFalse(TEXT("semantic child order conflicting with X order is rejected"), Result.bSuccess);
 	TestTrue(TEXT("layout order conflict diagnostic is exact"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/Root/Children/1/Editor/Position/X"), TEXT("BehaviorTreeLayoutOrderConflict")));
 
 	TSharedPtr<FJsonObject> DuplicateXTree = MakeGraphSourceTree(TEXT("first"), 100.0, 100.0);
-	Result = Task4GraphSourceTests::ValidateTree(Context, DuplicateXTree.ToSharedRef());
+	Result = BTGraphSourceTests::ValidateTree(Context, DuplicateXTree.ToSharedRef());
 	TestFalse(TEXT("sibling X tie is rejected"), Result.bSuccess);
 	TestTrue(TEXT("sibling X tie diagnostic is exact"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/Root/Children/1/Editor/Position/X"), TEXT("DuplicateBehaviorTreeSiblingCoordinate")));
 
 	TSharedPtr<FJsonObject> WrongRootClassTree = MakeGraphSourceTree();
 	BTTestGetObjectField(WrongRootClassTree, TEXT("Root"))->SetStringField(TEXT("Class"), TEXT("/Script/AIModule.BTTask_Wait"));
-	Result = Task4GraphSourceTests::ValidateTree(Context, WrongRootClassTree.ToSharedRef());
+	Result = BTGraphSourceTests::ValidateTree(Context, WrongRootClassTree.ToSharedRef());
 	TestFalse(TEXT("task class cannot be the root composite"), Result.bSuccess);
 	TestTrue(TEXT("root class legality diagnostic is exact"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/Root/Class"), TEXT("InvalidBehaviorTreeNodeClass")));
 
 	TSharedPtr<FJsonObject> AbstractClassTree = MakeGraphSourceTree(TEXT("first"), 100.0, 300.0, TEXT("/Script/AIModule.BTTaskNode"));
-	Result = Task4GraphSourceTests::ValidateTree(Context, AbstractClassTree.ToSharedRef());
+	Result = BTGraphSourceTests::ValidateTree(Context, AbstractClassTree.ToSharedRef());
 	TestFalse(TEXT("abstract task class is rejected"), Result.bSuccess);
 	TestTrue(TEXT("abstract class diagnostic is exact"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/Root/Children/0/Class"), TEXT("AbstractBehaviorTreeNodeClass")));
 
-	UBehaviorTree* MultipleRootsTree = Task4GraphSourceTests::CreateTree();
+	UBehaviorTree* MultipleRootsTree = BTGraphSourceTests::CreateTree();
 	bool bChanged = false;
 	Result = ApplyTree(MultipleRootsTree, MakeGraphSourceTree(), bChanged);
 	TestTrue(TEXT("multiple-root graph fixture applies before corruption"), Result.bSuccess);
@@ -4174,12 +4175,12 @@ bool FAssetDocumentBehaviorTreeGraphSourceValidationTest::RunTest(const FString&
 		ExtraRoot->CreateNewGuid();
 		ExtraRoot->AllocateDefaultPins();
 		TSharedRef<FJsonObject> Ignored = MakeShared<FJsonObject>();
-		Result = Task4GraphSourceTests::ExtractTree(MakeTreeContext(MultipleRootsTree), Ignored);
+		Result = BTGraphSourceTests::ExtractTree(MakeTreeContext(MultipleRootsTree), Ignored);
 		TestFalse(TEXT("extract rejects a graph with multiple synthetic roots"), Result.bSuccess);
 		TestTrue(TEXT("multiple-root graph diagnostic is exact"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/Root"), TEXT("MultipleBehaviorTreeRoots")));
 	}
 
-	UBehaviorTree* OrphanTree = Task4GraphSourceTests::CreateTree();
+	UBehaviorTree* OrphanTree = BTGraphSourceTests::CreateTree();
 	Result = ApplyTree(OrphanTree, MakeGraphSourceTree(), bChanged);
 	TestTrue(TEXT("orphan graph fixture applies before corruption"), Result.bSuccess);
 	if (UBehaviorTreeGraph* OrphanGraph = Cast<UBehaviorTreeGraph>(OrphanTree->BTGraph))
@@ -4191,12 +4192,12 @@ bool FAssetDocumentBehaviorTreeGraphSourceValidationTest::RunTest(const FString&
 		Orphan->PostPlacedNewNode();
 		Orphan->AllocateDefaultPins();
 		TSharedRef<FJsonObject> Ignored = MakeShared<FJsonObject>();
-		Result = Task4GraphSourceTests::ExtractTree(MakeTreeContext(OrphanTree), Ignored);
+		Result = BTGraphSourceTests::ExtractTree(MakeTreeContext(OrphanTree), Ignored);
 		TestFalse(TEXT("extract rejects an unreachable graph node"), Result.bSuccess);
 		TestTrue(TEXT("unreachable graph diagnostic is exact"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/Nodes"), TEXT("UnreachableBehaviorTreeGraphNode")));
 	}
 
-	UBehaviorTree* CycleTree = Task4GraphSourceTests::CreateTree();
+	UBehaviorTree* CycleTree = BTGraphSourceTests::CreateTree();
 	Result = ApplyTree(CycleTree, MakeGraphSourceTree(), bChanged);
 	TestTrue(TEXT("cycle graph fixture applies before corruption"), Result.bSuccess);
 	if (UBehaviorTreeGraph* CycleGraph = Cast<UBehaviorTreeGraph>(CycleTree->BTGraph))
@@ -4210,12 +4211,12 @@ bool FAssetDocumentBehaviorTreeGraphSourceValidationTest::RunTest(const FString&
 			RootOutput->MakeLinkTo(RootInput);
 		}
 		TSharedRef<FJsonObject> Ignored = MakeShared<FJsonObject>();
-		Result = Task4GraphSourceTests::ExtractTree(MakeTreeContext(CycleTree), Ignored);
+		Result = BTGraphSourceTests::ExtractTree(MakeTreeContext(CycleTree), Ignored);
 		TestFalse(TEXT("extract rejects a graph cycle"), Result.bSuccess);
 		TestTrue(TEXT("cycle graph diagnostic is exact"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/Root/Children/0"), TEXT("BehaviorTreeGraphCycle")));
 	}
 
-	UBehaviorTree* IllegalPinTree = Task4GraphSourceTests::CreateTree();
+	UBehaviorTree* IllegalPinTree = BTGraphSourceTests::CreateTree();
 	Result = ApplyTree(IllegalPinTree, MakeGraphSourceTree(), bChanged);
 	TestTrue(TEXT("illegal-pin graph fixture applies before corruption"), Result.bSuccess);
 	if (UBehaviorTreeGraph* IllegalPinGraph = Cast<UBehaviorTreeGraph>(IllegalPinTree->BTGraph))
@@ -4226,7 +4227,7 @@ bool FAssetDocumentBehaviorTreeGraphSourceValidationTest::RunTest(const FString&
 			TaskInput->PinType.PinCategory = FName(TEXT("SingleTask"));
 		}
 		TSharedRef<FJsonObject> Ignored = MakeShared<FJsonObject>();
-		Result = Task4GraphSourceTests::ExtractTree(MakeTreeContext(IllegalPinTree), Ignored);
+		Result = BTGraphSourceTests::ExtractTree(MakeTreeContext(IllegalPinTree), Ignored);
 		TestFalse(TEXT("extract rejects a schema-illegal pin connection"), Result.bSuccess);
 		TestTrue(TEXT("illegal pin diagnostic is exact"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/Root/Children/0"), TEXT("InvalidBehaviorTreeGraphConnection")));
 	}
@@ -4240,9 +4241,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeGraphSourceDynamicBlueprintClassTest::RunTest(const FString&)
 {
-	Task4GraphSourceTests::FPublicGraphFixture PublicGraphFixture;
-	using namespace Task4GraphSourceTests;
-	const FString PackageName = BTTestMakeUniqueTarget(TEXT("BTTaskBlueprint_Task4"));
+	BTGraphSourceTests::FPublicGraphFixture PublicGraphFixture;
+	using namespace BTGraphSourceTests;
+	const FString PackageName = BTTestMakeUniqueTarget(TEXT("BTTaskBlueprint_GraphSource"));
 	if (!PublicGraphFixture.Cleanup.ReserveTarget(PackageName)) return false;
 	UPackage* BlueprintPackage = CreatePackage(*PackageName);
 	UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(
@@ -4252,7 +4253,7 @@ bool FAssetDocumentBehaviorTreeGraphSourceDynamicBlueprintClassTest::RunTest(con
 		BPTYPE_Normal,
 		UBlueprint::StaticClass(),
 		UBlueprintGeneratedClass::StaticClass(),
-		TEXT("AssetDocumentBehaviorTreeTask4"));
+		TEXT("AssetDocumentBehaviorTreeGraphSource"));
 	TestNotNull(TEXT("dynamic Blueprint task class fixture is created"), Blueprint);
 	if (!Blueprint)
 	{
@@ -4273,7 +4274,7 @@ bool FAssetDocumentBehaviorTreeGraphSourceDynamicBlueprintClassTest::RunTest(con
 	if (!UPackage::SavePackage(BlueprintPackage, Blueprint, *BlueprintFile, BlueprintSave)) return false;
 
 	TSharedPtr<FJsonObject> Tree = MakeGraphSourceTree(TEXT("Blueprint task label"), 100.0, 300.0, GeneratedClass->GetPathName());
-	UBehaviorTree* BehaviorTree = Task4GraphSourceTests::CreateTree();
+	UBehaviorTree* BehaviorTree = BTGraphSourceTests::CreateTree();
 	bool bChanged = false;
 	const FAssetDocumentCapabilityResult Result = ApplyTree(BehaviorTree, Tree, bChanged);
 	TestTrue(TEXT("dynamically loaded Blueprint node class applies"), Result.bSuccess);
@@ -4297,9 +4298,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAssetDocumentBehaviorTreeGraphSourceSaveReloadTest::RunTest(const FString&)
 {
-	Task4GraphSourceTests::FPublicGraphFixture PublicGraphFixture;
-	using namespace Task4GraphSourceTests;
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_GraphSource_Task4_Reload"));
+	BTGraphSourceTests::FPublicGraphFixture PublicGraphFixture;
+	using namespace BTGraphSourceTests;
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_GraphSource_Reload"));
 	TSharedPtr<FJsonObject> Document = BTTestMakeBehaviorTreeDocument(Target, MakeGraphSourceBody(MakeGraphSourceTree()));
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	FScopedBehaviorTreeMutationFixture Fixture;
@@ -4333,7 +4334,7 @@ bool FAssetDocumentBehaviorTreeGraphSourceSaveReloadTest::RunTest(const FString&
 	return true;
 }
 
-namespace Task5GraphSourceTests
+namespace BTGraphShapeTests
 {
 constexpr const TCHAR* RootDecoratorGuidA = TEXT("10101010202020203030303040404040");
 constexpr const TCHAR* RootDecoratorGuidB = TEXT("11112222333344445555666677778888");
@@ -4368,7 +4369,7 @@ TSharedPtr<FJsonObject> MakeEditor(
 	bool bVisible)
 {
 	TSharedPtr<FJsonObject> Editor = MakeShared<FJsonObject>();
-	Editor->SetObjectField(TEXT("Position"), Task4GraphSourceTests::MakePosition(X, Y));
+	Editor->SetObjectField(TEXT("Position"), BTGraphSourceTests::MakePosition(X, Y));
 	Editor->SetStringField(TEXT("NodeComment"), NodeComment);
 	Editor->SetBoolField(TEXT("bCommentBubblePinned"), bPinned);
 	Editor->SetBoolField(TEXT("bCommentBubbleVisible"), bVisible);
@@ -4427,7 +4428,7 @@ TSharedPtr<FJsonObject> FirstChild(const TSharedPtr<FJsonObject>& Tree)
 
 TSharedPtr<FJsonObject> MakeAttachmentTree(bool bReverseRootDecorators = false, bool bReverseServices = false)
 {
-	TSharedPtr<FJsonObject> Tree = Task4GraphSourceTests::MakeGraphSourceTree();
+	TSharedPtr<FJsonObject> Tree = BTGraphSourceTests::MakeGraphSourceTree();
 	TSharedPtr<FJsonObject> Root = BTTestGetObjectField(Tree, TEXT("Root"));
 	TArray<TSharedPtr<FJsonValue>> RootDecorators = {
 		BTTestMakeObjectValue(MakeDecorator(RootDecoratorGuidA, TEXT("Root decorator A"), -80.0, 20.0, TEXT("root decorator comment A"))),
@@ -4550,20 +4551,20 @@ TSharedPtr<FJsonObject> MakeCompositeDecorator(const TSharedPtr<FJsonObject>& Bo
 
 TSharedPtr<FJsonObject> MakeCompositeTree(const FString& Shape)
 {
-	TSharedPtr<FJsonObject> Tree = Task4GraphSourceTests::MakeGraphSourceTree();
+	TSharedPtr<FJsonObject> Tree = BTGraphSourceTests::MakeGraphSourceTree();
 	FirstChild(Tree)->SetArrayField(TEXT("Decorators"), {BTTestMakeObjectValue(MakeCompositeDecorator(MakeBoundGraph(Shape)))});
 	return Tree;
 }
 
 TSharedPtr<FJsonObject> MakeComment(
 	const FString& Id = CommentGuid,
-	const FString& Text = TEXT("Task 5 comment text"),
+	const FString& Text = TEXT("Inherited comment text"),
 	double X = -320.0)
 {
 	TSharedPtr<FJsonObject> Comment = MakeShared<FJsonObject>();
 	Comment->SetStringField(TEXT("Id"), Id);
 	Comment->SetStringField(TEXT("Text"), Text);
-	Comment->SetObjectField(TEXT("Position"), Task4GraphSourceTests::MakePosition(X, -180.0));
+	Comment->SetObjectField(TEXT("Position"), BTGraphSourceTests::MakePosition(X, -180.0));
 	TSharedPtr<FJsonObject> Size = MakeShared<FJsonObject>();
 	Size->SetNumberField(TEXT("Width"), 640.0);
 	Size->SetNumberField(TEXT("Height"), 360.0);
@@ -4601,26 +4602,26 @@ TSharedPtr<FJsonObject> MakeSimpleParallelTree(
 {
 	const double ForegroundX = bReverseSemanticX ? 500.0 : 100.0;
 	const double BackgroundX = bReverseSemanticX ? 100.0 : 300.0;
-	TSharedPtr<FJsonObject> BackgroundTask = Task4GraphSourceTests::MakeGraphNode(
+	TSharedPtr<FJsonObject> BackgroundTask = BTGraphSourceTests::MakeGraphNode(
 		BackgroundTaskGuid,
 		TEXT("/Script/AIModule.BTTask_Wait"),
 		TEXT("Background wait"),
 		BackgroundX,
 		600.0);
-	TSharedPtr<FJsonObject> BackgroundComposite = Task4GraphSourceTests::MakeGraphNode(
+	TSharedPtr<FJsonObject> BackgroundComposite = BTGraphSourceTests::MakeGraphNode(
 		BackgroundCompositeGuid,
 		TEXT("/Script/AIModule.BTComposite_Selector"),
 		BackgroundNodeName,
 		BackgroundX,
 		300.0,
 		{BTTestMakeObjectValue(BackgroundTask)});
-	TSharedPtr<FJsonObject> ForegroundTask = Task4GraphSourceTests::MakeGraphNode(
+	TSharedPtr<FJsonObject> ForegroundTask = BTGraphSourceTests::MakeGraphNode(
 		ForegroundTaskGuid,
 		TEXT("/Script/AIModule.BTTask_Wait"),
 		TEXT("Foreground task"),
 		ForegroundX,
 		300.0);
-	TSharedPtr<FJsonObject> Root = Task4GraphSourceTests::MakeGraphNode(
+	TSharedPtr<FJsonObject> Root = BTGraphSourceTests::MakeGraphNode(
 		SimpleParallelGuid,
 		TEXT("/Script/AIModule.BTComposite_SimpleParallel"),
 		TEXT("Authored simple parallel"),
@@ -4628,7 +4629,7 @@ TSharedPtr<FJsonObject> MakeSimpleParallelTree(
 		0.0,
 		{BTTestMakeObjectValue(ForegroundTask), BTTestMakeObjectValue(BackgroundComposite)});
 	TSharedPtr<FJsonObject> Tree = MakeShared<FJsonObject>();
-	Tree->SetStringField(TEXT("GraphGuid"), Task4GraphSourceTests::GraphGuid);
+	Tree->SetStringField(TEXT("GraphGuid"), BTGraphSourceTests::GraphGuid);
 	Tree->SetObjectField(TEXT("Root"), Root);
 	Tree->SetArrayField(TEXT("Comments"), {});
 	return Tree;
@@ -4703,8 +4704,8 @@ TSharedPtr<FJsonObject> FindAttachment(const TSharedPtr<FJsonObject>& Node, cons
 FString ComparableTree(UBehaviorTree* BehaviorTree)
 {
 	TSharedRef<FJsonObject> Extracted = MakeShared<FJsonObject>();
-	FAssetDocumentRegionContext Context = Task4GraphSourceTests::MakeTreeContext(BehaviorTree);
-	if (!Task4GraphSourceTests::ExtractTree(Context, Extracted).bSuccess)
+	FAssetDocumentRegionContext Context = BTGraphSourceTests::MakeTreeContext(BehaviorTree);
+	if (!BTGraphSourceTests::ExtractTree(Context, Extracted).bSuccess)
 	{
 		return FString();
 	}
@@ -4713,30 +4714,30 @@ FString ComparableTree(UBehaviorTree* BehaviorTree)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask5GraphGuidContractTest,
-	"UEAssetDoc.BehaviorTree.GraphSource.Task5.GraphGuidContract",
+	FAssetDocumentBehaviorTreeGraphGuidContractTest,
+	"UEAssetDoc.BehaviorTree.GraphSource.GraphGuidContract",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask5GraphGuidContractTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeGraphGuidContractTest::RunTest(const FString&)
 {
-	Task4GraphSourceTests::FPublicGraphFixture PublicGraphFixture;
-	using namespace Task5GraphSourceTests;
+	BTGraphSourceTests::FPublicGraphFixture PublicGraphFixture;
+	using namespace BTGraphShapeTests;
 	const auto ComparableDiff = [](const TArray<TSharedPtr<FJsonValue>>& Entries)
 	{
 		return FAssetDocumentJsonRegionUtils::JsonValueToComparableString(MakeShared<FJsonValueArray>(Entries));
 	};
-	TSharedPtr<FJsonObject> MissingGuidTree = Task4GraphSourceTests::MakeGraphSourceTree();
+	TSharedPtr<FJsonObject> MissingGuidTree = BTGraphSourceTests::MakeGraphSourceTree();
 	MissingGuidTree->RemoveField(TEXT("GraphGuid"));
-	UBehaviorTree* NewAsset = Task4GraphSourceTests::CreateTree();
-	FAssetDocumentRegionContext NewContext = Task4GraphSourceTests::MakeTreeContext(NewAsset);
-	FAssetDocumentCapabilityResult Result = Task4GraphSourceTests::ValidateTree(NewContext, MissingGuidTree.ToSharedRef());
+	UBehaviorTree* NewAsset = BTGraphSourceTests::CreateTree();
+	FAssetDocumentRegionContext NewContext = BTGraphSourceTests::MakeTreeContext(NewAsset);
+	FAssetDocumentCapabilityResult Result = BTGraphSourceTests::ValidateTree(NewContext, MissingGuidTree.ToSharedRef());
 	TestTrue(TEXT("new graph may omit GraphGuid during public Validate"), Result.bSuccess);
 	TArray<TSharedPtr<FJsonValue>> DiffEntries;
-	Result = Task4GraphSourceTests::DiffTree(NewContext, MissingGuidTree.ToSharedRef(), DiffEntries);
+	Result = BTGraphSourceTests::DiffTree(NewContext, MissingGuidTree.ToSharedRef(), DiffEntries);
 	TestTrue(TEXT("public Diff accepts omitted new GraphGuid"), Result.bSuccess);
 	TestNull(TEXT("Validate and Diff do not create a live graph"), NewAsset->BTGraph.Get());
 	bool bChanged = false;
-	Result = Task4GraphSourceTests::ApplyTree(NewAsset, MissingGuidTree, bChanged);
+	Result = BTGraphSourceTests::ApplyTree(NewAsset, MissingGuidTree, bChanged);
 	if (!TestTrue(TEXT("public ApplyFile generates the new graph identity"), Result.bSuccess)) return false;
 	const UBehaviorTreeGraph* GeneratedGraph = Cast<UBehaviorTreeGraph>(NewAsset->BTGraph);
 	TestTrue(TEXT("generated graph identity is valid"), GeneratedGraph && GeneratedGraph->GraphGuid.IsValid());
@@ -4744,72 +4745,72 @@ bool FAssetDocumentBehaviorTreeTask5GraphGuidContractTest::RunTest(const FString
 	TSharedPtr<FJsonObject> EmptyMissingGuidTree = MakeShared<FJsonObject>();
 	EmptyMissingGuidTree->SetObjectField(TEXT("Root"), MakeShared<FJsonObject>());
 	EmptyMissingGuidTree->SetArrayField(TEXT("Comments"), {});
-	UBehaviorTree* EmptyMissingGuidAsset = Task4GraphSourceTests::CreateTree();
-	FAssetDocumentRegionContext EmptyMissingContext = Task4GraphSourceTests::MakeTreeContext(EmptyMissingGuidAsset);
-	Result = Task4GraphSourceTests::ValidateTree(EmptyMissingContext, EmptyMissingGuidTree.ToSharedRef());
+	UBehaviorTree* EmptyMissingGuidAsset = BTGraphSourceTests::CreateTree();
+	FAssetDocumentRegionContext EmptyMissingContext = BTGraphSourceTests::MakeTreeContext(EmptyMissingGuidAsset);
+	Result = BTGraphSourceTests::ValidateTree(EmptyMissingContext, EmptyMissingGuidTree.ToSharedRef());
 	TestTrue(TEXT("empty new graph may omit GraphGuid during Validate"), Result.bSuccess);
 	DiffEntries.Reset();
-	Result = Task4GraphSourceTests::DiffTree(EmptyMissingContext, EmptyMissingGuidTree.ToSharedRef(), DiffEntries);
+	Result = BTGraphSourceTests::DiffTree(EmptyMissingContext, EmptyMissingGuidTree.ToSharedRef(), DiffEntries);
 	TestTrue(TEXT("public Diff accepts omitted empty graph identity"), Result.bSuccess);
 	TestNull(TEXT("empty graph dry runs do not create a live graph"), EmptyMissingGuidAsset->BTGraph.Get());
 	bChanged = false;
-	Result = Task4GraphSourceTests::ApplyTree(EmptyMissingGuidAsset, EmptyMissingGuidTree, bChanged);
+	Result = BTGraphSourceTests::ApplyTree(EmptyMissingGuidAsset, EmptyMissingGuidTree, bChanged);
 	if (!TestTrue(TEXT("public ApplyFile generates empty graph identity"), Result.bSuccess)) return false;
 	const UBehaviorTreeGraph* GeneratedEmpty = Cast<UBehaviorTreeGraph>(EmptyMissingGuidAsset->BTGraph);
 	TestTrue(TEXT("empty generated graph identity is valid"), GeneratedEmpty && GeneratedEmpty->GraphGuid.IsValid());
 
 	TSharedPtr<FJsonObject> AuthoredEmptyTree = MakeShared<FJsonObject>();
-	AuthoredEmptyTree->SetStringField(TEXT("GraphGuid"), Task4GraphSourceTests::GraphGuid);
+	AuthoredEmptyTree->SetStringField(TEXT("GraphGuid"), BTGraphSourceTests::GraphGuid);
 	AuthoredEmptyTree->SetObjectField(TEXT("Root"), MakeShared<FJsonObject>());
 	AuthoredEmptyTree->SetArrayField(TEXT("Comments"), {});
-	UBehaviorTree* AuthoredEmptyAsset = Task4GraphSourceTests::CreateTree();
-	FAssetDocumentRegionContext AuthoredEmptyContext = Task4GraphSourceTests::MakeTreeContext(AuthoredEmptyAsset);
+	UBehaviorTree* AuthoredEmptyAsset = BTGraphSourceTests::CreateTree();
+	FAssetDocumentRegionContext AuthoredEmptyContext = BTGraphSourceTests::MakeTreeContext(AuthoredEmptyAsset);
 	TArray<TSharedPtr<FJsonValue>> EmptyDiffA;
 	TArray<TSharedPtr<FJsonValue>> EmptyDiffB;
-	Result = Task4GraphSourceTests::DiffTree(AuthoredEmptyContext, AuthoredEmptyTree.ToSharedRef(), EmptyDiffA);
+	Result = BTGraphSourceTests::DiffTree(AuthoredEmptyContext, AuthoredEmptyTree.ToSharedRef(), EmptyDiffA);
 	TestTrue(TEXT("authored empty graph first diff succeeds"), Result.bSuccess);
-	Result = Task4GraphSourceTests::DiffTree(AuthoredEmptyContext, AuthoredEmptyTree.ToSharedRef(), EmptyDiffB);
+	Result = BTGraphSourceTests::DiffTree(AuthoredEmptyContext, AuthoredEmptyTree.ToSharedRef(), EmptyDiffB);
 	TestTrue(TEXT("authored empty graph repeated diff succeeds"), Result.bSuccess);
 	TestEqual(TEXT("authored empty graph repeated diff is stable"), ComparableDiff(EmptyDiffB), ComparableDiff(EmptyDiffA));
 	bChanged = false;
-	Result = Task4GraphSourceTests::ApplyTree(AuthoredEmptyAsset, AuthoredEmptyTree, bChanged);
+	Result = BTGraphSourceTests::ApplyTree(AuthoredEmptyAsset, AuthoredEmptyTree, bChanged);
 	TestTrue(TEXT("authored empty graph applies"), Result.bSuccess);
-	TestEqual(TEXT("authored empty graph keeps exact identity"), Cast<UBehaviorTreeGraph>(AuthoredEmptyAsset->BTGraph)->GraphGuid.ToString(EGuidFormats::Digits), FString(Task4GraphSourceTests::GraphGuid));
+	TestEqual(TEXT("authored empty graph keeps exact identity"), Cast<UBehaviorTreeGraph>(AuthoredEmptyAsset->BTGraph)->GraphGuid.ToString(EGuidFormats::Digits), FString(BTGraphSourceTests::GraphGuid));
 	EmptyDiffA.Reset();
 	EmptyDiffB.Reset();
-	Result = Task4GraphSourceTests::DiffTree(AuthoredEmptyContext, AuthoredEmptyTree.ToSharedRef(), EmptyDiffA);
+	Result = BTGraphSourceTests::DiffTree(AuthoredEmptyContext, AuthoredEmptyTree.ToSharedRef(), EmptyDiffA);
 	TestTrue(TEXT("applied empty graph first no-op diff succeeds"), Result.bSuccess);
-	Result = Task4GraphSourceTests::DiffTree(AuthoredEmptyContext, AuthoredEmptyTree.ToSharedRef(), EmptyDiffB);
+	Result = BTGraphSourceTests::DiffTree(AuthoredEmptyContext, AuthoredEmptyTree.ToSharedRef(), EmptyDiffB);
 	TestTrue(TEXT("applied empty graph repeated no-op diff succeeds"), Result.bSuccess);
 	TestEqual(TEXT("applied empty graph first diff is empty"), EmptyDiffA.Num(), 0);
 	TestEqual(TEXT("applied empty graph repeated diff is empty"), EmptyDiffB.Num(), 0);
 
-	UBehaviorTree* Existing = Task4GraphSourceTests::CreateTree();
-	Result = Task4GraphSourceTests::ApplyTree(Existing, Task4GraphSourceTests::MakeGraphSourceTree(), bChanged);
+	UBehaviorTree* Existing = BTGraphSourceTests::CreateTree();
+	Result = BTGraphSourceTests::ApplyTree(Existing, BTGraphSourceTests::MakeGraphSourceTree(), bChanged);
 	TestTrue(TEXT("existing graph fixture applies with explicit GraphGuid"), Result.bSuccess);
 	UBehaviorTreeGraph* OriginalGraph = Cast<UBehaviorTreeGraph>(Existing->BTGraph);
 	const FGuid OriginalGuid = OriginalGraph ? OriginalGraph->GraphGuid : FGuid();
-	TSharedPtr<FJsonObject> ExistingUpdate = Task4GraphSourceTests::MakeGraphSourceTree(TEXT("Updated with omitted graph GUID"));
+	TSharedPtr<FJsonObject> ExistingUpdate = BTGraphSourceTests::MakeGraphSourceTree(TEXT("Updated with omitted graph GUID"));
 	ExistingUpdate->RemoveField(TEXT("GraphGuid"));
-	Result = Task4GraphSourceTests::ApplyTree(Existing, ExistingUpdate, bChanged);
+	Result = BTGraphSourceTests::ApplyTree(Existing, ExistingUpdate, bChanged);
 	TestTrue(TEXT("existing graph update may omit GraphGuid"), Result.bSuccess);
 	TestEqual(TEXT("existing graph omission reuses persistent GraphGuid"), Cast<UBehaviorTreeGraph>(Existing->BTGraph)->GraphGuid, OriginalGuid);
 
 	UBehaviorTreeGraph* BeforeReplacementGraph = Cast<UBehaviorTreeGraph>(Existing->BTGraph);
 	UBTCompositeNode* BeforeReplacementRoot = Existing->RootNode;
 	const FString BeforeReplacementCanonical = ComparableTree(Existing);
-	TSharedPtr<FJsonObject> Replacement = Task4GraphSourceTests::MakeGraphSourceTree(TEXT("Graph identity replacement must be rejected"));
+	TSharedPtr<FJsonObject> Replacement = BTGraphSourceTests::MakeGraphSourceTree(TEXT("Graph identity replacement must be rejected"));
 	Replacement->SetStringField(TEXT("GraphGuid"), ReplacementGraphGuid);
-	FAssetDocumentRegionContext ExistingContext = Task4GraphSourceTests::MakeTreeContext(Existing);
-	Result = Task4GraphSourceTests::ValidateTree(ExistingContext, Replacement.ToSharedRef());
+	FAssetDocumentRegionContext ExistingContext = BTGraphSourceTests::MakeTreeContext(Existing);
+	Result = BTGraphSourceTests::ValidateTree(ExistingContext, Replacement.ToSharedRef());
 	TestFalse(TEXT("existing graph explicit identity replacement validate is rejected"), Result.bSuccess);
 	TestTrue(TEXT("existing graph replacement validate diagnostic is exact"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/GraphGuid"), TEXT("BehaviorTreeGraphGuidReplacementRejected")));
 	DiffEntries.Reset();
-	Result = Task4GraphSourceTests::DiffTree(ExistingContext, Replacement.ToSharedRef(), DiffEntries);
+	Result = BTGraphSourceTests::DiffTree(ExistingContext, Replacement.ToSharedRef(), DiffEntries);
 	TestFalse(TEXT("existing graph explicit identity replacement diff is rejected"), Result.bSuccess);
 	TestTrue(TEXT("existing graph replacement diff diagnostic is exact"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/GraphGuid"), TEXT("BehaviorTreeGraphGuidReplacementRejected")));
 	bChanged = false;
-	Result = Task4GraphSourceTests::ApplyTree(Existing, Replacement, bChanged);
+	Result = BTGraphSourceTests::ApplyTree(Existing, Replacement, bChanged);
 	TestFalse(TEXT("existing graph explicit identity replacement apply is rejected"), Result.bSuccess);
 	TestTrue(TEXT("existing graph replacement apply diagnostic is exact"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/GraphGuid"), TEXT("BehaviorTreeGraphGuidReplacementRejected")));
 	TestFalse(TEXT("rejected graph identity replacement reports unchanged"), bChanged);
@@ -4818,7 +4819,7 @@ bool FAssetDocumentBehaviorTreeTask5GraphGuidContractTest::RunTest(const FString
 	TestEqual(TEXT("rejected graph identity replacement keeps canonical extract"), ComparableTree(Existing), BeforeReplacementCanonical);
 
 	FAssetDocumentTemplateRequest TemplateRequest;
-	TemplateRequest.Target = TEXT("/Game/AssetDocumentTests/BT_Task5_GraphGuidTemplate");
+	TemplateRequest.Target = TEXT("/Game/AssetDocumentTests/BT_GraphShape_GraphGuidTemplate");
 	TemplateRequest.Class = TEXT("/Script/AIModule.BehaviorTree");
 	const FAssetDocumentResult TemplateResult = FAssetDocumentModule::Get().GetService().CreateTemplate(TemplateRequest);
 	if (!TestTrue(TEXT("public CreateTemplate succeeds for the GraphGuid contract"), TemplateResult.IsSuccess())
@@ -4837,15 +4838,15 @@ bool FAssetDocumentBehaviorTreeTask5GraphGuidContractTest::RunTest(const FString
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask5ProjectClassFamiliesTest,
-	"UEAssetDoc.BehaviorTree.GraphSource.Task5.ProjectClassFamilies",
+	FAssetDocumentBehaviorTreeProjectClassFamiliesTest,
+	"UEAssetDoc.BehaviorTree.GraphSource.ProjectClassFamilies",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask5ProjectClassFamiliesTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeProjectClassFamiliesTest::RunTest(const FString&)
 {
-	using namespace Task5GraphSourceTests;
+	using namespace BTGraphShapeTests;
 	FScopedBehaviorTreeMutationFixture BlueprintFixtureCleanup;
-	Task4GraphSourceTests::FPublicGraphFixture PublicGraphFixture;
+	BTGraphSourceTests::FPublicGraphFixture PublicGraphFixture;
 	TArray<TStrongObjectPtr<UBlueprint>> FixtureBlueprints;
 	TArray<UPackage*> FixtureBlueprintPackages;
 	const auto CreateProjectBlueprintClass =
@@ -4854,7 +4855,7 @@ bool FAssetDocumentBehaviorTreeTask5ProjectClassFamiliesTest::RunTest(const FStr
 			const TCHAR* Stem)
 	{
 		const FString PackageName = FString::Printf(
-			TEXT("/Game/AssetDocumentTests/Task5/%s_%s"),
+			TEXT("/Game/AssetDocumentTests/BehaviorTree/%s_%s"),
 			Stem,
 			*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 		if (!BlueprintFixtureCleanup.ReserveTarget(PackageName))
@@ -4870,7 +4871,7 @@ bool FAssetDocumentBehaviorTreeTask5ProjectClassFamiliesTest::RunTest(const FStr
 				BPTYPE_Normal,
 				UBlueprint::StaticClass(),
 				UBlueprintGeneratedClass::StaticClass(),
-				TEXT("AssetDocumentBehaviorTreeTask5"))
+				TEXT("AssetDocumentBehaviorTreeGraphShape"))
 			: nullptr;
 		if (!Blueprint)
 		{
@@ -4910,17 +4911,17 @@ bool FAssetDocumentBehaviorTreeTask5ProjectClassFamiliesTest::RunTest(const FStr
 	TestNotNull(TEXT("required project Blueprint service fixture is generated"), ServiceClass);
 	if (!TaskClass || !CompositeClass || !ServiceClass)
 	{
-		AddError(TEXT("Task5 requires generated project Blueprint task/composite/service classes; skipping is forbidden"));
+		AddError(TEXT("This test requires generated project Blueprint task/composite/service classes; skipping is forbidden"));
 		return false;
 	}
 
-	TSharedPtr<FJsonObject> Task = Task4GraphSourceTests::MakeGraphNode(
+	TSharedPtr<FJsonObject> Task = BTGraphSourceTests::MakeGraphNode(
 		ProjectTaskGuid,
 		TaskClass->GetPathName(),
 		TEXT("Project task authored property"),
 		100.0,
 		300.0);
-	TSharedPtr<FJsonObject> Root = Task4GraphSourceTests::MakeGraphNode(
+	TSharedPtr<FJsonObject> Root = BTGraphSourceTests::MakeGraphNode(
 		ProjectCompositeGuid,
 		CompositeClass->GetPathName(),
 		TEXT("Project composite authored property"),
@@ -4937,13 +4938,13 @@ bool FAssetDocumentBehaviorTreeTask5ProjectClassFamiliesTest::RunTest(const FStr
 	ProjectService->SetStringField(TEXT("Class"), ServiceClass->GetPathName());
 	Root->SetArrayField(TEXT("Services"), {BTTestMakeObjectValue(ProjectService)});
 	TSharedPtr<FJsonObject> Tree = MakeShared<FJsonObject>();
-	Tree->SetStringField(TEXT("GraphGuid"), Task4GraphSourceTests::GraphGuid);
+	Tree->SetStringField(TEXT("GraphGuid"), BTGraphSourceTests::GraphGuid);
 	Tree->SetObjectField(TEXT("Root"), Root);
 	Tree->SetArrayField(TEXT("Comments"), {});
 
-	UBehaviorTree* BehaviorTree = Task4GraphSourceTests::CreateTree();
+	UBehaviorTree* BehaviorTree = BTGraphSourceTests::CreateTree();
 	bool bChanged = false;
-	FAssetDocumentCapabilityResult Result = Task4GraphSourceTests::ApplyTree(BehaviorTree, Tree, bChanged);
+	FAssetDocumentCapabilityResult Result = BTGraphSourceTests::ApplyTree(BehaviorTree, Tree, bChanged);
 	TestTrue(TEXT("project task/composite/service families apply dynamically"), Result.bSuccess);
 	if (!Result.bSuccess)
 	{
@@ -4951,8 +4952,8 @@ bool FAssetDocumentBehaviorTreeTask5ProjectClassFamiliesTest::RunTest(const FStr
 		return false;
 	}
 	UBehaviorTreeGraph* Graph = Cast<UBehaviorTreeGraph>(BehaviorTree->BTGraph);
-	UBehaviorTreeGraphNode* RootWrapper = Task4GraphSourceTests::FindGraphNodeByGuid(Graph, ProjectCompositeGuid);
-	UBehaviorTreeGraphNode* TaskWrapper = Task4GraphSourceTests::FindGraphNodeByGuid(Graph, ProjectTaskGuid);
+	UBehaviorTreeGraphNode* RootWrapper = BTGraphSourceTests::FindGraphNodeByGuid(Graph, ProjectCompositeGuid);
+	UBehaviorTreeGraphNode* TaskWrapper = BTGraphSourceTests::FindGraphNodeByGuid(Graph, ProjectTaskGuid);
 	UBehaviorTreeGraphNode* ServiceWrapper = FindSubNodeByGuid(Graph, ProjectServiceGuid);
 	TestTrue(TEXT("project composite wrapper owns exact class"), RootWrapper && RootWrapper->NodeInstance && RootWrapper->NodeInstance->GetClass() == CompositeClass);
 	TestTrue(TEXT("project task wrapper owns exact class"), TaskWrapper && TaskWrapper->NodeInstance && TaskWrapper->NodeInstance->GetClass() == TaskClass);
@@ -4964,10 +4965,10 @@ bool FAssetDocumentBehaviorTreeTask5ProjectClassFamiliesTest::RunTest(const FStr
 	const FString CompositeClassPath = CompositeClass->GetPathName();
 	const FString ServiceClassPath = ServiceClass->GetPathName();
 
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_Task5_ProjectClassesReload"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_GraphShape_ProjectClassesReload"));
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	FScopedBehaviorTreeMutationFixture Fixture;
-	const FAssetDocumentResult ApplyResult = Fixture.Apply(Service, Target, BTTestMakeBehaviorTreeDocument(Target, Task4GraphSourceTests::MakeGraphSourceBody(Tree)));
+	const FAssetDocumentResult ApplyResult = Fixture.Apply(Service, Target, BTTestMakeBehaviorTreeDocument(Target, BTGraphSourceTests::MakeGraphSourceBody(Tree)));
 	TestTrue(TEXT("project class tree saves"), ApplyResult.IsSuccess());
 	UBehaviorTree* BeforeReload = BTTestLoadBehaviorTreeForTarget(Target);
 	UPackage* Package = BeforeReload ? BeforeReload->GetOutermost() : nullptr;
@@ -4985,9 +4986,9 @@ bool FAssetDocumentBehaviorTreeTask5ProjectClassFamiliesTest::RunTest(const FStr
 	TestNotNull(TEXT("project class tree reloads"), Reloaded);
 	TestNotNull(TEXT("project class graph reloads"), ReloadedGraph);
 	UBehaviorTreeGraphNode* ReloadedRootWrapper =
-		Task4GraphSourceTests::FindGraphNodeByGuid(ReloadedGraph, ProjectCompositeGuid);
+		BTGraphSourceTests::FindGraphNodeByGuid(ReloadedGraph, ProjectCompositeGuid);
 	UBehaviorTreeGraphNode* ReloadedTaskWrapper =
-		Task4GraphSourceTests::FindGraphNodeByGuid(ReloadedGraph, ProjectTaskGuid);
+		BTGraphSourceTests::FindGraphNodeByGuid(ReloadedGraph, ProjectTaskGuid);
 	UBehaviorTreeGraphNode* ReloadedServiceWrapper =
 		FindSubNodeByGuid(ReloadedGraph, ProjectServiceGuid);
 	TestNotNull(TEXT("project composite wrapper reloads"), ReloadedRootWrapper);
@@ -5018,14 +5019,14 @@ bool FAssetDocumentBehaviorTreeTask5ProjectClassFamiliesTest::RunTest(const FStr
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask5SimpleParallelOutputsTest,
-	"UEAssetDoc.BehaviorTree.GraphSource.Task5.SimpleParallelOutputs",
+	FAssetDocumentBehaviorTreeSimpleParallelOutputsTest,
+	"UEAssetDoc.BehaviorTree.GraphSource.SimpleParallelOutputs",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask5SimpleParallelOutputsTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeSimpleParallelOutputsTest::RunTest(const FString&)
 {
-	Task4GraphSourceTests::FPublicGraphFixture PublicGraphFixture;
-	using namespace Task5GraphSourceTests;
+	BTGraphSourceTests::FPublicGraphFixture PublicGraphFixture;
+	using namespace BTGraphShapeTests;
 	const auto FindOutputPin = [](UBehaviorTreeGraphNode* Node, const FString& Name)
 	{
 		if (!Node)
@@ -5041,9 +5042,9 @@ bool FAssetDocumentBehaviorTreeTask5SimpleParallelOutputsTest::RunTest(const FSt
 		}
 		return static_cast<UEdGraphPin*>(nullptr);
 	};
-	UBehaviorTree* BehaviorTree = Task4GraphSourceTests::CreateTree();
+	UBehaviorTree* BehaviorTree = BTGraphSourceTests::CreateTree();
 	bool bChanged = false;
-	FAssetDocumentCapabilityResult Result = Task4GraphSourceTests::ApplyTree(BehaviorTree, MakeSimpleParallelTree(), bChanged);
+	FAssetDocumentCapabilityResult Result = BTGraphSourceTests::ApplyTree(BehaviorTree, MakeSimpleParallelTree(), bChanged);
 	TestTrue(TEXT("SimpleParallel foreground/background graph applies"), Result.bSuccess);
 	if (!Result.bSuccess)
 	{
@@ -5051,9 +5052,9 @@ bool FAssetDocumentBehaviorTreeTask5SimpleParallelOutputsTest::RunTest(const FSt
 		return false;
 	}
 	UBehaviorTreeGraph* Graph = Cast<UBehaviorTreeGraph>(BehaviorTree->BTGraph);
-	UBehaviorTreeGraphNode_SimpleParallel* Parallel = Cast<UBehaviorTreeGraphNode_SimpleParallel>(Task4GraphSourceTests::FindGraphNodeByGuid(Graph, SimpleParallelGuid));
-	UBehaviorTreeGraphNode* Foreground = Task4GraphSourceTests::FindGraphNodeByGuid(Graph, ForegroundTaskGuid);
-	UBehaviorTreeGraphNode* Background = Task4GraphSourceTests::FindGraphNodeByGuid(Graph, BackgroundCompositeGuid);
+	UBehaviorTreeGraphNode_SimpleParallel* Parallel = Cast<UBehaviorTreeGraphNode_SimpleParallel>(BTGraphSourceTests::FindGraphNodeByGuid(Graph, SimpleParallelGuid));
+	UBehaviorTreeGraphNode* Foreground = BTGraphSourceTests::FindGraphNodeByGuid(Graph, ForegroundTaskGuid);
+	UBehaviorTreeGraphNode* Background = BTGraphSourceTests::FindGraphNodeByGuid(Graph, BackgroundCompositeGuid);
 	UEdGraphPin* TaskPin = FindOutputPin(Parallel, TEXT("Task"));
 	UEdGraphPin* OutPin = FindOutputPin(Parallel, TEXT("Out"));
 	TestNotNull(TEXT("SimpleParallel exposes Task output"), TaskPin);
@@ -5064,7 +5065,7 @@ bool FAssetDocumentBehaviorTreeTask5SimpleParallelOutputsTest::RunTest(const FSt
 	TestTrue(TEXT("runtime child zero mirrors foreground Task pin"), BehaviorTree->RootNode && BehaviorTree->RootNode->Children.Num() == 2 && BehaviorTree->RootNode->Children[0].ChildTask == Foreground->NodeInstance);
 	TestTrue(TEXT("runtime child one mirrors background Out pin"), BehaviorTree->RootNode && BehaviorTree->RootNode->Children.Num() == 2 && BehaviorTree->RootNode->Children[1].ChildComposite == Background->NodeInstance);
 
-	TSharedPtr<FJsonObject> Extracted = Task4GraphSourceTests::ExtractTree(*this, BehaviorTree);
+	TSharedPtr<FJsonObject> Extracted = BTGraphSourceTests::ExtractTree(*this, BehaviorTree);
 	TSharedPtr<FJsonObject> ExtractedRoot = Extracted.IsValid() ? BTTestGetObjectField(Extracted, TEXT("Root")) : nullptr;
 	const TArray<TSharedPtr<FJsonValue>>* Children = nullptr;
 	TestTrue(TEXT("SimpleParallel extracts two semantic children"), ExtractedRoot.IsValid() && ExtractedRoot->TryGetArrayField(TEXT("Children"), Children) && Children && Children->Num() == 2);
@@ -5075,9 +5076,9 @@ bool FAssetDocumentBehaviorTreeTask5SimpleParallelOutputsTest::RunTest(const FSt
 	}
 
 	TArray<TSharedPtr<FJsonValue>> DiffEntries;
-	FAssetDocumentRegionContext Context = Task4GraphSourceTests::MakeTreeContext(BehaviorTree);
+	FAssetDocumentRegionContext Context = BTGraphSourceTests::MakeTreeContext(BehaviorTree);
 	const TSharedPtr<FJsonObject> RenamedTree = MakeSimpleParallelTree(TEXT("Renamed background selector"));
-	Result = Task4GraphSourceTests::DiffTree(Context, RenamedTree.ToSharedRef(), DiffEntries);
+	Result = BTGraphSourceTests::DiffTree(Context, RenamedTree.ToSharedRef(), DiffEntries);
 	TestTrue(TEXT("SimpleParallel background diff succeeds"), Result.bSuccess);
 	const FString ExpectedDiffPath = BTTestTreePointer(RenamedTree, BackgroundCompositeGuid) + TEXT("/Properties/NodeName");
 	TestTrue(TEXT("background diff retains identity and pin-semantic child"), DiffEntries.ContainsByPredicate([&ExpectedDiffPath](const TSharedPtr<FJsonValue>& Value)
@@ -5087,13 +5088,13 @@ bool FAssetDocumentBehaviorTreeTask5SimpleParallelOutputsTest::RunTest(const FSt
 		return Entry.IsValid() && Entry->TryGetStringField(TEXT("path"), Path) && Path == ExpectedDiffPath;
 	}));
 
-	UBehaviorTree* ReverseXTree = Task4GraphSourceTests::CreateTree();
+	UBehaviorTree* ReverseXTree = BTGraphSourceTests::CreateTree();
 	bChanged = false;
-	Result = Task4GraphSourceTests::ApplyTree(ReverseXTree, MakeSimpleParallelTree(TEXT("Background selector"), true), bChanged);
+	Result = BTGraphSourceTests::ApplyTree(ReverseXTree, MakeSimpleParallelTree(TEXT("Background selector"), true), bChanged);
 	TestTrue(TEXT("SimpleParallel semantic Task/Out children accept inverse X layout"), Result.bSuccess);
 	if (Result.bSuccess)
 	{
-		TSharedPtr<FJsonObject> ReverseExtracted = Task4GraphSourceTests::ExtractTree(*this, ReverseXTree);
+		TSharedPtr<FJsonObject> ReverseExtracted = BTGraphSourceTests::ExtractTree(*this, ReverseXTree);
 		TSharedPtr<FJsonObject> ReverseRoot = ReverseExtracted.IsValid() ? BTTestGetObjectField(ReverseExtracted, TEXT("Root")) : nullptr;
 		const TArray<TSharedPtr<FJsonValue>>* ReverseChildren = nullptr;
 		TestTrue(TEXT("inverse-X SimpleParallel extracts two semantic children"), ReverseRoot.IsValid() && ReverseRoot->TryGetArrayField(TEXT("Children"), ReverseChildren) && ReverseChildren && ReverseChildren->Num() == 2);
@@ -5117,32 +5118,32 @@ bool FAssetDocumentBehaviorTreeTask5SimpleParallelOutputsTest::RunTest(const FSt
 				&& (*ForegroundPosition)->GetNumberField(TEXT("X")) > (*BackgroundPosition)->GetNumberField(TEXT("X")));
 		}
 		DiffEntries.Reset();
-		Result = Task4GraphSourceTests::DiffTree(
-			Task4GraphSourceTests::MakeTreeContext(ReverseXTree),
+		Result = BTGraphSourceTests::DiffTree(
+			BTGraphSourceTests::MakeTreeContext(ReverseXTree),
 			MakeSimpleParallelTree(TEXT("Background selector"), true).ToSharedRef(),
 			DiffEntries);
 		TestTrue(TEXT("inverse-X SimpleParallel roundtrip diff succeeds"), Result.bSuccess);
 		TestEqual(TEXT("inverse-X SimpleParallel roundtrip is canonical no-op"), DiffEntries.Num(), 0);
 	}
 
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_Task5_SimpleParallelReload"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_GraphShape_SimpleParallelReload"));
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	FScopedBehaviorTreeMutationFixture Fixture;
-	const FAssetDocumentResult ApplyResult = Fixture.Apply(Service, Target, BTTestMakeBehaviorTreeDocument(Target, Task4GraphSourceTests::MakeGraphSourceBody(MakeSimpleParallelTree(TEXT("Background selector"), true))));
+	const FAssetDocumentResult ApplyResult = Fixture.Apply(Service, Target, BTTestMakeBehaviorTreeDocument(Target, BTGraphSourceTests::MakeGraphSourceBody(MakeSimpleParallelTree(TEXT("Background selector"), true))));
 	TestTrue(TEXT("SimpleParallel saves"), ApplyResult.IsSuccess());
 	UBehaviorTree* BeforeReload = BTTestLoadBehaviorTreeForTarget(Target);
 	UPackage* Package = BeforeReload ? BeforeReload->GetOutermost() : nullptr;
 	TestTrue(TEXT("SimpleParallel package unloads"), Package && UPackageTools::UnloadPackages({Package}));
 	UBehaviorTree* Reloaded = BTTestLoadBehaviorTreeForTarget(Target);
 	UBehaviorTreeGraphNode_SimpleParallel* ReloadedParallel = Reloaded
-		? Cast<UBehaviorTreeGraphNode_SimpleParallel>(Task4GraphSourceTests::FindGraphNodeByGuid(Cast<UBehaviorTreeGraph>(Reloaded->BTGraph), SimpleParallelGuid))
+		? Cast<UBehaviorTreeGraphNode_SimpleParallel>(BTGraphSourceTests::FindGraphNodeByGuid(Cast<UBehaviorTreeGraph>(Reloaded->BTGraph), SimpleParallelGuid))
 		: nullptr;
 	TaskPin = FindOutputPin(ReloadedParallel, TEXT("Task"));
 	OutPin = FindOutputPin(ReloadedParallel, TEXT("Out"));
 	TestTrue(TEXT("foreground Task connection survives reload"), TaskPin && TaskPin->LinkedTo.Num() == 1 && TaskPin->LinkedTo[0]->GetOwningNode()->NodeGuid.ToString(EGuidFormats::Digits) == ForegroundTaskGuid);
 	TestTrue(TEXT("background Out connection survives reload"), OutPin && OutPin->LinkedTo.Num() == 1 && OutPin->LinkedTo[0]->GetOwningNode()->NodeGuid.ToString(EGuidFormats::Digits) == BackgroundCompositeGuid);
 	TestEqual(TEXT("two runtime children survive reload"), Reloaded && Reloaded->RootNode ? Reloaded->RootNode->Children.Num() : -1, 2);
-	TSharedPtr<FJsonObject> ReloadedExtracted = Reloaded ? Task4GraphSourceTests::ExtractTree(*this, Reloaded) : nullptr;
+	TSharedPtr<FJsonObject> ReloadedExtracted = Reloaded ? BTGraphSourceTests::ExtractTree(*this, Reloaded) : nullptr;
 	TSharedPtr<FJsonObject> ReloadedRoot = ReloadedExtracted.IsValid() ? BTTestGetObjectField(ReloadedExtracted, TEXT("Root")) : nullptr;
 	const TArray<TSharedPtr<FJsonValue>>* ReloadedChildren = nullptr;
 	TestTrue(TEXT("inverse-X reload extracts Task/Out semantic order"), ReloadedRoot.IsValid() && ReloadedRoot->TryGetArrayField(TEXT("Children"), ReloadedChildren) && ReloadedChildren && ReloadedChildren->Num() == 2
@@ -5152,17 +5153,17 @@ bool FAssetDocumentBehaviorTreeTask5SimpleParallelOutputsTest::RunTest(const FSt
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask5AttachmentsTest,
-	"UEAssetDoc.BehaviorTree.GraphSource.Task5.Attachments",
+	FAssetDocumentBehaviorTreeAttachmentsTest,
+	"UEAssetDoc.BehaviorTree.GraphSource.Attachments",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask5AttachmentsTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeAttachmentsTest::RunTest(const FString&)
 {
-	Task4GraphSourceTests::FPublicGraphFixture PublicGraphFixture;
-	using namespace Task5GraphSourceTests;
-	UBehaviorTree* BehaviorTree = Task4GraphSourceTests::CreateTree();
+	BTGraphSourceTests::FPublicGraphFixture PublicGraphFixture;
+	using namespace BTGraphShapeTests;
+	UBehaviorTree* BehaviorTree = BTGraphSourceTests::CreateTree();
 	bool bChanged = false;
-	FAssetDocumentCapabilityResult Result = Task4GraphSourceTests::ApplyTree(BehaviorTree, MakeAttachmentTree(), bChanged);
+	FAssetDocumentCapabilityResult Result = BTGraphSourceTests::ApplyTree(BehaviorTree, MakeAttachmentTree(), bChanged);
 	TestTrue(TEXT("root/edge decorators and composite services apply"), Result.bSuccess);
 	if (!Result.bSuccess)
 	{
@@ -5171,8 +5172,8 @@ bool FAssetDocumentBehaviorTreeTask5AttachmentsTest::RunTest(const FString&)
 	}
 
 	UBehaviorTreeGraph* Graph = Cast<UBehaviorTreeGraph>(BehaviorTree->BTGraph);
-	UBehaviorTreeGraphNode* Root = Task4GraphSourceTests::FindGraphNodeByGuid(Graph, Task4GraphSourceTests::RootGuid);
-	UBehaviorTreeGraphNode* FirstTask = Task4GraphSourceTests::FindGraphNodeByGuid(Graph, Task4GraphSourceTests::FirstTaskGuid);
+	UBehaviorTreeGraphNode* Root = BTGraphSourceTests::FindGraphNodeByGuid(Graph, BTGraphSourceTests::RootGuid);
+	UBehaviorTreeGraphNode* FirstTask = BTGraphSourceTests::FindGraphNodeByGuid(Graph, BTGraphSourceTests::FirstTaskGuid);
 	TestEqual(TEXT("root wrapper keeps two decorators"), Root ? Root->Decorators.Num() : -1, 2);
 	TestEqual(TEXT("edge wrapper keeps two decorators"), FirstTask ? FirstTask->Decorators.Num() : -1, 2);
 	TestEqual(TEXT("composite wrapper keeps two services"), Root ? Root->Services.Num() : -1, 2);
@@ -5197,9 +5198,9 @@ bool FAssetDocumentBehaviorTreeTask5AttachmentsTest::RunTest(const FString&)
 	TestTrue(TEXT("runtime service order mirrors graph"), Root && BehaviorTree->RootNode && BehaviorTree->RootNode->Services.Num() == 2 && BehaviorTree->RootNode->Services[0] == Root->Services[0]->NodeInstance && BehaviorTree->RootNode->Services[1] == Root->Services[1]->NodeInstance);
 	TestEqual(TEXT("runtime first edge decorators mirror graph count"), BehaviorTree->RootNode && BehaviorTree->RootNode->Children.Num() > 0 ? BehaviorTree->RootNode->Children[0].Decorators.Num() : -1, 2);
 
-	TSharedPtr<FJsonObject> Extracted = Task4GraphSourceTests::ExtractTree(*this, BehaviorTree);
+	TSharedPtr<FJsonObject> Extracted = BTGraphSourceTests::ExtractTree(*this, BehaviorTree);
 	TSharedPtr<FJsonObject> ExtractedRoot = Extracted.IsValid() ? BTTestGetObjectField(Extracted, TEXT("Root")) : nullptr;
-	TSharedPtr<FJsonObject> ExtractedFirst = ExtractedRoot.IsValid() ? Task4GraphSourceTests::FindExtractedNodeById(ExtractedRoot, Task4GraphSourceTests::FirstTaskGuid) : nullptr;
+	TSharedPtr<FJsonObject> ExtractedFirst = ExtractedRoot.IsValid() ? BTGraphSourceTests::FindExtractedNodeById(ExtractedRoot, BTGraphSourceTests::FirstTaskGuid) : nullptr;
 	TestNotNull(TEXT("root decorator A extracts by GUID"), FindAttachment(ExtractedRoot, TEXT("Decorators"), RootDecoratorGuidA).Get());
 	TestNotNull(TEXT("root decorator B extracts by GUID"), FindAttachment(ExtractedRoot, TEXT("Decorators"), RootDecoratorGuidB).Get());
 	TestNotNull(TEXT("edge decorator A extracts by GUID"), FindAttachment(ExtractedFirst, TEXT("Decorators"), EdgeDecoratorGuidA).Get());
@@ -5208,8 +5209,8 @@ bool FAssetDocumentBehaviorTreeTask5AttachmentsTest::RunTest(const FString&)
 	TestNotNull(TEXT("service B extracts by GUID"), FindAttachment(ExtractedRoot, TEXT("Services"), RootServiceGuidB).Get());
 
 	TArray<TSharedPtr<FJsonValue>> DiffEntries;
-	FAssetDocumentRegionContext Context = Task4GraphSourceTests::MakeTreeContext(BehaviorTree);
-	Result = Task4GraphSourceTests::DiffTree(Context, MakeAttachmentTree(true, true).ToSharedRef(), DiffEntries);
+	FAssetDocumentRegionContext Context = BTGraphSourceTests::MakeTreeContext(BehaviorTree);
+	Result = BTGraphSourceTests::DiffTree(Context, MakeAttachmentTree(true, true).ToSharedRef(), DiffEntries);
 	TestTrue(TEXT("attachment reorder diff succeeds"), Result.bSuccess);
 	const FString RootNodePath = TEXT("/Body/Tree/Root");
 	const auto HasPath = [&DiffEntries](const FString& Expected)
@@ -5227,14 +5228,14 @@ bool FAssetDocumentBehaviorTreeTask5AttachmentsTest::RunTest(const FString&)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask5CompositeExpressionsTest,
-	"UEAssetDoc.BehaviorTree.GraphSource.Task5.CompositeExpressions",
+	FAssetDocumentBehaviorTreeCompositeExpressionsTest,
+	"UEAssetDoc.BehaviorTree.GraphSource.CompositeExpressions",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask5CompositeExpressionsTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeCompositeExpressionsTest::RunTest(const FString&)
 {
-	Task4GraphSourceTests::FPublicGraphFixture PublicGraphFixture;
-	using namespace Task5GraphSourceTests;
+	BTGraphSourceTests::FPublicGraphFixture PublicGraphFixture;
+	using namespace BTGraphShapeTests;
 	struct FExpressionCase
 	{
 		FString Shape;
@@ -5252,9 +5253,9 @@ bool FAssetDocumentBehaviorTreeTask5CompositeExpressionsTest::RunTest(const FStr
 
 	for (const FExpressionCase& Case : Cases)
 	{
-		UBehaviorTree* BehaviorTree = Task4GraphSourceTests::CreateTree();
+		UBehaviorTree* BehaviorTree = BTGraphSourceTests::CreateTree();
 		bool bChanged = false;
-		const FAssetDocumentCapabilityResult Result = Task4GraphSourceTests::ApplyTree(BehaviorTree, MakeCompositeTree(Case.Shape), bChanged);
+		const FAssetDocumentCapabilityResult Result = BTGraphSourceTests::ApplyTree(BehaviorTree, MakeCompositeTree(Case.Shape), bChanged);
 		TestTrue(*FString::Printf(TEXT("%s composite expression applies"), *Case.Shape), Result.bSuccess);
 		if (!Result.bSuccess)
 		{
@@ -5290,9 +5291,9 @@ bool FAssetDocumentBehaviorTreeTask5CompositeExpressionsTest::RunTest(const FStr
 			}
 		}
 
-		TSharedPtr<FJsonObject> Extracted = Task4GraphSourceTests::ExtractTree(*this, BehaviorTree);
+		TSharedPtr<FJsonObject> Extracted = BTGraphSourceTests::ExtractTree(*this, BehaviorTree);
 		TSharedPtr<FJsonObject> ExtractedRoot = Extracted.IsValid() ? BTTestGetObjectField(Extracted, TEXT("Root")) : nullptr;
-		TSharedPtr<FJsonObject> ExtractedFirst = Task4GraphSourceTests::FindExtractedNodeById(ExtractedRoot, Task4GraphSourceTests::FirstTaskGuid);
+		TSharedPtr<FJsonObject> ExtractedFirst = BTGraphSourceTests::FindExtractedNodeById(ExtractedRoot, BTGraphSourceTests::FirstTaskGuid);
 		TSharedPtr<FJsonObject> ExtractedComposite = FindAttachment(ExtractedFirst, TEXT("Decorators"), CompositeDecoratorGuid);
 		TSharedPtr<FJsonObject> ExtractedBound = BTTestGetObjectField(ExtractedComposite, TEXT("BoundGraph"));
 		TestEqual(*FString::Printf(TEXT("%s extracts stable BoundGraph GUID"), *Case.Shape), ExtractedBound.IsValid() ? ExtractedBound->GetStringField(TEXT("GraphGuid")) : FString(), FString(BoundGraphGuid));
@@ -5300,13 +5301,13 @@ bool FAssetDocumentBehaviorTreeTask5CompositeExpressionsTest::RunTest(const FStr
 		TestTrue(*FString::Printf(TEXT("%s extracts canonical links"), *Case.Shape), ExtractedBound.IsValid() && ExtractedBound->TryGetArrayField(TEXT("Links"), ExtractedLinks) && ExtractedLinks && ExtractedLinks->Num() == MakeBoundGraph(Case.Shape)->GetArrayField(TEXT("Links")).Num());
 	}
 
-	TSharedPtr<FJsonObject> RootCompositeTree = Task4GraphSourceTests::MakeGraphSourceTree();
+	TSharedPtr<FJsonObject> RootCompositeTree = BTGraphSourceTests::MakeGraphSourceTree();
 	BTTestGetObjectField(RootCompositeTree, TEXT("Root"))->SetArrayField(
 		TEXT("Decorators"),
 		{BTTestMakeObjectValue(MakeCompositeDecorator(MakeBoundGraph(TEXT("And3"))))});
-	UBehaviorTree* RootCompositeAsset = Task4GraphSourceTests::CreateTree();
+	UBehaviorTree* RootCompositeAsset = BTGraphSourceTests::CreateTree();
 	bool bRootChanged = false;
-	FAssetDocumentCapabilityResult RootResult = Task4GraphSourceTests::ApplyTree(RootCompositeAsset, RootCompositeTree, bRootChanged);
+	FAssetDocumentCapabilityResult RootResult = BTGraphSourceTests::ApplyTree(RootCompositeAsset, RootCompositeTree, bRootChanged);
 	TestTrue(TEXT("root three-input composite decorator applies"), RootResult.bSuccess);
 	const TArray<EBTDecoratorLogic::Type> RootExpectedOperations = {
 		EBTDecoratorLogic::And,
@@ -5321,10 +5322,10 @@ bool FAssetDocumentBehaviorTreeTask5CompositeExpressionsTest::RunTest(const FStr
 		TestEqual(*FString::Printf(TEXT("root composite runtime number/index %d is exact"), Index), static_cast<int32>(RootCompositeAsset->RootDecoratorOps[Index].Number), RootExpectedNumbers[Index]);
 	}
 
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_Task5_CompositeReload"));
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_GraphShape_CompositeReload"));
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	FScopedBehaviorTreeMutationFixture Fixture;
-	const FAssetDocumentResult ApplyResult = Fixture.Apply(Service, Target, BTTestMakeBehaviorTreeDocument(Target, Task4GraphSourceTests::MakeGraphSourceBody(MakeCompositeTree(TEXT("NestedNotOr")))));
+	const FAssetDocumentResult ApplyResult = Fixture.Apply(Service, Target, BTTestMakeBehaviorTreeDocument(Target, BTGraphSourceTests::MakeGraphSourceBody(MakeCompositeTree(TEXT("NestedNotOr")))));
 	TestTrue(TEXT("nested composite expression saves"), ApplyResult.IsSuccess());
 	UBehaviorTree* BeforeReload = BTTestLoadBehaviorTreeForTarget(Target);
 	UPackage* Package = BeforeReload ? BeforeReload->GetOutermost() : nullptr;
@@ -5353,7 +5354,7 @@ bool FAssetDocumentBehaviorTreeTask5CompositeExpressionsTest::RunTest(const FStr
 	for (const FString& ThreeInputShape : {FString(TEXT("And3")), FString(TEXT("Or3"))})
 	{
 		const FString ThreeInputTarget = FString::Printf(
-			TEXT("/Game/AssetDocumentTests/BT_Task5_%s_Reload_%s"),
+			TEXT("/Game/AssetDocumentTests/BT_GraphShape_%s_Reload_%s"),
 			*ThreeInputShape,
 			*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 		const FAssetDocumentResult ThreeInputApply = Fixture.Apply(
@@ -5361,7 +5362,7 @@ bool FAssetDocumentBehaviorTreeTask5CompositeExpressionsTest::RunTest(const FStr
 			ThreeInputTarget,
 			BTTestMakeBehaviorTreeDocument(
 				ThreeInputTarget,
-				Task4GraphSourceTests::MakeGraphSourceBody(MakeCompositeTree(ThreeInputShape))));
+				BTGraphSourceTests::MakeGraphSourceBody(MakeCompositeTree(ThreeInputShape))));
 		TestTrue(*FString::Printf(TEXT("%s three-input composite saves"), *ThreeInputShape), ThreeInputApply.IsSuccess());
 		UBehaviorTree* ThreeInputBeforeReload = BTTestLoadBehaviorTreeForTarget(ThreeInputTarget);
 		UPackage* ThreeInputPackage = ThreeInputBeforeReload ? ThreeInputBeforeReload->GetOutermost() : nullptr;
@@ -5398,8 +5399,8 @@ bool FAssetDocumentBehaviorTreeTask5CompositeExpressionsTest::RunTest(const FStr
 			}
 		}
 		TArray<TSharedPtr<FJsonValue>> ThreeInputDiff;
-		FAssetDocumentCapabilityResult ThreeInputDiffResult = Task4GraphSourceTests::DiffTree(
-			Task4GraphSourceTests::MakeTreeContext(ThreeInputReloaded),
+		FAssetDocumentCapabilityResult ThreeInputDiffResult = BTGraphSourceTests::DiffTree(
+			BTGraphSourceTests::MakeTreeContext(ThreeInputReloaded),
 			MakeCompositeTree(ThreeInputShape).ToSharedRef(),
 			ThreeInputDiff);
 		TestTrue(*FString::Printf(TEXT("%s reload roundtrip diff succeeds"), *ThreeInputShape), ThreeInputDiffResult.bSuccess);
@@ -5410,13 +5411,13 @@ bool FAssetDocumentBehaviorTreeTask5CompositeExpressionsTest::RunTest(const FStr
 	IdentityTree->SetArrayField(TEXT("Comments"), {
 		BTTestMakeObjectValue(MakeComment(CommentGuid, TEXT("Identity comment A"), -320.0)),
 		BTTestMakeObjectValue(MakeComment(CommentGuidB, TEXT("Identity comment B"), -120.0))});
-	UBehaviorTree* IdentityAsset = Task4GraphSourceTests::CreateTree();
+	UBehaviorTree* IdentityAsset = BTGraphSourceTests::CreateTree();
 	bool bIdentityChanged = false;
-	FAssetDocumentCapabilityResult IdentityResult = Task4GraphSourceTests::ApplyTree(IdentityAsset, IdentityTree, bIdentityChanged);
+	FAssetDocumentCapabilityResult IdentityResult = BTGraphSourceTests::ApplyTree(IdentityAsset, IdentityTree, bIdentityChanged);
 	TestTrue(TEXT("identity reorder baseline applies"), IdentityResult.bSuccess);
-	TSharedPtr<FJsonObject> IdentityExtracted = IdentityResult.bSuccess ? Task4GraphSourceTests::ExtractTree(*this, IdentityAsset) : nullptr;
+	TSharedPtr<FJsonObject> IdentityExtracted = IdentityResult.bSuccess ? BTGraphSourceTests::ExtractTree(*this, IdentityAsset) : nullptr;
 	TSharedPtr<FJsonObject> IdentityRoot = IdentityExtracted.IsValid() ? BTTestGetObjectField(IdentityExtracted, TEXT("Root")) : nullptr;
-	TSharedPtr<FJsonObject> IdentityFirst = IdentityRoot.IsValid() ? Task4GraphSourceTests::FindExtractedNodeById(IdentityRoot, Task4GraphSourceTests::FirstTaskGuid) : nullptr;
+	TSharedPtr<FJsonObject> IdentityFirst = IdentityRoot.IsValid() ? BTGraphSourceTests::FindExtractedNodeById(IdentityRoot, BTGraphSourceTests::FirstTaskGuid) : nullptr;
 	TSharedPtr<FJsonObject> IdentityComposite = FindAttachment(IdentityFirst, TEXT("Decorators"), CompositeDecoratorGuid);
 	TSharedPtr<FJsonObject> IdentityBound = BTTestGetObjectField(IdentityComposite, TEXT("BoundGraph"));
 	const TArray<TSharedPtr<FJsonValue>>* CanonicalBoundNodes = nullptr;
@@ -5480,8 +5481,8 @@ bool FAssetDocumentBehaviorTreeTask5CompositeExpressionsTest::RunTest(const FStr
 	ReverseArrayField(ReorderedBound, TEXT("Nodes"));
 	ReverseArrayField(ReorderedBound, TEXT("Links"));
 	TArray<TSharedPtr<FJsonValue>> IdentityDiff;
-	IdentityResult = Task4GraphSourceTests::DiffTree(
-		Task4GraphSourceTests::MakeTreeContext(IdentityAsset),
+	IdentityResult = BTGraphSourceTests::DiffTree(
+		BTGraphSourceTests::MakeTreeContext(IdentityAsset),
 		ReorderedIdentityTree.ToSharedRef(),
 		IdentityDiff);
 	TestTrue(TEXT("identity collection reorder diff succeeds"), IdentityResult.bSuccess);
@@ -5490,14 +5491,14 @@ bool FAssetDocumentBehaviorTreeTask5CompositeExpressionsTest::RunTest(const FStr
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask5CompositeValidationTest,
-	"UEAssetDoc.BehaviorTree.GraphSource.Task5.CompositeValidation",
+	FAssetDocumentBehaviorTreeCompositeValidationTest,
+	"UEAssetDoc.BehaviorTree.GraphSource.CompositeValidation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask5CompositeValidationTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeCompositeValidationTest::RunTest(const FString&)
 {
-	Task4GraphSourceTests::FPublicGraphFixture PublicGraphFixture;
-	using namespace Task5GraphSourceTests;
+	BTGraphSourceTests::FPublicGraphFixture PublicGraphFixture;
+	using namespace BTGraphShapeTests;
 	struct FInvalidCase
 	{
 		FString Label;
@@ -5573,9 +5574,9 @@ bool FAssetDocumentBehaviorTreeTask5CompositeValidationTest::RunTest(const FStri
 	UnreachableGraph->SetArrayField(TEXT("Nodes"), UnreachableNodes);
 	Cases.Add({TEXT("unreachable node"), UnreachableTree, BasePath + TEXT("/Nodes/2"), TEXT("UnreachableBehaviorTreeDecoratorNode")});
 
-	UBehaviorTree* Existing = Task4GraphSourceTests::CreateTree();
+	UBehaviorTree* Existing = BTGraphSourceTests::CreateTree();
 	bool bChanged = false;
-	FAssetDocumentCapabilityResult Result = Task4GraphSourceTests::ApplyTree(Existing, MakeCompositeTree(TEXT("NestedNotOr")), bChanged);
+	FAssetDocumentCapabilityResult Result = BTGraphSourceTests::ApplyTree(Existing, MakeCompositeTree(TEXT("NestedNotOr")), bChanged);
 	TestTrue(TEXT("valid rollback baseline applies"), Result.bSuccess);
 	const FString OriginalCanonical = ComparableTree(Existing);
 	UBehaviorTreeGraph* OriginalGraph = Cast<UBehaviorTreeGraph>(Existing->BTGraph);
@@ -5585,7 +5586,7 @@ bool FAssetDocumentBehaviorTreeTask5CompositeValidationTest::RunTest(const FStri
 	for (const FInvalidCase& Case : Cases)
 	{
 		bChanged = false;
-		Result = Task4GraphSourceTests::ApplyTree(Existing, Case.Tree, bChanged);
+		Result = BTGraphSourceTests::ApplyTree(Existing, Case.Tree, bChanged);
 		TestFalse(*FString::Printf(TEXT("%s is rejected"), *Case.Label), Result.bSuccess);
 		TestTrue(*FString::Printf(TEXT("%s reports exact JSON pointer"), *Case.Label), BTTestHasDiagnostic(Result, Case.Path, Case.Code));
 		TestFalse(*FString::Printf(TEXT("%s reports no change"), *Case.Label), bChanged);
@@ -5598,18 +5599,18 @@ bool FAssetDocumentBehaviorTreeTask5CompositeValidationTest::RunTest(const FStri
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask5CommentsTest,
-	"UEAssetDoc.BehaviorTree.GraphSource.Task5.Comments",
+	FAssetDocumentBehaviorTreeCommentsTest,
+	"UEAssetDoc.BehaviorTree.GraphSource.Comments",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask5CommentsTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeCommentsTest::RunTest(const FString&)
 {
-	Task4GraphSourceTests::FPublicGraphFixture PublicGraphFixture;
-	using namespace Task5GraphSourceTests;
-	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_Task5_CommentsReload"));
+	BTGraphSourceTests::FPublicGraphFixture PublicGraphFixture;
+	using namespace BTGraphShapeTests;
+	const FString Target = BTTestMakeUniqueTarget(TEXT("BT_GraphShape_CommentsReload"));
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	FScopedBehaviorTreeMutationFixture Fixture;
-	FAssetDocumentResult ApplyResult = Fixture.Apply(Service, Target, BTTestMakeBehaviorTreeDocument(Target, Task4GraphSourceTests::MakeGraphSourceBody(MakeCommentTree())));
+	FAssetDocumentResult ApplyResult = Fixture.Apply(Service, Target, BTTestMakeBehaviorTreeDocument(Target, BTGraphSourceTests::MakeGraphSourceBody(MakeCommentTree())));
 	TestTrue(TEXT("full comment surface saves"), ApplyResult.IsSuccess());
 	if (!ApplyResult.IsSuccess())
 	{
@@ -5622,8 +5623,8 @@ bool FAssetDocumentBehaviorTreeTask5CommentsTest::RunTest(const FString&)
 	UBehaviorTree* Reloaded = BTTestLoadBehaviorTreeForTarget(Target);
 	TestNotNull(TEXT("comment fixture reloads"), Reloaded);
 	UBehaviorTreeGraph* Graph = Reloaded ? Cast<UBehaviorTreeGraph>(Reloaded->BTGraph) : nullptr;
-	UBehaviorTreeGraphNode* Root = Task4GraphSourceTests::FindGraphNodeByGuid(Graph, Task4GraphSourceTests::RootGuid);
-	UBehaviorTreeGraphNode* Task = Task4GraphSourceTests::FindGraphNodeByGuid(Graph, Task4GraphSourceTests::FirstTaskGuid);
+	UBehaviorTreeGraphNode* Root = BTGraphSourceTests::FindGraphNodeByGuid(Graph, BTGraphSourceTests::RootGuid);
+	UBehaviorTreeGraphNode* Task = BTGraphSourceTests::FindGraphNodeByGuid(Graph, BTGraphSourceTests::FirstTaskGuid);
 	UBehaviorTreeGraphNode* Decorator = FindSubNodeByGuid(Graph, RootDecoratorGuidA);
 	UBehaviorTreeGraphNode* ServiceNode = FindSubNodeByGuid(Graph, RootServiceGuidA);
 	TestEqual(TEXT("composite NodeComment survives reload"), Root ? Root->NodeComment : FString(), FString(TEXT("root composite comment")));
@@ -5635,7 +5636,7 @@ bool FAssetDocumentBehaviorTreeTask5CommentsTest::RunTest(const FString&)
 
 	UEdGraphNode_Comment* Comment = FindComment(Graph);
 	TestNotNull(TEXT("comment box survives reload"), Comment);
-	TestEqual(TEXT("comment text maps inherited NodeComment"), Comment ? Comment->NodeComment : FString(), FString(TEXT("Task 5 comment text")));
+	TestEqual(TEXT("comment text maps inherited NodeComment"), Comment ? Comment->NodeComment : FString(), FString(TEXT("Inherited comment text")));
 	TestEqual(TEXT("comment X survives reload"), Comment ? Comment->NodePosX : 0, -320);
 	TestEqual(TEXT("comment Y survives reload"), Comment ? Comment->NodePosY : 0, -180);
 	TestEqual(TEXT("comment width survives reload"), Comment ? Comment->NodeWidth : 0, 640);
@@ -5651,7 +5652,7 @@ bool FAssetDocumentBehaviorTreeTask5CommentsTest::RunTest(const FString&)
 	TestTrue(TEXT("inherited comment bubble fields survive reload"), Comment && Comment->bCommentBubblePinned && !Comment->bCommentBubbleVisible);
 	TestTrue(TEXT("comment-specific bubble fields survive reload"), Comment && Comment->bCommentBubbleVisible_InDetailsPanel && Comment->bColorCommentBubble);
 
-	TSharedPtr<FJsonObject> Extracted = Task4GraphSourceTests::ExtractTree(*this, Reloaded);
+	TSharedPtr<FJsonObject> Extracted = BTGraphSourceTests::ExtractTree(*this, Reloaded);
 	const TArray<TSharedPtr<FJsonValue>>* ExtractedComments = nullptr;
 	TestTrue(TEXT("canonical extract includes one comment"), Extracted.IsValid() && Extracted->TryGetArrayField(TEXT("Comments"), ExtractedComments) && ExtractedComments && ExtractedComments->Num() == 1);
 	TSharedPtr<FJsonObject> ExtractedComment = ExtractedComments && ExtractedComments->Num() == 1 ? (*ExtractedComments)[0]->AsObject() : nullptr;
@@ -5666,8 +5667,8 @@ bool FAssetDocumentBehaviorTreeTask5CommentsTest::RunTest(const FString&)
 	SparseComment->SetStringField(TEXT("Text"), TEXT("Sparse updated text"));
 	SparseTree->SetArrayField(TEXT("Comments"), {BTTestMakeObjectValue(SparseComment)});
 	TArray<TSharedPtr<FJsonValue>> DiffEntries;
-	FAssetDocumentRegionContext Context = Task4GraphSourceTests::MakeTreeContext(Reloaded);
-	FAssetDocumentCapabilityResult Result = Task4GraphSourceTests::DiffTree(Context, SparseTree.ToSharedRef(), DiffEntries);
+	FAssetDocumentRegionContext Context = BTGraphSourceTests::MakeTreeContext(Reloaded);
+	FAssetDocumentCapabilityResult Result = BTGraphSourceTests::DiffTree(Context, SparseTree.ToSharedRef(), DiffEntries);
 	TestTrue(TEXT("sparse comment diff succeeds"), Result.bSuccess);
 	const FString ExpectedTextPath = BTTestTreePointer(SparseTree, CommentGuid) + TEXT("/Text");
 	TestTrue(TEXT("comment diff is identity-addressed"), DiffEntries.ContainsByPredicate([&ExpectedTextPath](const TSharedPtr<FJsonValue>& Value)
@@ -5677,7 +5678,7 @@ bool FAssetDocumentBehaviorTreeTask5CommentsTest::RunTest(const FString&)
 		return Entry.IsValid() && Entry->TryGetStringField(TEXT("path"), Path) && Path == ExpectedTextPath;
 	}));
 	bool bChanged = false;
-	Result = Task4GraphSourceTests::ApplyTree(Reloaded, SparseTree, bChanged);
+	Result = BTGraphSourceTests::ApplyTree(Reloaded, SparseTree, bChanged);
 	TestTrue(TEXT("sparse comment update applies"), Result.bSuccess);
 	Comment = FindComment(Cast<UBehaviorTreeGraph>(Reloaded->BTGraph));
 	TestEqual(TEXT("sparse update changes text"), Comment ? Comment->NodeComment : FString(), FString(TEXT("Sparse updated text")));
@@ -5688,28 +5689,28 @@ bool FAssetDocumentBehaviorTreeTask5CommentsTest::RunTest(const FString&)
 
 	TSharedPtr<FJsonObject> DeleteTree = MakeCommentTree();
 	DeleteTree->SetArrayField(TEXT("Comments"), {});
-	Result = Task4GraphSourceTests::ApplyTree(Reloaded, DeleteTree, bChanged);
+	Result = BTGraphSourceTests::ApplyTree(Reloaded, DeleteTree, bChanged);
 	TestTrue(TEXT("explicit empty Comments deletes comment boxes"), Result.bSuccess);
 	TestNull(TEXT("comment box is explicitly deleted"), FindComment(Cast<UBehaviorTreeGraph>(Reloaded->BTGraph)));
 	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask5RollbackTest,
-	"UEAssetDoc.BehaviorTree.GraphSource.Task5.Rollback",
+	FAssetDocumentBehaviorTreeRollbackTest,
+	"UEAssetDoc.BehaviorTree.GraphSource.Rollback",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask5RollbackTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeRollbackTest::RunTest(const FString&)
 {
-	Task4GraphSourceTests::FPublicGraphFixture PublicGraphFixture;
-	using namespace Task5GraphSourceTests;
+	BTGraphSourceTests::FPublicGraphFixture PublicGraphFixture;
+	using namespace BTGraphShapeTests;
 	TSharedPtr<FJsonObject> OriginalTree = MakeCommentTree();
 	FirstChild(OriginalTree)->SetArrayField(TEXT("Decorators"), {
 		BTTestMakeObjectValue(MakeDecorator(EdgeDecoratorGuidA, TEXT("Edge decorator A"), 80.0, 260.0, TEXT("edge decorator comment A"))),
 		BTTestMakeObjectValue(MakeCompositeDecorator(MakeBoundGraph(TEXT("NestedNotOr"))))});
-	UBehaviorTree* BehaviorTree = Task4GraphSourceTests::CreateTree();
+	UBehaviorTree* BehaviorTree = BTGraphSourceTests::CreateTree();
 	bool bChanged = false;
-	FAssetDocumentCapabilityResult Result = Task4GraphSourceTests::ApplyTree(BehaviorTree, OriginalTree, bChanged);
+	FAssetDocumentCapabilityResult Result = BTGraphSourceTests::ApplyTree(BehaviorTree, OriginalTree, bChanged);
 	TestTrue(TEXT("rollback baseline applies"), Result.bSuccess);
 	if (!Result.bSuccess)
 	{
@@ -5717,7 +5718,7 @@ bool FAssetDocumentBehaviorTreeTask5RollbackTest::RunTest(const FString&)
 		return false;
 	}
 	UBehaviorTreeGraph* OriginalGraph = Cast<UBehaviorTreeGraph>(BehaviorTree->BTGraph);
-	UBehaviorTreeGraphNode* OriginalRoot = Task4GraphSourceTests::FindGraphNodeByGuid(OriginalGraph, Task4GraphSourceTests::RootGuid);
+	UBehaviorTreeGraphNode* OriginalRoot = BTGraphSourceTests::FindGraphNodeByGuid(OriginalGraph, BTGraphSourceTests::RootGuid);
 	UBehaviorTreeGraphNode_CompositeDecorator* OriginalComposite = Cast<UBehaviorTreeGraphNode_CompositeDecorator>(FindSubNodeByGuid(OriginalGraph, CompositeDecoratorGuid));
 	UEdGraph* OriginalBoundGraph = OriginalComposite ? OriginalComposite->BoundGraph : nullptr;
 	UEdGraphNode_Comment* OriginalComment = FindComment(OriginalGraph);
@@ -5735,12 +5736,12 @@ bool FAssetDocumentBehaviorTreeTask5RollbackTest::RunTest(const FString&)
 		BTTestMakeObjectValue(MakeDecorator(EdgeDecoratorGuidA, TEXT("Edge decorator A"), 80.0, 260.0, TEXT("edge decorator comment A"))),
 		BTTestMakeObjectValue(MakeCompositeDecorator(InvalidBound))});
 	bChanged = false;
-	Result = Task4GraphSourceTests::ApplyTree(BehaviorTree, InvalidTree, bChanged);
+	Result = BTGraphSourceTests::ApplyTree(BehaviorTree, InvalidTree, bChanged);
 	TestFalse(TEXT("late-surface invalid BoundGraph apply fails"), Result.bSuccess);
 	TestTrue(TEXT("invalid BoundGraph points at dangling From"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/Root/Children/0/Decorators/1/BoundGraph/Links/0/From"), TEXT("DanglingBehaviorTreeDecoratorLink")));
 	TestFalse(TEXT("failed apply reports unchanged"), bChanged);
 	TestTrue(TEXT("failed apply keeps original main graph"), BehaviorTree->BTGraph == OriginalGraph);
-	TestTrue(TEXT("failed apply keeps original root wrapper"), Task4GraphSourceTests::FindGraphNodeByGuid(OriginalGraph, Task4GraphSourceTests::RootGuid) == OriginalRoot);
+	TestTrue(TEXT("failed apply keeps original root wrapper"), BTGraphSourceTests::FindGraphNodeByGuid(OriginalGraph, BTGraphSourceTests::RootGuid) == OriginalRoot);
 	TestTrue(TEXT("failed apply keeps composite wrapper object"), FindSubNodeByGuid(OriginalGraph, CompositeDecoratorGuid) == OriginalComposite);
 	TestTrue(TEXT("failed apply keeps BoundGraph object and links"), OriginalComposite && OriginalComposite->BoundGraph == OriginalBoundGraph);
 	TestTrue(TEXT("failed apply keeps comment object"), FindComment(OriginalGraph) == OriginalComment);

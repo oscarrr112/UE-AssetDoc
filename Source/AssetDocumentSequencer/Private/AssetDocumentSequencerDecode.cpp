@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Values written by seq.edit.v1 (design §3.3): the inverse of AssetDocumentSequencerValues.cpp. Frame numbers are display
 // frames of the context's time base (rounded to the nearest tick), binding IDs are binding paths ({"Binding": path},

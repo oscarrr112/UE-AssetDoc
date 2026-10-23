@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """AnimSequence document <-> native authoring shapes (pure functions, no engine calls).
 
 Body regions (see docs/architecture/asset-document-anim-sequence-matrix.md)::

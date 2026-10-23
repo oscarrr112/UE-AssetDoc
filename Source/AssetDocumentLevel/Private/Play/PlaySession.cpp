@@ -1,7 +1,10 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "Play/PlaySession.h"
+#include "Play/PlayCommandGuard.h"
 
+#include "AssetDocumentSettings.h"
 #include "AssetDocumentViewportCapture.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -708,32 +711,6 @@ const TCHAR* const WaitFields[] = {TEXT("action"), TEXT("seconds"), TEXT("until"
 const TCHAR* const InputFields[] = {TEXT("action"), TEXT("inputs"), TEXT("settle"), TEXT("timeout")};
 const TCHAR* const InputEntryFields[] = {TEXT("input_action"), TEXT("key"), TEXT("value"), TEXT("duration"), TEXT("at"), TEXT("state")};
 
-// The first word of a console command that acts on the editor rather than the game, or empty.
-FString RefusedConsoleWord(const FString& Command)
-{
-	static const TCHAR* const Refused[] = {TEXT("quit"), TEXT("exit"), TEXT("crash"), TEXT("debug"), TEXT("forcegc"), TEXT("obj"), TEXT("py"),
-		TEXT("exec")};
-	TArray<FString> Lines;
-	Command.ParseIntoArray(Lines, TEXT("|"));
-	for (const FString& Line : Lines)
-	{
-		FString First;
-		const FString Trimmed = Line.TrimStartAndEnd();
-		if (!Trimmed.Split(TEXT(" "), &First, nullptr))
-		{
-			First = Trimmed;
-		}
-		for (const TCHAR* Word : Refused)
-		{
-			if (First.Equals(Word, ESearchCase::IgnoreCase))
-			{
-				return First;
-			}
-		}
-	}
-	return FString();
-}
-
 template<int32 N>
 bool CheckFields(const FJsonObject& Json, const TCHAR* const (&Known)[N], const FString& Prefix, const FString& What,
 	TArray<FAssetDocumentDiagnostic>& Diagnostics)
@@ -801,11 +778,11 @@ FLevelToolResult FPlayManager::Start(const FJsonObject& Request)
 				Diagnostics.Add(PlayInvalidRequest(Path, TEXT("'console' is a command or an array of commands, run in order before the first frame.")));
 				continue;
 			}
-			const FString Refused = RefusedConsoleWord(Command);
-			if (!Refused.IsEmpty())
+			// No play world yet: a target is checked again against the play world when the command runs.
+			const FPlayCommandRefusal Refused = RefusedConsoleCommand(Command, nullptr);
+			if (Refused.IsRefused())
 			{
-				Diagnostics.Add(MakePlayDiagnostic(Path, TEXT("Play.CommandRefused"), FString::Printf(
-					TEXT("'%s' is refused here: it would affect the editor, not only the game."), *Refused)));
+				Diagnostics.Add(MakePlayDiagnostic(Path, Refused.Code, Refused.Message));
 				continue;
 			}
 			StartCommands.Add(Command.TrimStartAndEnd());
@@ -1533,6 +1510,21 @@ FLevelToolResult FPlayManager::HandleInput(const FJsonObject& Request)
 				Diagnostics.Add(MakePlayDiagnostic(Path + TEXT("/key"), TEXT("Play.UnknownKey"), FString::Printf(TEXT("'%s' is not a key name%s"), *KeyName,
 					Close.IsEmpty() ? TEXT(" (e.g. SpaceBar, W, LeftMouseButton, MouseX, Gamepad_LeftX, Gamepad_FaceButton_Bottom).")
 						: *FString::Printf(TEXT("; close: %s."), *FString::Join(Close, TEXT(", "))))));
+				continue;
+			}
+			// The keys the game receives (a paired 2D key sends its two axes) must not run a refused debug key binding.
+			FPlayCommandRefusal RefusedBinding = RefusedKeyBinding(Input.Key, World);
+			if (const EKeys::FPairedKeyDetails* Paired = EKeys::GetPairedKeyDetails(Input.Key); Paired != nullptr && !RefusedBinding.IsRefused())
+			{
+				RefusedBinding = RefusedKeyBinding(Paired->XKeyDetails->GetKey(), World);
+				if (!RefusedBinding.IsRefused())
+				{
+					RefusedBinding = RefusedKeyBinding(Paired->YKeyDetails->GetKey(), World);
+				}
+			}
+			if (RefusedBinding.IsRefused())
+			{
+				Diagnostics.Add(MakePlayDiagnostic(Path + TEXT("/key"), RefusedBinding.Code, RefusedBinding.Message));
 				continue;
 			}
 			Input.bAnalog = Input.Key.IsAnalog() || EKeys::GetPairedKeyDetails(Input.Key) != nullptr;
@@ -2334,6 +2326,12 @@ TSharedPtr<FJsonObject> FPlayManager::RunConsoleCommand(UWorld& World, APlayerCo
 			Notes.Add(Note);
 		}
 	}
+	// The line the console runs is checked again as sent (the ke targets above are rewritten).
+	if (const FPlayCommandRefusal Refused = RefusedConsoleCommand(FString::Join(Effective, TEXT("|")), &World); Refused.IsRefused())
+	{
+		OutDiagnostics.Add(MakePlayDiagnostic(Path, Refused.Code, Refused.Message));
+		return nullptr;
+	}
 	FlushPendingLog();
 	const uint64 Since = FPlayLog::Get().GetLastSeq();
 	FString Output;
@@ -2385,6 +2383,10 @@ FLevelToolResult FPlayManager::Console(const FJsonObject& Request)
 	{
 		Diagnostics.Add(PlayInvalidRequest(TEXT("/command"), TEXT("console needs 'command', e.g. \"slomo 0.5\", \"god\", \"showdebug ai\".")));
 	}
+	else if (const FPlayCommandRefusal Refused = RefusedConsoleCommand(Command, GetPlayWorld()); Refused.IsRefused())
+	{
+		Diagnostics.Add(MakePlayDiagnostic(TEXT("/command"), Refused.Code, Refused.Message));
+	}
 	if (!Diagnostics.IsEmpty())
 	{
 		return FLevelToolResult::Failure(MoveTemp(Diagnostics));
@@ -2398,13 +2400,6 @@ FLevelToolResult FPlayManager::Console(const FJsonObject& Request)
 	if (Controller == nullptr)
 	{
 		Diagnostics.Add(MakePlayDiagnostic(TEXT(""), TEXT("Play.NoPlayer"), TEXT("The play session has no local player to type the command.")));
-		return FLevelToolResult::Failure(MoveTemp(Diagnostics));
-	}
-	const FString Refused = RefusedConsoleWord(Command);
-	if (!Refused.IsEmpty())
-	{
-		Diagnostics.Add(MakePlayDiagnostic(TEXT("/command"), TEXT("Play.CommandRefused"), FString::Printf(
-			TEXT("'%s' is refused here: it would affect the editor, not only the game."), *Refused)));
 		return FLevelToolResult::Failure(MoveTemp(Diagnostics));
 	}
 	FlushPendingLog();

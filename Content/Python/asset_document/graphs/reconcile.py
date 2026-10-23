@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Pure reconciliation: desired GraphDocs + live snapshot -> ordered primitive plan.
 
 Node matching order: NodeGuid -> implicit role -> adapter semantic key (when

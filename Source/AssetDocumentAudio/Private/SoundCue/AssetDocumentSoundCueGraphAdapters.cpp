@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // SoundCue adapters of the shared graph primitives (provider "graph", AssetDocumentGraph; design §4.1):
 //   schema adapter  USoundCueGraphSchema graphs. Actions are the palette's (SoundCue:Node:<sound node class path>, one

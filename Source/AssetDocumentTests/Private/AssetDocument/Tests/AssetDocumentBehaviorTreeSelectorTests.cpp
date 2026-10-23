@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentModule.h"
 #include "AssetDocumentEditorSync.h"
@@ -52,7 +53,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-namespace AssetDocumentBehaviorTreeSelectorTask6Tests
+namespace AssetDocumentBehaviorTreeSelectorTests
 {
 constexpr const TCHAR* GraphGuid = TEXT("60606060111111112222222233333333");
 constexpr const TCHAR* RootGuid = TEXT("60606060444444445555555566666666");
@@ -67,7 +68,7 @@ constexpr const TCHAR* CompositeTestGuid = TEXT("61616161AAAAAAAABBBBBBBBCCCCCCC
 FString UniqueTarget(const TCHAR* Stem)
 {
 	return FString::Printf(
-		TEXT("/Game/AssetDocumentTests/Task6/%s_%s"),
+		TEXT("/Game/AssetDocumentTests/BehaviorTreeSelector/%s_%s"),
 		Stem,
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 }
@@ -449,7 +450,7 @@ TSharedPtr<FJsonObject> DerivedFieldTree(EDerivedSelectorLocation Location, cons
 		BoundGraph->SetArrayField(TEXT("Nodes"), {ObjectValue(Sink), ObjectValue(Test)});
 		BoundGraph->SetArrayField(TEXT("Links"), {ObjectValue(Link)});
 		TSharedPtr<FJsonObject> WrapperProperties = MakeShared<FJsonObject>();
-		WrapperProperties->SetStringField(TEXT("CompositeName"), TEXT("Task6 selector expression"));
+		WrapperProperties->SetStringField(TEXT("CompositeName"), TEXT("Selector expression"));
 		WrapperProperties->SetBoolField(TEXT("bShowOperations"), true);
 		TSharedPtr<FJsonObject> Wrapper = MakeShared<FJsonObject>();
 		Wrapper->SetStringField(TEXT("Id"), CompositeGuid);
@@ -571,13 +572,13 @@ int32 CountRegistryAssets(FName PackageName)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6DerivedSelectorBoundaryTest,
-	"UEAssetDoc.BehaviorTree.Task6.Selectors.DerivedFieldsAllSurfaces",
+	FAssetDocumentBehaviorTreeDerivedSelectorBoundaryTest,
+	"UEAssetDoc.BehaviorTree.Selectors.DerivedFieldsAllSurfaces",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6DerivedSelectorBoundaryTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeDerivedSelectorBoundaryTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	for (const EDerivedSelectorLocation Location : {
 		EDerivedSelectorLocation::Direct,
@@ -610,13 +611,13 @@ bool FAssetDocumentBehaviorTreeTask6DerivedSelectorBoundaryTest::RunTest(const F
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6SelectorResolutionMatrixTest,
-	"UEAssetDoc.BehaviorTree.Task6.Selectors.ResolutionMatrix",
+	FAssetDocumentBehaviorTreeSelectorResolutionMatrixTest,
+	"UEAssetDoc.BehaviorTree.Selectors.ResolutionMatrix",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6SelectorResolutionMatrixTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeSelectorResolutionMatrixTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	UBlackboardData* Parent = Blackboard(UniqueTarget(TEXT("ParentBB")));
 	UBlackboardData* Child = Blackboard(UniqueTarget(TEXT("ChildBB")));
@@ -721,13 +722,13 @@ bool FAssetDocumentBehaviorTreeTask6SelectorResolutionMatrixTest::RunTest(const 
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6OmittedRequiredSelectorTest,
-	"UEAssetDoc.BehaviorTree.Task6.Selectors.OmittedRequiredKeyParity",
+	FAssetDocumentBehaviorTreeOmittedRequiredSelectorTest,
+	"UEAssetDoc.BehaviorTree.Selectors.OmittedRequiredKeyParity",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6OmittedRequiredSelectorTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeOmittedRequiredSelectorTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	UBlackboardData* TestBlackboard = Blackboard(UniqueTarget(TEXT("OmittedSelectorBB")));
 	AddObjectKey(TestBlackboard, TEXT("TargetActor"), APawn::StaticClass());
@@ -781,13 +782,13 @@ bool FAssetDocumentBehaviorTreeTask6OmittedRequiredSelectorTest::RunTest(const F
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6DesiredBlackboardOverlayTest,
-	"UEAssetDoc.BehaviorTree.Task6.BlackboardOverlay.ValidateDiffApplyParity",
+	FAssetDocumentBehaviorTreeDesiredBlackboardOverlayTest,
+	"UEAssetDoc.BehaviorTree.BlackboardOverlay.ValidateDiffApplyParity",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6DesiredBlackboardOverlayTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeDesiredBlackboardOverlayTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	UBlackboardData* BlackboardA = Blackboard(UniqueTarget(TEXT("OverlayA")));
 	UBlackboardData* BlackboardB = Blackboard(UniqueTarget(TEXT("OverlayB")));
@@ -838,13 +839,13 @@ bool FAssetDocumentBehaviorTreeTask6DesiredBlackboardOverlayTest::RunTest(const 
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6SparseBlackboardUpdateTest,
-	"UEAssetDoc.BehaviorTree.Task6.BlackboardOverlay.SparseUpdateValidatesAndRefreshesExistingTree",
+	FAssetDocumentBehaviorTreeSparseBlackboardUpdateTest,
+	"UEAssetDoc.BehaviorTree.BlackboardOverlay.SparseUpdateValidatesAndRefreshesExistingTree",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6SparseBlackboardUpdateTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeSparseBlackboardUpdateTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	UBlackboardData* BlackboardA = Blackboard(UniqueTarget(TEXT("SparseA")));
 	UBlackboardData* IncompatibleBlackboard = Blackboard(UniqueTarget(TEXT("SparseIncompatible")));
@@ -905,13 +906,13 @@ bool FAssetDocumentBehaviorTreeTask6SparseBlackboardUpdateTest::RunTest(const FS
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6RetainedEmptySelectorTest,
-	"UEAssetDoc.BehaviorTree.Task6.BlackboardOverlay.RetainedEmptySelectorRemainsUnAuthored",
+	FAssetDocumentBehaviorTreeRetainedEmptySelectorTest,
+	"UEAssetDoc.BehaviorTree.BlackboardOverlay.RetainedEmptySelectorRemainsUnAuthored",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6RetainedEmptySelectorTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeRetainedEmptySelectorTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	UBlackboardData* InitialBlackboard = Blackboard(UniqueTarget(TEXT("RetainedEmptyInitial")));
 	UBlackboardData* DesiredBlackboard = Blackboard(UniqueTarget(TEXT("RetainedEmptyDesired")));
@@ -972,13 +973,13 @@ bool FAssetDocumentBehaviorTreeTask6RetainedEmptySelectorTest::RunTest(const FSt
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6NativeRetainedEmptySelectorsTest,
-	"UEAssetDoc.BehaviorTree.Task6.BlackboardOverlay.NativeRetainedEmptySelectorsRemainUnAuthored",
+	FAssetDocumentBehaviorTreeNativeRetainedEmptySelectorsTest,
+	"UEAssetDoc.BehaviorTree.BlackboardOverlay.NativeRetainedEmptySelectorsRemainUnAuthored",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6NativeRetainedEmptySelectorsTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeNativeRetainedEmptySelectorsTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	UBlackboardData* InitialBlackboard = Blackboard(UniqueTarget(TEXT("NativeRetainedEmptyInitial")));
 	UBlackboardData* DesiredBlackboard = Blackboard(UniqueTarget(TEXT("NativeRetainedEmptyDesired")));
@@ -1084,13 +1085,13 @@ bool FAssetDocumentBehaviorTreeTask6NativeRetainedEmptySelectorsTest::RunTest(co
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6WaitBlackboardTimeAuthoredStateTest,
-	"UEAssetDoc.BehaviorTree.Task6.BlackboardOverlay.WaitBlackboardTimeAuthoredStateIsPreserved",
+	FAssetDocumentBehaviorTreeWaitBlackboardTimeAuthoredStateTest,
+	"UEAssetDoc.BehaviorTree.BlackboardOverlay.WaitBlackboardTimeAuthoredStateIsPreserved",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6WaitBlackboardTimeAuthoredStateTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeWaitBlackboardTimeAuthoredStateTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	UBlackboardData* InitialBlackboard = Blackboard(UniqueTarget(TEXT("WaitAuthoredInitial")));
 	UBlackboardData* DesiredBlackboard = Blackboard(UniqueTarget(TEXT("WaitAuthoredDesired")));
@@ -1147,13 +1148,13 @@ bool FAssetDocumentBehaviorTreeTask6WaitBlackboardTimeAuthoredStateTest::RunTest
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6SparseUpdateSkipsProjectLifecycleTest,
-	"UEAssetDoc.BehaviorTree.Task6.BlackboardOverlay.SparseUpdateSkipsArbitraryProjectLifecycle",
+	FAssetDocumentBehaviorTreeSparseUpdateSkipsProjectLifecycleTest,
+	"UEAssetDoc.BehaviorTree.BlackboardOverlay.SparseUpdateSkipsArbitraryProjectLifecycle",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6SparseUpdateSkipsProjectLifecycleTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeSparseUpdateSkipsProjectLifecycleTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	UBlackboardData* InitialBlackboard = Blackboard(UniqueTarget(TEXT("LifecycleInitial")));
 	UBlackboardData* DesiredBlackboard = Blackboard(UniqueTarget(TEXT("LifecycleDesired")));
@@ -1236,13 +1237,13 @@ bool FAssetDocumentBehaviorTreeTask6SparseUpdateSkipsProjectLifecycleTest::RunTe
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6BlackboardDecoratorDerivedOperationTest,
-	"UEAssetDoc.BehaviorTree.Task6.BlackboardOverlay.BlackboardDecoratorDerivedOperationRefreshes",
+	FAssetDocumentBehaviorTreeBlackboardDecoratorDerivedOperationTest,
+	"UEAssetDoc.BehaviorTree.BlackboardOverlay.BlackboardDecoratorDerivedOperationRefreshes",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6BlackboardDecoratorDerivedOperationTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeBlackboardDecoratorDerivedOperationTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	UBlackboardData* BlackboardA = Blackboard(UniqueTarget(TEXT("DecoratorOperationBasic")));
 	UBlackboardData* BlackboardB = Blackboard(UniqueTarget(TEXT("DecoratorOperationArithmetic")));
@@ -1319,7 +1320,7 @@ bool FAssetDocumentBehaviorTreeTask6BlackboardDecoratorDerivedOperationTest::Run
 			*CreatedCachedDescription),
 		CreatedCachedDescription.Contains(ExpectedBasicOperationDescription));
 
-	// Preserve a valid baseline even while this test is RED, so the sparse
+	// Preserve a valid baseline so the sparse
 	// transition independently proves that the old Basic operation is replaced.
 	OperationTypeProperty->SetPropertyValue_InContainer(
 		ExistingDecorator,
@@ -1391,13 +1392,13 @@ bool FAssetDocumentBehaviorTreeTask6BlackboardDecoratorDerivedOperationTest::Run
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6ValueOrBlackboardKeyCacheReorderTest,
-	"UEAssetDoc.BehaviorTree.Task6.BlackboardOverlay.ValueOrBlackboardKeyCacheRefreshesAfterKeyReorder",
+	FAssetDocumentBehaviorTreeValueOrBlackboardKeyCacheReorderTest,
+	"UEAssetDoc.BehaviorTree.BlackboardOverlay.ValueOrBlackboardKeyCacheRefreshesAfterKeyReorder",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6ValueOrBlackboardKeyCacheReorderTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeValueOrBlackboardKeyCacheReorderTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	UBlackboardData* BlackboardA = Blackboard(UniqueTarget(TEXT("ValueOrCacheA")));
 	UBlackboardData* BlackboardB = Blackboard(UniqueTarget(TEXT("ValueOrCacheB")));
@@ -1458,13 +1459,13 @@ bool FAssetDocumentBehaviorTreeTask6ValueOrBlackboardKeyCacheReorderTest::RunTes
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6ValueOrBlackboardKeyValidationTest,
-	"UEAssetDoc.BehaviorTree.Task6.BlackboardOverlay.ValueOrBlackboardKeyValidationParity",
+	FAssetDocumentBehaviorTreeValueOrBlackboardKeyValidationTest,
+	"UEAssetDoc.BehaviorTree.BlackboardOverlay.ValueOrBlackboardKeyValidationParity",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6ValueOrBlackboardKeyValidationTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeValueOrBlackboardKeyValidationTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	UBlackboardData* TestBlackboard = Blackboard(UniqueTarget(TEXT("ValueOrValidationBB")));
 	UBlackboardData* MissingKeyBlackboard = Blackboard(UniqueTarget(TEXT("ValueOrMissingKeyBB")));
@@ -1582,13 +1583,13 @@ bool FAssetDocumentBehaviorTreeTask6ValueOrBlackboardKeyValidationTest::RunTest(
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6EnumDecoratorSparseMismatchTest,
-	"UEAssetDoc.BehaviorTree.Task6.BlackboardOverlay.EnumDecoratorMappingRequiresTreeUpdate",
+	FAssetDocumentBehaviorTreeEnumDecoratorSparseMismatchTest,
+	"UEAssetDoc.BehaviorTree.BlackboardOverlay.EnumDecoratorMappingRequiresTreeUpdate",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6EnumDecoratorSparseMismatchTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeEnumDecoratorSparseMismatchTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	UEnum* EnumA = TestEnum(UniqueTarget(TEXT("EnumMappingA")), 1);
 	UEnum* EnumB = TestEnum(UniqueTarget(TEXT("EnumMappingB")), 7);
@@ -1690,13 +1691,13 @@ bool FAssetDocumentBehaviorTreeTask6EnumDecoratorSparseMismatchTest::RunTest(con
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6SelectorPreSaveReloadTest,
-	"UEAssetDoc.BehaviorTree.Task6.Selectors.PreSaveAndReloadStability",
+	FAssetDocumentBehaviorTreeSelectorPreSaveReloadTest,
+	"UEAssetDoc.BehaviorTree.Selectors.PreSaveAndReloadStability",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6SelectorPreSaveReloadTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeSelectorPreSaveReloadTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	UBlackboardData* BlackboardAsset = Blackboard(UniqueTarget(TEXT("ReloadBB")));
 	AddObjectKey(BlackboardAsset, TEXT("RequestedActor"), APawn::StaticClass());
@@ -1791,13 +1792,13 @@ bool FAssetDocumentBehaviorTreeTask6SelectorPreSaveReloadTest::RunTest(const FSt
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6SubtreeMatrixTest,
-	"UEAssetDoc.BehaviorTree.Task6.Subtrees.ConservativeMatrix",
+	FAssetDocumentBehaviorTreeSubtreeMatrixTest,
+	"UEAssetDoc.BehaviorTree.Subtrees.ConservativeMatrix",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6SubtreeMatrixTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeSubtreeMatrixTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
 	UBlackboardData* Parent = Blackboard(UniqueTarget(TEXT("SubtreeParent")));
 	UBlackboardData* Child = Blackboard(UniqueTarget(TEXT("SubtreeChild")));
@@ -1937,13 +1938,13 @@ bool FAssetDocumentBehaviorTreeTask6SubtreeMatrixTest::RunTest(const FString&)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6FailedPreflightPollutionTest,
-	"UEAssetDoc.BehaviorTree.Task6.Preflight.FailureIsPollutionFree",
+	FAssetDocumentBehaviorTreeFailedPreflightPollutionTest,
+	"UEAssetDoc.BehaviorTree.Preflight.FailureIsPollutionFree",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6FailedPreflightPollutionTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeFailedPreflightPollutionTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	UBlackboardData* BlackboardAsset = Blackboard(UniqueTarget(TEXT("PollutionBB")));
 	AddKey<UBlackboardKeyType_Vector>(BlackboardAsset, TEXT("WrongType"));
 	const FString Target = UniqueTarget(TEXT("PollutionExisting"));
@@ -1969,13 +1970,13 @@ bool FAssetDocumentBehaviorTreeTask6FailedPreflightPollutionTest::RunTest(const 
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentBehaviorTreeTask6SelectorInspectionTest,
-	"UEAssetDoc.BehaviorTree.Task6.Selectors.InspectNativeBlueprint",
+	FAssetDocumentBehaviorTreeSelectorInspectionTest,
+	"UEAssetDoc.BehaviorTree.Selectors.InspectNativeBlueprint",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentBehaviorTreeTask6SelectorInspectionTest::RunTest(const FString&)
+bool FAssetDocumentBehaviorTreeSelectorInspectionTest::RunTest(const FString&)
 {
-	using namespace AssetDocumentBehaviorTreeSelectorTask6Tests;
+	using namespace AssetDocumentBehaviorTreeSelectorTests;
 	IAssetDocumentRuntimeModule* Integration =
 		FModuleManager::LoadModulePtr<IAssetDocumentRuntimeModule>(
 			TEXT("AssetDocumentIntegration"));

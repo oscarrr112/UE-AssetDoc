@@ -1,12 +1,13 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Control Rig phase CR0 (docs/architecture/asset-document-controlrig-design.md §7.2): reads (the CR1 apply tests are in
+// Control Rig reads (docs/architecture/asset-document-controlrig-design.md §7.2); the rig apply tests are in
 // AssetDocumentControlRigApplyTests.cpp).
 // UEAssetDoc.ControlRig.Read: CR_AllKinds built with the editor's controllers (every node kind of
 //   §3.3, two models, a function with a local variable, every element type, every control type, multi-parent
 //   weights, spaces, channel hosts, metadata) and a modular rig from the factory: Extract stable twice and after
 //   reload, Diff empty, no dirty package, Inspect pins equal the registry's pins; Graphs on a modular rig are refused
-//   (ControlRig.ModularRigRegionUnsupported; modular edits are the CR4 tests in AssetDocumentControlRigModularTests.cpp).
+//   (ControlRig.ModularRigRegionUnsupported; modular edits are tested in AssetDocumentControlRigModularTests.cpp).
 // UEAssetDoc.ControlRig.Corpus: the shipped Control Rig content (design §6.1 #1-#13; Template rigs
 //   copied into /Game as a project created from the template has them) duplicated into /Game by the duplicate
 //   operation: the same checks, with per-asset timings; shape libraries through the generic route with their Inspect facts.
@@ -172,7 +173,7 @@ inline TUniquePtr<FTemplateContent> CopyCorpusTemplates()
 	});
 }
 
-// For the CR2 graph tests (AssetDocumentControlRigGraphTests.cpp): the template copy held through a shared pointer
+// For the graph tests (AssetDocumentControlRigGraphTests.cpp): the template copy held through a shared pointer
 // (its type stays private to this file) and the corpus entries.
 TSharedPtr<FTemplateContent> ShareCorpusTemplates()
 {
@@ -327,7 +328,7 @@ struct FReadReport
 	FString Timings;
 };
 
-// Extract twice, Diff, Inspect, no new dirty package, reload, extract again (design §7.2 CR0 acceptance).
+// Extract twice, Diff, Inspect, no new dirty package, reload, extract again (design §7.2 read acceptance).
 FReadReport CheckStable(FAutomationTestBase& Test, const FTarget& Target, const FString& Name)
 {
 	FReadReport Report;
@@ -392,7 +393,7 @@ FReadReport CheckStable(FAutomationTestBase& Test, const FTarget& Target, const 
 	return Report;
 }
 
-// What stays read only in CR1 (graphs, modular rigs) is refused with a stable code and changes nothing: the extract
+// What stays read only in the rig apply (graphs, modular rigs) is refused with a stable code and changes nothing: the extract
 // with one change of that region applied (an unchanged Update is a no-op before the profile is asked).
 void CheckRefused(FAutomationTestBase& Test, const FTarget& Target, const TSharedPtr<FJsonObject>& Document, const FString& Name,
 	TFunctionRef<void(const TSharedPtr<FJsonObject>& Body)> Change, const TCHAR* Code)

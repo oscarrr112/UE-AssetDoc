@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Channels of a section (design §3.3): read through the section's channel proxy (the channels Sequencer's tree shows,
 // named by FMovieSceneChannelMetaData), keys through the channel struct's reflected key arrays (the KeyTimes /

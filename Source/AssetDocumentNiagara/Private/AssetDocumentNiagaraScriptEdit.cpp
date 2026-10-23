@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Script-level ops of fx.niagara.edit.v1 (N4): module / function / dynamic input assets and the scratch pads of a
+// Script-level ops of fx.niagara.edit.v1: module / function / dynamic input assets and the scratch pads of a
 // system. The graphs themselves are edited through the shared graph.* primitives (AssetDocumentNiagaraGraphAdapters.cpp);
 // these ops are the script editor's other panels and its Apply.
 //

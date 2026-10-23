@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // edit_level transaction semantics (design §3.1, §3.3, decision D1): one batch is one
 // Undo entry; a failure mid-batch is undone exactly (digest check) without touching

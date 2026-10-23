@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """UserDefinedStruct / UserDefinedEnum Profiles: document validation, op planning, diff and the
 dependents warnings.  The editor-side behaviour is covered end to end by
 UEAssetDoc.UserDefinedTypes.* in the editor."""

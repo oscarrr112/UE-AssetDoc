@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Facts of the Sound Cue editor the SoundCue profile reads (design §3.2 / §3.4): class labels, the palette's node
 // classes, starting connectors and child limits, the Details values of a new node (what an omitted property means),

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -2537,14 +2538,14 @@ bool FAssetDocumentAIBlackboardLocalKeysStockIntRollbackTest::RunTest(
 	const FString& Parameters)
 {
 	(void)Parameters;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior: aggregate local-key typed preimage captures and restores an
 	//   exact stock UBlackboardKeyType_Int while BehaviorTreeEditor details
 	//   customizations are loaded.
 	// - Technique: public supported-entry state transition plus the one-authored-
 	//   row boundary and forced-GC identity roundtrip.
-	// - Risk or gap: keeps the initially reported stock Int family as a positive
-	//   control while conditional stock payloads exercise the actual RED below.
+	// - Risk or gap: keeps the stock Int family as a positive control while
+	//   conditional stock payloads are covered by the test below.
 	return AssetDocumentAITypedPreimageTests::RunLocalKeysStockIntRollback(*this);
 }
 
@@ -2557,7 +2558,7 @@ bool FAssetDocumentAIBlackboardLocalKeysStockConditionalPayloadRollbackTest::Run
 	const FString& Parameters)
 {
 	(void)Parameters;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior: aggregate local-key typed preimage captures and restores exact
 	//   stock Rotator and Vector payloads while their public EditCondition is
 	//   false and BehaviorTreeEditor details customizations are loaded.
@@ -2565,10 +2566,8 @@ bool FAssetDocumentAIBlackboardLocalKeysStockConditionalPayloadRollbackTest::Run
 	//   conditional-row boundary, forced-GC identity, full order, and readback.
 	// - Risk or gap: custom and stock Int KeyTypes pass while a readable authored
 	//   stock payload row can be rejected solely because editing is disabled.
-	// - Next RED: capture the two stock DefaultValue rows, remove both entries,
+	// - Test: capture the two stock DefaultValue rows, remove both entries,
 	//   force GC, and require exact pointer/order/payload rollback.
-	// - Expected failure reason: the first conditional stock payload reports
-	//   rows=0, expected=1 before action or footprint enlistment.
 	return AssetDocumentAITypedPreimageTests::
 		RunLocalKeysStockConditionalPayloadRollback(*this);
 }
@@ -2582,7 +2581,7 @@ bool FAssetDocumentAIBlackboardLocalKeysStockConditionalPayloadFailureTest::RunT
 	const FString& Parameters)
 {
 	(void)Parameters;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior: a conditional stock payload changed after capture must fail
 	//   rollback closed while its public property handle remains non-editable.
 	// - Technique: post-capture state mutation plus exact existing diagnostic and

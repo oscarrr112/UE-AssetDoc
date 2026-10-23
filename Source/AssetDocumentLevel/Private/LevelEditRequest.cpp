@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // edit_level request parsing: the top-level fields, the op table, and the field edits
 // spawn / duplicate / set share. Purely from the request (design §3.1 step 2).

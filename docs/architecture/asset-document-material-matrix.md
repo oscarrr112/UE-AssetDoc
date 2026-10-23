@@ -1,6 +1,6 @@
 # Material / MaterialFunction graph support matrix
 
-Status: 2026-10-05. Governing rules:
+Governing rules:
 [design rules](asset-document-design-rules.md) §3 (rollback = functional
 equivalence), §3.1 (Undo history), §4 (raw editor-equivalent code + behaviour test) and §5 (support
 matrix). Reference editor: the Material Editor (`FMaterialEditor`, `UMaterialGraphSchema`,
@@ -105,7 +105,7 @@ the editor's Apply once. The before-state's errors are read without recompiling 
 platform resource); only errors the material did not have fail the apply. Function applies call
 `UpdateMaterialFunction`, which recompiles the materials that use the function.
 
-## Acceptance evidence (PC, 2026-10-05)
+## Acceptance evidence
 
 `UEAssetDoc.Material.*` (5 tests, all green):
 

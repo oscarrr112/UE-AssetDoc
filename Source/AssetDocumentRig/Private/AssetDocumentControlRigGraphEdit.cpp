@@ -1,7 +1,8 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Graph ops of rig.controlrig.edit.v1 (docs/architecture/asset-document-controlrig-design.md §3.3, §3.5, §4.1, phases
-// CR2 / CR3): event graphs (models) through the asset (AddModel / RemoveModel / the client's RenameModel, what My
+// Graph ops of rig.controlrig.edit.v1 (docs/architecture/asset-document-controlrig-design.md §3.3, §3.5, §4.1):
+// event graphs (models) through the asset (AddModel / RemoveModel / the client's RenameModel, what My
 // Blueprint's "+", delete and rename do) and the nodes of every graph (event graphs, function bodies, collapse graphs)
 // with their links, pin values, bindings, pin types, aggregate pins, traits and function variable maps through
 // URigVMController, the controller every graph panel, spawner and Details callback of the Control Rig editor uses.
