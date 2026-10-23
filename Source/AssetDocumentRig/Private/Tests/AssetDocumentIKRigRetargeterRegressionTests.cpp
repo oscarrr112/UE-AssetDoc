@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Retargeter and IK Rig regressions:
 // UEAssetDoc.IKRig.RetargeterRootMotionBones: a retargeter created with only its IK Rigs (the

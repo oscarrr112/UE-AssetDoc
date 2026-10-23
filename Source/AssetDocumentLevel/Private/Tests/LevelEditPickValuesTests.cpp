@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // edit_level set of a table row handle and an input key the editor's pickers would not offer (for example
 // RowName "Bost" for "Boost"; the pickup then did nothing in PIE): refused by the dry run and by the edit, naming the

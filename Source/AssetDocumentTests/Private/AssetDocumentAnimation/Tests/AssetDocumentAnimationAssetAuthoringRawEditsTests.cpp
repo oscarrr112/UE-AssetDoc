@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 //
 // Behaviour of the editor-equivalent raw edits used by
 // animation.asset.authoring.edit.v1 (AnimationAssetAuthoringRawEdits.h): each

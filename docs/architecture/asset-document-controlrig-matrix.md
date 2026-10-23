@@ -1,17 +1,17 @@
-# Control Rig support matrix and corpus results (CR0, CR1, CR2, CR3, CR4, trial fixes)
+# Control Rig support matrix and corpus results
 
-Status: 2026-10-08 (CR0–CR3), CR4 and the trial fixes 2026-10-09. Design: [asset-document-controlrig-design.md](asset-document-controlrig-design.md).
+Design: [asset-document-controlrig-design.md](asset-document-controlrig-design.md).
 Rules: [design rules](asset-document-design-rules.md) §3 (rollback = functional equivalence), §4
 (editor-equivalent code + behaviour test), §5 (support matrix). Reference editor: the UE 5.7 Control Rig editor (rig
 graph, My Blueprint, Rig Hierarchy tab, Module Assembly panel, Class Settings, compiler results). The agent-facing
 description is `MCP/schemas/assetdocument/ControlRig.md`.
 
-| Class | Profile | Phase | State |
-|---|---|---|---|
-| `ControlRigBlueprint` (rig, rig module, modular rig) | `profile.control_rig.v1` | CR4 | Extract / Inspect / Diff / Validate; Create and Apply of rigs and rig modules (Variables, Hierarchy, Module, rig type, Class Settings, Graphs, Functions, collapse nodes, function references) and of modular rigs (Modules, Connections, ModularSettings); Create from a mesh (`FactoryContext`); Inspect `ModularRigSuggestions` |
-| `ControlRigShapeLibrary` | generic profile | CR0 | Generic Extract / Apply; Inspect adds `ShapeLibrary` facts |
+| Class | Profile | State |
+|---|---|---|
+| `ControlRigBlueprint` (rig, rig module, modular rig) | `profile.control_rig.v1` | Extract / Inspect / Diff / Validate; Create and Apply of rigs and rig modules (Variables, Hierarchy, Module, rig type, Class Settings, Graphs, Functions, collapse nodes, function references) and of modular rigs (Modules, Connections, ModularSettings); Create from a mesh (`FactoryContext`); Inspect `ModularRigSuggestions` |
+| `ControlRigShapeLibrary` | generic profile | Generic Extract / Apply; Inspect adds `ShapeLibrary` facts |
 
-Classification: **Supported**, **Read only**, **Refused** (an error code), **Later** (the phase that adds it).
+Classification: **Supported**, **Read only**, **Refused** (an error code), **Not reproduced** (no document content).
 
 `ControlRigBlueprint` is a Blueprint subclass. The core class resolver admits it as an exact-profile class through
 `RegisterAssetDocumentExactBlueprintClass` (registered by `AssetDocumentRig` at startup); other Blueprint subclasses
@@ -21,34 +21,34 @@ stay refused.
 
 | Editor surface | Body location | Class | Mechanism |
 |---|---|---|---|
-| Class picker parent (`UControlRig`, native subclasses, `UModularRig`) | `RigType`, `ParentClass` | Supported: Rig <-> Module ("Turn into Rig Module" / "Turn into Standalone Rig"); parent class and Rig <-> Modular refused (`ParentClassImmutable`, `RigTypeImmutable`); a modular Create (CR4) is the factory with parent `ModularRig` (module `Root` added) | `TurnIntoControlRigModule` / `TurnIntoStandaloneRig` (after their `CanTurnInto…` checks); Create through the Content Browser factory, plus the Forwards Solve node the editor adds on first open (rigs only) |
-| Content Browser "Create Control Rig" / "Create Modular Rig" on a Skeletal Mesh or Skeleton | `FactoryContext` (Create; object or package path, as the asset picker resolves a package) | Supported (CR4): bones and curves imported, import sources and preview mesh set; the `Hierarchy` lists only what the rig adds (imported elements it leaves out are kept). A modular Create without it whose `Properties` set `SourceHierarchyImport` imports its `PreviewSkeletalMesh` the same way | `hierarchy.import`: the steps of `CreateControlRigFromSkeletalMeshOrSkeleton` after the factory (`ImportBones`, `ImportCurves`, `SourceHierarchyImport` / `SourceCurveImport`, `PropagateHierarchyFromBPToInstances`, `SetPreviewMesh`, `RecompileVM` for rigs) |
+| Class picker parent (`UControlRig`, native subclasses, `UModularRig`) | `RigType`, `ParentClass` | Supported: Rig <-> Module ("Turn into Rig Module" / "Turn into Standalone Rig"); parent class and Rig <-> Modular refused (`ParentClassImmutable`, `RigTypeImmutable`); a modular Create is the factory with parent `ModularRig` (module `Root` added) | `TurnIntoControlRigModule` / `TurnIntoStandaloneRig` (after their `CanTurnInto…` checks); Create through the Content Browser factory, plus the Forwards Solve node the editor adds on first open (rigs only) |
+| Content Browser "Create Control Rig" / "Create Modular Rig" on a Skeletal Mesh or Skeleton | `FactoryContext` (Create; object or package path, as the asset picker resolves a package) | Supported: bones and curves imported, import sources and preview mesh set; the `Hierarchy` lists only what the rig adds (imported elements it leaves out are kept). A modular Create without it whose `Properties` set `SourceHierarchyImport` imports its `PreviewSkeletalMesh` the same way | `hierarchy.import`: the steps of `CreateControlRigFromSkeletalMeshOrSkeleton` after the factory (`ImportBones`, `ImportCurves`, `SourceHierarchyImport` / `SourceCurveImport`, `PropagateHierarchyFromBPToInstances`, `SetPreviewMesh`, `RecompileVM` for rigs) |
 | Module settings (`RigModuleSettings`) | `Module` | Supported | `GetRigModuleSettings()` written as the Class Settings > Rig Module Settings Details does |
 | My Blueprint: member variables (type, default, public, read only, expose to cinematics, category, tooltip) | `Variables` | Supported: add, remove, rename (`RenamedFrom`), retype, flags, category, tooltip, default (class default object), order; nodes and bindings follow renames / retypes / removals | `URigVMBlueprint` `AddMemberVariable` / `RemoveMemberVariable` / `RenameMemberVariable` / `ChangeMemberVariableType`, category / tooltip / expose setters; `FBlueprintEditorUtils` public (Blueprint-only editable) / read-only flags and `MoveVariableBeforeVariable`; each variable op between `OnPreVariableChange` / `OnPostVariableChange`; default written on the class default object |
 | Rig Hierarchy: bones (imported and user), nulls, controls (every `ERigControlType`, limits, offset, shape, spaces, animation channels and hosts), curves, sockets, connectors, references; multi-parent weights and labels; element metadata | `Hierarchy` | Supported (complete region: add, remove children first, rename (`RenamedFrom`), reparent, parent weights, poses, settings, values, limits, spaces, hosts, metadata, sibling order); `Reference` refused (`ProceduralElement`) | `URigHierarchyController` (the hierarchy tab and element Details); depth-first editor order, so order means sibling order |
 | Graph models (default `Rig`, extra models such as Construction) | `Graphs.<model>` | Supported: add, remove, rename (`RenamedFrom`); `Rig` cannot be removed or renamed; `Order` (the model's node order, which decides the compiled VM) places new nodes; existing nodes keep their place (no editor command reorders them) | `URigVMBlueprint::AddModel` / `RemoveModel`, `FRigVMClient::RenameModel` (My Blueprint's "+", delete, rename) |
 | Nodes: unit (with `Method`), template and dispatch (resolved `PinTypes`), variable get / set, aggregate, reroute, enum, invoke entry, comment, events (one per event name in the rig) | `Nodes.<name>` (one kind key) | Supported: add, remove, rename (`RenamedFrom`), kind / identity change = remove + add; a new node of a deprecated unit refused naming the replacement (`ControlRig.DeprecatedUnit`), kept with a warning on Create; a reroute without a linked input refused (`ControlRig.UnstableReroute`); a second event of a name refused (`ControlRig.EventAlreadyExists`); a unit the editor does not offer in this rig refused (`ControlRig.EditRefused`, such as Get Candidates outside a rig module); injected units of a pin (the pin menu's Add Visual Debug / Add Interpolate) under `Injections` | `URigVMController` `AddUnitNode(WithDefaults)` / `AddTemplateNode` / `AddVariableNode` / `AddRerouteNode` / `AddEnumNode` / `AddInvokeEntryNode` / `AddCommentNode`, `RemoveNode`, `RenameNode` (the palette, delete, rename); `AddInjectedNode` / `RemoveInjectedNode` (the pin menu) |
 | Node title, color, position, size, comment text / font / bubble, expansion, pin defaults (sparse over the new node's defaults), array sizes, resolved wildcard types, aggregate pins, links (sub-pins included), pin bindings, traits | node fields | Supported (`Title` on renamable nodes, `Color` on comments; other nodes keep their palette color) | `SetNodePosition` / `SetNodeSize` / `SetNodeTitle` / `SetNodeColor` / `SetCommentText` / `SetPinExpansion`, `SetPinDefaultValue` / `ResetPinDefaultValue` / `SetArrayPinSize`, `ResolveWildCardPin`, `AddAggregatePin` / `RemoveAggregatePin`, `AddLink` / `BreakLink`, `BindPinToVariable` / `UnbindPinFromVariable`, `AddTrait` / `RemoveTrait` (graph panel, pin widgets, Details) |
-| Function reference nodes (local and external, variable remap), collapse nodes; Functions: signature, access, mutable, local variables, entry / return positions, inner nodes; nested collapse graphs | `Nodes.<name>.Function` / `Collapse`, `Functions` | Supported (CR3): functions added, removed, renamed (`RenamedFrom`), made public or private, header and colour; exposed pins added, removed, renamed, retyped, reordered, argument defaults; local variables added, removed, renamed, retyped, defaults; collapse nodes made from their nodes and edited the same way; function reference nodes to local and other rigs' public functions with variable remaps; dependents of public functions warned (`ControlRig.DependentsAffected`). Refused as the 5.7 editor cannot make them (`ControlRig.EditRefused`): a reference to another rig's private function, local variables on a collapse graph (listed unchanged they stay), a function or collapse node with a second execute pin | `URigVMController` `AddFunctionToLibrary` / `RenameNode` / `RemoveFunctionFromLibrary` / `AddExposedPin` / `RenameExposedPin` / `ChangeExposedPinType` / `SetExposedPinIndex` / `AddLocalVariable` and siblings / `CollapseNodes` / `AddFunctionReferenceNodeFromDescription` / `SetRemappedVariable`; `URigVMBlueprint::SetFunctionPublic` |
-| Module Assembly: modules, parents, sibling order, class swap, config overrides, variable bindings, connections, Auto Resolve | `Modules`, `Connections`, `ModularSettings` | Supported (CR4): complete regions; connections made without auto-resolve, module by module down the tree, each module's primary connector first; a module's dependents rule (below) | `UModularRigController` `AddModule` / `DeleteModule` / `RenameModule` / `ReparentModule` / `ReorderModule` / `SwapModuleClass` / `SetConfigValueInModule` (override value) / `ResetConfigValueInModule` / `BindModuleVariable` / `ConnectConnectorToElements` (after `CanConnectConnectorToElements`, the debugged rig constructed first) / `DisconnectConnector` |
-| Modular rig preview mesh (Class Settings picker) | `Properties.PreviewSkeletalMesh` | Supported (CR4) | `modular.preview_mesh`: the steps of `HandlePreviewMeshChanged` (connectors and sockets removed, bones, curves and mesh sockets imported, the rig's own connectors and sockets added back) |
-| A rig module that loaded modular rigs use (its compile refreshes them) | — | Supported (CR4): refused while one of them has unsaved changes (`ControlRig.DependentHasUnsavedChanges`), else the warning `ControlRig.DependentsUpdated` naming them | `module.dependents` before any write |
-| Class Settings (preview mesh, shape libraries, source hierarchy / curve import, VM settings) | `Properties` | Supported | generic property write; `PreviewSkeletalMesh` through `SetPreviewMesh` (the picker); `SourceHierarchyImport` / `SourceCurveImport` are duplicate-transient, which the generic region does not admit, so the profile reads them (read header) and writes them (`source_import`, before the hierarchy). Until CR2 they were missing from documents: imported bones at the reference pose (written without `Transform`) came back at the origin on Create |
+| Function reference nodes (local and external, variable remap), collapse nodes; Functions: signature, access, mutable, local variables, entry / return positions, inner nodes; nested collapse graphs | `Nodes.<name>.Function` / `Collapse`, `Functions` | Supported: functions added, removed, renamed (`RenamedFrom`), made public or private, header and colour; exposed pins added, removed, renamed, retyped, reordered, argument defaults; local variables added, removed, renamed, retyped, defaults; collapse nodes made from their nodes and edited the same way; function reference nodes to local and other rigs' public functions with variable remaps; dependents of public functions warned (`ControlRig.DependentsAffected`). Refused as the 5.7 editor cannot make them (`ControlRig.EditRefused`): a reference to another rig's private function, local variables on a collapse graph (listed unchanged they stay), a function or collapse node with a second execute pin | `URigVMController` `AddFunctionToLibrary` / `RenameNode` / `RemoveFunctionFromLibrary` / `AddExposedPin` / `RenameExposedPin` / `ChangeExposedPinType` / `SetExposedPinIndex` / `AddLocalVariable` and siblings / `CollapseNodes` / `AddFunctionReferenceNodeFromDescription` / `SetRemappedVariable`; `URigVMBlueprint::SetFunctionPublic` |
+| Module Assembly: modules, parents, sibling order, class swap, config overrides, variable bindings, connections, Auto Resolve | `Modules`, `Connections`, `ModularSettings` | Supported: complete regions; connections made without auto-resolve, module by module down the tree, each module's primary connector first; a module's dependents rule (below) | `UModularRigController` `AddModule` / `DeleteModule` / `RenameModule` / `ReparentModule` / `ReorderModule` / `SwapModuleClass` / `SetConfigValueInModule` (override value) / `ResetConfigValueInModule` / `BindModuleVariable` / `ConnectConnectorToElements` (after `CanConnectConnectorToElements`, the debugged rig constructed first) / `DisconnectConnector` |
+| Modular rig preview mesh (Class Settings picker) | `Properties.PreviewSkeletalMesh` | Supported | `modular.preview_mesh`: the steps of `HandlePreviewMeshChanged` (connectors and sockets removed, bones, curves and mesh sockets imported, the rig's own connectors and sockets added back) |
+| A rig module that loaded modular rigs use (its compile refreshes them) | — | Supported: refused while one of them has unsaved changes (`ControlRig.DependentHasUnsavedChanges`), else the warning `ControlRig.DependentsUpdated` naming them | `module.dependents` before any write |
+| Class Settings (preview mesh, shape libraries, source hierarchy / curve import, VM settings) | `Properties` | Supported | generic property write; `PreviewSkeletalMesh` through `SetPreviewMesh` (the picker); `SourceHierarchyImport` / `SourceCurveImport` are duplicate-transient, which the generic region does not admit, so the profile reads them (read header) and writes them (`source_import`, before the hierarchy). |
 | Pins of each node as the editor shows them | Inspect `Pins` | Supported | equal to `list_types` `rigvm_node` rows (checked on the corpus) |
 | Global initial transforms, shapes available, public functions, events | Inspect `GlobalTransforms`, `Shapes`, `PublicFunctions`, `Events` | Supported | hierarchy `GetGlobalTransform(.., bInitial)`, shape libraries, function library, event nodes |
 | Compiler results panel, node error badges, VM | `Compile` | Read only; apply compiles (Compile button) before and after its edits | `UBlueprint::Status`, per-node `ErrorMsg` at the node's document path, compile log, CDO VM hash and instruction count; extract compiles nothing |
 | Palette (units, templates, dispatches, events), variable types, module browser | `list_types` `rigvm_node`, `rigvm_type`, `controlrig_module` | Supported | `FRigVMRegistry`, `RigVMTypeUtils`, asset registry tags of module rigs |
 | Shape library Details | generic `Properties`; Inspect `ShapeLibrary` | Supported (generic) | `DefaultShape`, `Shapes` with resolved names |
 | Hierarchy components (experimental `ControlRigPhysics`), procedural elements | Inspect `Skipped` | Not authored: they are not in the document and apply leaves them as they are | not documented |
-| Apply / Create of a Control Rig document | — | Supported (CR1, CR2, CR3) for the regions above; with the rig open in the Control Rig editor the editor is closed for the apply and reopened on the result (CR5, Info `ControlRig.EditorReopened`, test `ControlRig.OpenEditorApply`); new compile errors fail and roll back (`ControlRig.CompileFailed`) | `rig.controlrig.edit.v1`, `rig.controlrig.compile.v1`, Python `control_rig_apply` |
-| Auto-Connect suggestions (what the panel's auto-resolve connects after a primary connection), connector candidates | Inspect `ModularRigSuggestions {AutoConnect, Candidates, ConnectPrimaryFirst, Check}` | Supported (CR4): suggestions only, never applied implicitly (design decision 6); `Check` names an AutoConnect bone above where its module attaches (an Arm on a Spine shoulder socket gets the clavicle as `Elbow Bone`, as the editor's drop does) | `UModularRigController::AutoConnectModules` on a transient copy of the rig (the Validate trial target); candidates from `UModularRigRuleManager::FindMatches` on the copy's constructed debugged rig |
-| Import Hierarchy suggestions | Inspect `ControlRigSuggestions` | Later (CR5) | — |
-| Validate | `validate_asset_document` | Supported (CR4): the apply on a transient copy (Update) or a new transient rig (Create) | trial target maker: `StaticDuplicateObject` / the factory into the transient package, neither Public nor Standalone |
+| Apply / Create of a Control Rig document | — | Supported for the regions above; with the rig open in the Control Rig editor the editor is closed for the apply and reopened on the result (Info `ControlRig.EditorReopened`, test `ControlRig.OpenEditorApply`); new compile errors fail and roll back (`ControlRig.CompileFailed`) | `rig.controlrig.edit.v1`, `rig.controlrig.compile.v1`, Python `control_rig_apply` |
+| Auto-Connect suggestions (what the panel's auto-resolve connects after a primary connection), connector candidates | Inspect `ModularRigSuggestions {AutoConnect, Candidates, ConnectPrimaryFirst, Check}` | Supported: suggestions only, never applied implicitly (design decision 6); `Check` names an AutoConnect bone above where its module attaches (an Arm on a Spine shoulder socket gets the clavicle as `Elbow Bone`, as the editor's drop does) | `UModularRigController::AutoConnectModules` on a transient copy of the rig (the Validate transient target); candidates from `UModularRigRuleManager::FindMatches` on the copy's constructed debugged rig |
+| Import Hierarchy suggestions (the bones, curves and sockets the Import would create) | — | Not reproduced | Inspect gives no hierarchy suggestion; a Create with `FactoryContext` imports them (above) and the `Hierarchy` states the elements a rig adds |
+| Validate | `validate_asset_document` | Supported: the apply on a transient copy (Update) or a new transient rig (Create) | transient target maker: `StaticDuplicateObject` / the factory into the transient package, neither Public nor Standalone |
 
 ## Corpus and fixture results
 
-Windows CI sandbox (UE 5.7; MoverExamples and AnimatorKit enabled, MetaHumanCharacter not enabled: those rows skip with
-a note), `UEAssetDoc.ControlRig.*` 4/4, 2026-10-07. Each asset is duplicated into `/Game`, extracted
+Windows sandbox (UE 5.7; MoverExamples and AnimatorKit enabled, MetaHumanCharacter not enabled: those rows skip with
+a note), the read tests of `UEAssetDoc.ControlRig.*`. Each asset is duplicated into `/Game`, extracted
 twice (equal), inspected (pins equal the registry), diffed against its own extract (empty), checked for side effects
 (no dirty package), reloaded and extracted again (equal). Times are one run, in ms; Template rigs are copied into
 `/Game` from `Templates/` first.
@@ -101,10 +101,10 @@ model) and the modular fixture (`Spine` under `Root` on the biped template) read
 stable. `Status`: a compiled rig reads `UpToDate` with its VM hash; a forced `Dirty` status stays `Dirty` after an
 extract with the same VM hash; a node message is reported at the node's document path.
 
-## CR1 apply results
+## Apply results: hierarchy, variables, module
 
-Windows CI sandbox, `UEAssetDoc.ControlRig.*` 9/9 (Corpus, Fidelity, FreeEdits, Rollback, UndoHistory,
-OpenEditor, Read, Status, ListTypes), 2026-10-07. Times are one run, in ms.
+Windows sandbox, tests Corpus, Fidelity, FreeEdits, Rollback, UndoHistory, OpenEditor, Read, Status, ListTypes
+(`UEAssetDoc.ControlRig.*`). Times are one run, in ms.
 
 Fidelity (§6.2): each source is extracted, its `Graphs` / `Functions` dropped, and a new asset is created from the
 rest (Create through the Content Browser factory; a new rig gets the Forwards Solve node the editor adds on first
@@ -114,7 +114,7 @@ save) and extract equal after a reload.
 | Source | Create | Re-apply | Reload | Size | Status (created / source) |
 |---|---|---|---|---|---|
 | fixture `CR_Hierarchy` (every element type and control type, spaces, channel host, metadata, variables) | 452 | 97 | 105 | 10k | UpToDate / UpToDate |
-| fixture `CR_AllKinds` (the CR0 every-kind fixture, graphs dropped) | 427 | 102 | 110 | 10k | UpToDate / UpToDate |
+| fixture `CR_AllKinds` (the every-kind fixture, graphs dropped) | 427 | 102 | 110 | 10k | UpToDate / UpToDate |
 | #3 ControlRig `Root` (128 elements, 17 variables) | 1889 | 114 | 107 | 14k | UpToDate / Dirty |
 | #5 ControlRigModules `Constraint` | 1541 | 81 | 103 | 5k | UpToDate / Dirty |
 | #5 ControlRigModules `Hinge` | 1527 | 99 | 112 | 4k | UpToDate / Dirty |
@@ -140,16 +140,16 @@ restore dropped and the member defaults.
 
 Undo: a human edit (hierarchy tab add, saved) then a document apply: the apply clears undo history that references
 the rig, keeps the human edit, and undo / redo of what remains leaves the rig whole. A second human edit then a
-failing apply: the rig is back at the human state and undo / redo stays safe. Open editor (`ControlRig.OpenEditorApply`, CR5): a rig created from `Body: {}` extracts like one a human made and
+failing apply: the rig is back at the human state and undo / redo stays safe. Open editor (`ControlRig.OpenEditorApply`): a rig created from `Body: {}` extracts like one a human made and
 opened once. With the rig open in the Control Rig editor and unsaved after the open added its Forwards Solve, an apply
 (a null, a Set Transform node linked to the Forwards Solve) closes the editor and reopens it on the applied rig: the new
 editor's graph has the node and its debugged rig the null; a failed apply (unknown unit) rolls back and the editor shows the rolled-back rig; a
 human hierarchy edit is saved, undone and redone; the editor closes without a prompt.
 
-## CR2 apply results
+## Apply results: graphs
 
-Windows CI sandbox, `UEAssetDoc.ControlRig.*` 13/13 (CR1's nine plus GraphFidelity, GraphFreeEdits,
-GraphRollback, GraphUndo), 2026-10-08. Times are one run, in ms.
+Windows sandbox, tests GraphFidelity, GraphFreeEdits, GraphRollback, GraphUndo (`UEAssetDoc.ControlRig.*`). Times are
+one run, in ms.
 
 Fidelity (§6.2): each rig without local functions or collapse nodes is reloaded from disk, compiled, extracted and
 created as a new asset from the whole document (graphs included). The created rig must extract as the source, compile
@@ -175,7 +175,7 @@ evaluations: every bone, null and control global transform within 0.01, every cu
 Create includes the factory, compiles, every graph op, the save and the persisted read-back. "Equal but for -0": the
 source holds a negative zero in a struct literal (a quaternion component); a document number has no negative zero, so
 the created rig's literal is `0`: byte code, functions and work memory are equal and only the literal's sign differs.
-Rigs with local functions or collapse nodes were left to CR3 (see CR3 apply results). `CR_Mannequin_Procedural` keeps its deprecated `RigUnit_SequenceExecution` node on Create
+Rigs with local functions or collapse nodes are covered under "Apply results: functions and collapse nodes". `CR_Mannequin_Procedural` keeps its deprecated `RigUnit_SequenceExecution` node on Create
 with a `ControlRig.DeprecatedUnit` warning.
 
 Free edits (§6.3): on two saved and reloaded copies of `CR_AllKinds` minus functions and of #7 `CR_Mannequin_Body`,
@@ -189,13 +189,12 @@ compile to the same `ComputeVMHash` and pose: `CR_AllKinds` minus functions 621 
 elements, 1531 nodes; the rig's functions are left as they are).
 
 Rollback: a refused link after node adds and values (`ControlRig.LinkRefused`), a new node of a deprecated unit
-(`ControlRig.DeprecatedUnit`, naming the replacement), a function reference node (`ControlRig.FunctionEditUnsupported` in
-CR2; since CR3 a node of a missing function, `ControlRig.FunctionNotFound`)
+(`ControlRig.DeprecatedUnit`, naming the replacement), a function reference node of a missing function (`ControlRig.FunctionNotFound`)
 and an unstable reroute (`ControlRig.UnstableReroute`) leave the rig extracting as before with a clean package. Undo:
 a human graph edit (saved) then a document apply keeps both, clears the history that references the rig, and undo /
 redo keep it whole; a failing apply after a human edit rolls back to the saved state and undo stays safe.
 
-What makes a document-made rig compile to the same VM (found by these tests):
+What makes a document-made rig compile to the same VM:
 
 - **Node order.** The compiler visits events and unlinked nodes in the model's node order, and literal and work memory
   follow it; a document sorts its `Nodes` keys. A graph's `Order` carries the model order, and new nodes are added in it.
@@ -208,21 +207,20 @@ What makes a document-made rig compile to the same VM (found by these tests):
   since its name is a transient field.
 - Element keys keep their type without a name and their name without a type (`"Bone()"`, `"None(upperarm_r)"`), and
   struct values export every field (zero fields included), so a key or a struct pin reads back what the rig holds.
-- `SourceHierarchyImport` / `SourceCurveImport` are `DuplicateTransient`: the generic admission refused them, so CR1
-  documents lost the imported bones' reference pose. They are profile-owned `Properties` written by a
-  `source_import` op (a skeleton or skeletal mesh) before the hierarchy.
-- Core package snapshot: a graph node whose pins were reallocated during the apply (new pin ids) kept links to pins the
-  restore no longer knows, and restoring it raised an ensure outside a transaction; the restore now breaks those links
-  first and restores the captured pins (`PackageSnapshot.RestoresReallocatedGraphPins`).
+- `SourceHierarchyImport` / `SourceCurveImport` are `DuplicateTransient`, which the generic admission does not admit. They are
+  profile-owned `Properties` written by a `source_import` op (a skeleton or skeletal mesh) before the hierarchy, so the
+  imported bones keep their reference pose.
+- Core package snapshot: for a graph node whose pins were reallocated during the apply (new pin ids), the restore
+  breaks the links to pins it no longer knows first and restores the captured pins (`PackageSnapshot.RestoresReallocatedGraphPins`).
 - A loaded multi-parent null can hold an initial global transform its locals and weights give otherwise until a reload,
   so fidelity compares the source as loaded from disk.
 
-## CR3 apply results
+## Apply results: functions and collapse nodes
 
-Windows CI sandbox, `UEAssetDoc.ControlRig.*` (CR2's thirteen plus FunctionFreeEdits,
-FunctionRollback, FunctionUndo), 2026-10-08. Times are one run, in ms.
+Windows sandbox, tests FunctionFreeEdits, FunctionRollback, FunctionUndo and the fidelity run below
+(`UEAssetDoc.ControlRig.*`). Times are one run, in ms.
 
-Fidelity (§6.2), as in CR2 but on every corpus rig and rig module, functions and collapse nodes included. Rig
+Fidelity (§6.2), as for graphs but on every corpus rig and rig module, functions and collapse nodes included. Rig
 modules are compared with the source's preview connector targets (see Known limits); they have no elements to pose
 until a modular rig resolves their connectors, so their pose column is empty and the VM comparison carries them.
 
@@ -269,7 +267,7 @@ the pose is equal. Literals and work memory differ only by texts of equal value 
 source's `True` / `False` where the pin widget writes `true` / `false`, `(Type=Bone)` against
 `(Type=Bone,Name="None")`, an FName `''` against `None`, a `bInitial` with no text against `False`, an aggregate's
 inner node names, and a literal under a linked sub-pin (the compiler reads the link, and the old text survives only
-in the source). The compiler shares literals by text, so each of these gives the hash another value. "-0" as in CR2.
+in the source). The compiler shares literals by text, so each of these gives the hash another value. "-0" as in the graph results.
 
 Refused, with `ControlRig.EditRefused` naming the reason; an unchanged Update of the source copy is a no-op:
 
@@ -282,12 +280,12 @@ Refused, with `ControlRig.EditRefused` naming the reason; an unchanged Update of
 
 Free edits (§6.3), FunctionFreeEdits: on two saved and reloaded copies of `CR_AllKinds` and of #7 `CR_Mannequin_Body`,
 one is edited through the controller calls of My Blueprint, the function Details and the graph panel, the other with
-the resulting document. Round 1: a new function with two inputs and a local variable, called twice from the rig graph,
-and a collapse node. Round 2: the function renamed (`RenamedFrom`), made public, an input default and the local renamed.
-After each round the document side extracts equal to the editor side with the same compile status and messages, a
+the resulting document. First edit: a new function with two inputs and a local variable, called twice from the rig graph,
+and a collapse node. Second edit: the function renamed (`RenamedFrom`), made public, an input default and the local renamed.
+After each edit the document side extracts equal to the editor side with the same compile status and messages, a
 re-apply is a no-op, and both reloaded rigs compile to the same `ComputeVMHash`, instruction count and pose:
 
-| Rig | Round 1 | Round 2 | Instr. | Pose |
+| Rig | First edit | Second edit | Instr. | Pose |
 |---|---|---|---|---|
 | `CR_AllKinds` | 568 | 496 | 20 | 83 equal |
 | #7 `CR_Mannequin_Body` | 8105 | 7215 | 4375 | 524 equal |
@@ -298,13 +296,12 @@ as before with a clean package, the variable map restored. A rename of the publi
 `ControlRig.DependentsAffected`, naming the caller. FunctionUndo / GraphUndo: undo / redo after a function or graph
 apply, and after a failed one, keep the rig whole.
 
-What CR3 found:
+Behaviour that follows from the function tests:
 
 - **Injected units.** The pin menu's Add Visual Debug / Add Interpolate puts a unit node inside a pin
-  (`AddInjectedNode`), and links to that pin go through it. CR2 read the links without the injection, so
-  `CR_Mannequin_BasicFootIK` compiled to 42 instructions against 72. Nodes now carry `Injections` (unit, input,
-  output, values), applied with `AddInjectedNode` / `RemoveInjectedNode`. Links read through injected nodes to the
-  host pins.
+  (`AddInjectedNode`), and links to that pin go through it. Nodes carry `Injections` (unit, input,
+  output, values), applied with `AddInjectedNode` / `RemoveInjectedNode`, and links read through injected nodes to the
+  host pins (without that, `CR_Mannequin_BasicFootIK` would compile to 42 instructions instead of 72).
 - **Templates.** A template node is resolved to the source's permutation (`FullyResolveTemplateNode`) before its pins
   get values, as the editor does when a wildcard is linked. Bool values are written as the pin widget writes them
   (`true` / `false`).
@@ -314,18 +311,16 @@ What CR3 found:
 - **Control values.** An `EulerTransform` control value is derived again from the pose on load, and a zero returns
   as float noise (3e-7). The read writes components under 1e-5 as 0, so a reload extracts equal.
 - **Editor node caches after a rollback.** A refused apply that bound a headless rig's editor graphs (the compile
-  before the edits) and was rolled back left each graph's transient node cache naming the dropped editor nodes. After
-  the next garbage collection, the next bind read freed memory. This was a crash on the Mac in GraphRollback, and on
-  the PC an access violation or hang later in the run. The compile clears the caches before it binds editor graphs,
-  and so does the rollback rebuilder. GraphRollback now also refuses an apply on the reloaded rig, collects garbage,
-  adds the same node again and checks that the editor graph shows it.
+  before the edits) and was rolled back would leave each graph's transient node cache naming the dropped editor nodes;
+  after the next garbage collection, the next bind would read freed memory. The compile clears the caches before it
+  binds editor graphs, and so does the rollback rebuilder. GraphRollback refuses an apply on the reloaded rig, collects
+  garbage, adds the same node again and checks that the editor graph shows it.
 - `GraphOrder` is valid with `Graphs` only. A document without graphs leaves the model order to the rig.
 
-## CR4 apply results
+## Apply results: modular rigs
 
-Mac sandbox (UE 5.7), `UEAssetDoc.ControlRig.*` with the CR4 tests (ModularFidelity, ModularFreeEdits,
-ModularCreate, ModularRollback, ModularDependents, Validate, DiffOnly, ClassInspect, FactoryContext), 2026-10-09.
-Times are one run, in ms. The modular fixtures are built only with the Module Assembly panel's calls
+Mac sandbox (UE 5.7), tests ModularFidelity, ModularFreeEdits, ModularCreate, ModularRollback, ModularDependents,
+Validate, DiffOnly, ClassInspect, FactoryContext (`UEAssetDoc.ControlRig.*`). Times are one run, in ms. The modular fixtures are built only with the Module Assembly panel's calls
 (`UModularRigController`, the primary connector connected with auto-resolve, as a drop on a socket does) on the
 ControlRigModules template meshes.
 
@@ -352,7 +347,7 @@ ControlRigModules template meshes.
   while that rig has unsaved changes, applies with `ControlRig.DependentsUpdated` once it is saved.
 - **Validate** (Validate, DiffOnly, ClassInspect, FactoryContext): Create and Update validate on a transient
   rig (87 / 105) and report unknown units, pins, nodes and elements with close names and the node's pins; the rig, its
-  package and the undo buffer are untouched and no trial rig survives garbage collection. `diff_only` extract of
+  package and the undo buffer are untouched and no transient rig survives garbage collection. `diff_only` extract of
   MoverExamples `CR_Mannequin_BasicFootIK`: `Properties` 20 -> 3 entries, 58013 -> 56934 characters (the rest is the
   hierarchy and graphs); Hinge 18107 -> 16926. Create with `FactoryContext` (107) equals Create Control Rig on the mesh
   plus the same null, and the short document re-applies as a no-op with an empty Diff.
@@ -368,20 +363,19 @@ ControlRigModules template meshes.
 - The Finger module logs empty-array reads from its VM while its connectors are not resolved (in the editor too); the
   biped tests expect them.
 
-## Trial fixes
+## Modular rig and extract-size checks
 
-Tests `UEAssetDoc.ControlRig.{RefusedCalls,ModularOneApply,ExtractSizes,AutoConnectProbe}`, 2026-10-09,
-Mac and PC sandboxes.
+Tests `UEAssetDoc.ControlRig.{RefusedCalls,ModularOneApply,ExtractSizes,AutoConnectProbe}`, Mac and PC sandboxes.
 
 - **Module cycle.** A `Parent` chain that comes back to a module is refused before any edit as
-  `ControlRig.ModuleCycle` naming the chain (`Spine -> Neck -> Spine`), before the ordering checks; before, it read
-  as `ParentAfterChild` on both modules, advice no reorder can follow.
+  `ControlRig.ModuleCycle` naming the chain (`Spine -> Neck -> Spine`), before the ordering checks (a cycle is not a
+  `ParentAfterChild` problem that a reorder could fix).
 - **One apply for a modular rig.** A Create that lists every connection builds the biped (Root, Spine, Neck, arms,
   legs, a foot: 8 modules) in one apply, equal to the rig the Module Assembly panel's drops build (extract, model), with
   the map listed in reverse; a re-apply is a no-op. Connections are made module by module down the tree, each primary
-  connector first (CR4's order: a module's sockets exist once its connectors resolve). A client needed four Inspect /
-  apply rounds because it knew only the primary connections and took the rest from Inspect's `AutoConnect`,
-  which needs each level connected first. Automatic resolution stays an Inspect suggestion (design decision 6):
+  connector first (a module's sockets exist once its connectors resolve). A client that knows only the primary
+  connections and takes the rest from Inspect's `AutoConnect` needs several Inspect / apply rounds, since
+  `AutoConnect` needs each level connected first. Automatic resolution stays an Inspect suggestion (design decision 6):
   `Connections` takes element keys only.
 - **AutoConnect picks what the editor picks.** An Arm dropped on Spine's `shoulder_l` socket gets `Elbow Bone` =
   `clavicle_l` in the editor too (SKM_Manny_Simple and SKM_Biped_Template; `lowerarm_l` once a Shoulder module is
@@ -428,7 +422,7 @@ Mac and PC sandboxes.
 - Module connections are read from the model; whether a connector resolves at runtime is not reported (Inspect's
   `Candidates` lists what it could resolve to).
 - MetaHuman content (#13) is not covered on the CI sandbox (plugin not enabled).
-- Engine behaviour CR1 works around (UE 5.7): `URigVMBlueprint::SetVariablePublic` passes its flag as "Blueprint only
+- Engine behaviour the profile works around (UE 5.7): `URigVMBlueprint::SetVariablePublic` passes its flag as "Blueprint only
   editable", the inverse of public, so the public flag goes through `FBlueprintEditorUtils::SetBlueprintOnlyEditableFlag`;
   the variable-change delegates that update nodes and bindings are bound only in `PostLoad`, so each variable op calls
   `OnPreVariableChange` / `OnPostVariableChange` itself; a function reference node repopulated during a rollback drops
@@ -440,12 +434,12 @@ Mac and PC sandboxes.
 - An `Order` that moves existing nodes is not applied (no editor command reorders nodes) and ends as a
   `ControlRig.GraphDiffers` warning.
 - A variable default is omitted when it reads as its type's default. An element key without a name reads `"Type()"`, one without a type `"None(Name)"`
-  (`"Control()"`, Finger's `Parent Control`; CR2: before, `""` whatever its type, which lost the type of pin defaults
-  such as an aim's `Target Space`); `""` is the key without a type.
+  (`"Control()"`, Finger's `Parent Control`, which keeps the type of pin defaults such as an aim's
+  `Target Space`); `""` is the key without a type.
 - A rig module's preview connector targets (`ArrayConnectionMap`, which the hierarchy tab's connector resolve sets)
   are editor preview state. The document does not carry them, and a rig module created from a document has none until
   a person resolves its connectors. Fidelity copies the source's targets onto the created module before it poses the
-  rigs. CR4 decision: `ArrayConnectionMap` is not authored. On a modular rig it is derived from the model's
+  rigs. Decision: `ArrayConnectionMap` is not authored. On a modular rig it is derived from the model's
   connections (`UpdateConnectionMapFromModel` after every connection change), so `Connections` already carries it; on
   a rig module it stays preview state.
 - The 5.7 editor cannot make these, so apply refuses them (`ControlRig.EditRefused`) and reads them as they are: Get
@@ -453,7 +447,7 @@ Mac and PC sandboxes.
   unchanged), a function or collapse node with a second execute pin, a reference to another rig's private function.
   A rig that holds one reads and stays editable everywhere else.
 - A VM made from a document can differ from the source's by texts of equal value that the source holds and no editor
-  action writes (see CR3 apply results). The program, its instruction count and the pose are equal.
+  action writes (see "Apply results: functions and collapse nodes"). The program, its instruction count and the pose are equal.
 - An animation channel's parent weight is not read or written: 5.7 refuses to set it, and a new channel has weight 0
   where older assets hold 1.
 - Control values under 1e-5 in an `EulerTransform` component read as 0 (load-time float noise).

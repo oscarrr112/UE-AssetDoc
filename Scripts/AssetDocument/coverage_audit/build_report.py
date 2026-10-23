@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Render docs/architecture/asset-document-coverage-audit.md from the audit JSON.
 
+Requires ENGINE_DIR (the engine's Engine folder), which maps modules to plugins.
 Usage: build_report.py <coverage-audit.json> <modal-scan.json> <out.md> [<previous-coverage-audit.json> [<base-coverage-audit.json>]]
 
 Inputs are produced by the UEAssetDoc.Coverage.GenericRouteAudit automation test
@@ -456,10 +460,11 @@ w("The static scan (`coverage_audit/scan_modal_factories.py`) only sees UI calls
   "reliable defence is not a deny list but refusing or isolating interactive factories on the MCP path (for example a modal-window guard around "
   "factory invocation plus a per-call timeout), which is a separate task.")
 w()
-w("Audit hardening: the test keeps a skip list with reasons (empty now; recheck an entry with `ASSETDOC_COVERAGE_IGNORE_SKIPLIST=1`), and "
-  "`Scripts/AssetDocument/coverage_audit/run_audit.sh` runs the test under a stall watchdog that kills the editor when `current.txt` / "
-  "`results.jsonl` stop advancing (240 s; 300 s startup grace) and resumes after the in-flight class has been recorded as hung/crashed "
-  "(`ASSETDOC_COVERAGE_RESUME=1`).")
+w("Audit hardening: the test keeps a skip list with reasons (empty now; recheck an entry with `ASSETDOC_COVERAGE_IGNORE_SKIPLIST=1`). "
+  "It writes `current.txt` before each class and appends to `results.jsonl` after it. A class that opens a modal window or crashes the "
+  "editor stops both files advancing: when neither has changed for several minutes (a cold derived-data cache can legitimately block a "
+  "class for minutes, so allow at least 240 s, and longer while the editor starts), kill the editor and start it again with "
+  "`ASSETDOC_COVERAGE_RESUME=1`. The next run records the in-flight class as hung/crashed and continues with the next class.")
 w()
 w("### 3.2 Editor crashes and hangs reached through the generic route (Evidence)")
 w()
@@ -807,15 +812,19 @@ w()
 w("## 7. Reproducing")
 w()
 w("```")
-w("# Build the editor, then run the automation test in an editor process of its own:")
-w("#   UEAssetDoc.Coverage.GenericRouteAudit   (an interrupted run resumes from results.jsonl)")
-w("python3 Scripts/AssetDocument/coverage_audit/scan_modal_factories.py <sandbox>/Saved/AssetDocumentCoverage/coverage-audit.json > modal-scan.json")
+w("# Build the plugin into a project, then run the automation test in an editor process of its own")
+w("# (add ASSETDOC_COVERAGE_RESUME=1 to the environment to continue an interrupted run from results.jsonl):")
+w("<UE_ROOT>/Engine/Binaries/<Platform>/UnrealEditor-Cmd <Project>.uproject -nosplash -NoSound -unattended -NoPause \\")
+w("  \"-ExecCmds=Automation RunTests UEAssetDoc.Coverage.GenericRouteAudit;Quit\" \"-TestExit=Automation Test Queue Empty\" -log")
+w("")
+w("export ENGINE_DIR=<UE_ROOT>/Engine")
+w("python3 Scripts/AssetDocument/coverage_audit/scan_modal_factories.py <Project>/Saved/AssetDocumentCoverage/coverage-audit.json > modal-scan.json")
 w("python3 Scripts/AssetDocument/coverage_audit/build_report.py <coverage-audit.json> modal-scan.json docs/architecture/asset-document-coverage-audit.md [<previous coverage-audit.json>]")
 w("```")
 w()
 w("The automation test itself (`UEAssetDoc.Coverage.GenericRouteAudit`) asserts only that it ran; it writes "
   "`Saved/AssetDocumentCoverage/{coverage-audit.json,results.jsonl,current.txt,extracts/*.json}` in the project. "
-  "Never run it in the same editor process as the rest of the AssetDocument suite. Keep `Coverage` out of the default group list and run it explicitly with the automation filter `^UEAssetDoc.Coverage.`.")
+  "Never run it in the same editor process as the rest of the AssetDocument suite: leave `Coverage` out of the default test list and run it explicitly with the automation filter `UEAssetDoc.Coverage`.")
 
 if previous:
     w()

@@ -1,6 +1,6 @@
 # MaterialInstanceConstant support matrix
 
-Status: 2026-10-04. Governing rules:
+Governing rules:
 [design rules](asset-document-design-rules.md) §3 (rollback = functional
 equivalence), §3.1 (Undo history), §4 (raw editor-equivalent code + behaviour test) and §5 (support
 matrix). Reference editor: the Material Instance Editor (`FMaterialInstanceEditor` with its
@@ -84,7 +84,7 @@ an asynchronous shader compile, and an `FMaterialUpdateContext` recreates the re
 components that use the instance. The apply does not wait for the compile (neither does the
 editor); the package is saved right away, which is correct because an editor (non-cook) save of a
 material instance does not serialize shader maps. Measured in
-`UEAssetDoc.MaterialInstance.Python` (sandbox editor, macOS, M-series): a create
+`UEAssetDoc.MaterialInstance.Python` (editor): a create
 with a static switch and component mask override takes about 0.15 s and a static switch edit about
 0.16 s for the whole apply (validate, snapshot, edit, save, fresh-load verification), while the
 permutation's shaders keep compiling in the background (the log shows those jobs). A scalar /

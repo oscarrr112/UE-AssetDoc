@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.PhysicsAsset.CreateFidelity: design §6.2 as written: every source (generated fixtures,
 //   the tutorial asset, the corpus) is extracted and created anew from that extraction (Action Create, FactoryContext

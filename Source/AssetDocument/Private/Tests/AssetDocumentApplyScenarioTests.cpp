@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Data-driven ApplyFile/Extract scenarios through the production Service.
 // Each TestData/ApplyScenarios/<Name>.json becomes one automation test

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -625,9 +626,9 @@ bool FAssetDocumentAIBehaviorTreeAuthoredGraphReadbackDescriptorTest::RunTest(co
 		FRejectingHandleResolver Handles;
 		const FAssetDocumentPrimitiveOutcome Missing = Provider->Invoke(
 			MissingInvocation, Handles, nullptr);
-		TestTrue(TEXT("the immutable first RED is the exact missing-provider terminal"),
+		TestTrue(TEXT("a missing primitive is the exact missing-provider terminal"),
 			HasDiagnostic(Missing, TEXT("GenericProvider.UnknownPrimitive")));
-		TestTrue(TEXT("the immutable first RED has no value, handle, or ChangedSet lanes"),
+		TestTrue(TEXT("a missing primitive has no value, handle, or ChangedSet lanes"),
 			Missing.HandleResults.IsEmpty() && Missing.ChangedSet.IsEmpty());
 		return false;
 	}

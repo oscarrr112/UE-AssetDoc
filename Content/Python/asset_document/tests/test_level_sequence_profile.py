@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Level Sequence Profile: assembling the Body from the seq.read.v1 records (binding tree, tracks, sections, key and
 columnar key records, warnings), canonical and comparison forms, Diff, and the apply plan (identity, op batches, dense
 channel chunks, refusals, outcome). The editor side (primitives, status, corpus round trips, free edits, rollback) is

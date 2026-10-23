@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """BehaviorTree binding policy over phase-local, typed native evidence."""
 from __future__ import annotations
 

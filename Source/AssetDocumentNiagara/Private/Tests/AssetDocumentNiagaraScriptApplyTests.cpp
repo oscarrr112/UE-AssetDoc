@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// N4 end-to-end tests: Niagara script assets (profile.niagara_script.v1) and scratch pads, through the production
+// End-to-end tests: Niagara script assets (profile.niagara_script.v1) and scratch pads, through the production
 // Service (the Python profile, graph.* primitives and fx.niagara.edit.v1) as the MCP tools send documents.
 //   UEAssetDoc.Niagara.Script.RoundTrip       script tier (static switches, custom HLSL): each
 //        asset's extract written as a Create document of a new script gives the same document; re-apply is a
@@ -994,7 +995,7 @@ bool FAssetDocumentNiagaraScratchPadAuthoringTest::RunTest(const FString& Parame
 		const TSharedPtr<FJsonObject> After = Extract(*this, System, TEXT("deleted pad"));
 		TestEqual(TEXT("no scratch pads left"), List(Body(After), TEXT("ScratchPads")).Num(), 0);
 		TestNoOpReapply(*this, System, TEXT("deleted pad"));
-		// Last: an apply after the package was reloaded from disk is not part of this test (see the N4 report).
+		// Last: an apply after the package was reloaded from disk is not part of this test.
 		TestReload(*this, System, TEXT("deleted pad"));
 	}
 	return true;

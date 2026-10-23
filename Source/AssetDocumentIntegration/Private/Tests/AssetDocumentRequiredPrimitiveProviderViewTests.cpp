@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentRequiredPrimitiveProviderView.h"
 #include "AssetDocumentAIPrimitiveProvider.h"
@@ -67,7 +68,7 @@ public:
 	int32 Calls = 0;
 };
 
-// Exact replay consumers, including L1 existing-target resolution; independent of the builder.
+// Exact replay consumers, including existing-target resolution; independent of the builder.
 const TCHAR* AnimationIds[] = {
 	TEXT("editor.class.resolve_canonical.v1"),
 	TEXT("editor.reference.resolve_asset.v1"),
@@ -97,7 +98,7 @@ struct FProjectionFixture
 	TArray<FAssetDocumentPrimitiveRequirement> Seed = GetAssetDocumentLegacyGenericRequirementsForTests();
 	FAssetDocumentRequiredPrimitiveProjectionResult Build() const
 	{
-		return BuildAssetDocumentRequiredPrimitiveProjection(Providers, Seed, GetG1FrozenAuthorityExceptionRecords());
+		return BuildAssetDocumentRequiredPrimitiveProjection(Providers, Seed, GetFrozenAuthorityExceptionRecords());
 	}
 };
 }
@@ -130,7 +131,7 @@ bool FRequiredProjectionClosureTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("requirements are exactly the sorted declared seed"), Tuples(Projection.Requirements) == Expected);
 	TestTrue(TEXT("declared closure passes Core"), ValidateAssetDocumentPrimitiveFreezeInput(
 		Projection.Descriptors, Projection.Requirements, Projection.Availability,
-		GetG1FrozenAuthorityExceptionRecords()).bValid);
+		GetFrozenAuthorityExceptionRecords()).bValid);
 	TestEqual(TEXT("canonical first provider"), Projection.Providers[0]->GetProviderId(), FString(TEXT("ai")));
 	TestEqual(TEXT("canonical second provider"), Projection.Providers[1]->GetProviderId(), FString(TEXT("editor")));
 	for (int32 Index = 1; Index < Projection.Descriptors.Num(); ++Index)

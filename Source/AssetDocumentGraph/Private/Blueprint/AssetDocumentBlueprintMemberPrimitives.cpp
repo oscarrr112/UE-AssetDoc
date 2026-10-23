@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Blueprint member primitives (provider "blueprint", owner Blueprint). Each handler does
 // what the Blueprint editor does for the same edit (My Blueprint panel,

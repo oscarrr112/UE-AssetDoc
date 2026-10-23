@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng and Houyu. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentHttpServer.h"
 #include "AssetDocumentAssetDelete.h"
@@ -9,6 +10,7 @@
 #include "AssetDocumentPendingNotices.h"
 #include "AssetDocumentServerModule.h"
 #include "AssetDocumentSettings.h"
+#include "AssetDocumentUserOnlyFile.h"
 #include "HttpServerModule.h"
 #include "IHttpRouter.h"
 #include "HttpServerRequest.h"
@@ -43,11 +45,6 @@
 #include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
 
-#if PLATFORM_MAC || PLATFORM_LINUX
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#endif
 
 namespace AssetDocumentHttpServerLocal
 {
@@ -137,24 +134,6 @@ void StartListenersWithBindAddress(FHttpServerModule& HttpServerModule, uint32 P
 	}
 }
 
-// Writes the file readable and writable by the current user only (it can hold the bearer token).
-bool SaveUserOnlyFile(const FString& Text, const FString& Path)
-{
-#if PLATFORM_MAC || PLATFORM_LINUX
-	const FTCHARToUTF8 Utf8(*Text);
-	const int Descriptor = open(TCHAR_TO_UTF8(*FPaths::ConvertRelativePathToFull(Path)), O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-	if (Descriptor < 0)
-	{
-		return false;
-	}
-	fchmod(Descriptor, S_IRUSR | S_IWUSR);
-	const ssize_t Written = write(Descriptor, Utf8.Get(), Utf8.Length());
-	close(Descriptor);
-	return Written == Utf8.Length();
-#else
-	return FFileHelper::SaveStringToFile(Text, *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
-#endif
-}
 } // namespace AssetDocumentHttpServerLocal
 
 namespace
@@ -1419,14 +1398,16 @@ void FAssetDocumentHttpServer::WriteServiceDiscoveryFile()
 	}
 
 	// Write file (readable by the current user only: it can hold the bearer token)
-	if (AssetDocumentHttpServerLocal::SaveUserOnlyFile(JsonString, GetServiceDiscoveryFilePath()))
+	FString SaveError;
+	if (AssetDocumentUserOnlyFile::Save(JsonString, GetServiceDiscoveryFilePath(), SaveError))
 	{
 		++GServiceDiscoveryWrites;
 		UE_LOG(LogAssetDocumentServer, Log, TEXT("Service discovery file written: %s"), *GetServiceDiscoveryFilePath());
 	}
 	else
 	{
-		UE_LOG(LogAssetDocumentServer, Warning, TEXT("Failed to write service discovery file: %s"), *GetServiceDiscoveryFilePath());
+		UE_LOG(LogAssetDocumentServer, Warning, TEXT("Service discovery file not written (it could not be made readable by the current user "
+			"only: %s): %s"), *SaveError, *GetServiceDiscoveryFilePath());
 	}
 }
 

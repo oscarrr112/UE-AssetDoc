@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentHandleRegistryRuntime.h"
 #include "AssetDocumentPrimitiveRegistryRuntime.h"
@@ -683,8 +684,8 @@ void TestValueBounds(FAutomationTestBase& Test)
 	const FAssetDocumentChangedRecord& ProjectedChange = ProjectionResult.ChangedSet[0];
 	Test.TestEqual(TEXT("changed authority projects"), ProjectedChange.AuthorityId, FString(TEXT("asset"))); Test.TestEqual(TEXT("changed object projects"), ProjectedChange.StableObjectId, FString(TEXT("object")));
 	Test.TestEqual(TEXT("changed path projects"), ProjectedChange.Path, FString(TEXT("/Body/Value"))); Test.TestEqual(TEXT("changed kind projects"), ProjectedChange.ChangeKind, FString(TEXT("modified")));
-	Test.TestTrue(TEXT("fixture-only projection satisfies only frozen G1 tuple shape"), ValidateAssetDocumentRuntimeResult(ProjectionRequest, ProjectionResult).bValid);
-	// The marker is fixture-only transport data: these assertions claim field fidelity and G1 shape, not encoding, hashing, or a production DocumentCodec relationship.
+	Test.TestTrue(TEXT("fixture-only projection satisfies only the frozen tuple shape"), ValidateAssetDocumentRuntimeResult(ProjectionRequest, ProjectionResult).bValid);
+	// The marker is fixture-only transport data: these assertions claim field fidelity and tuple shape, not encoding, hashing, or a production DocumentCodec relationship.
 	Py_DECREF(ProjectionObject);
 }
 
@@ -704,7 +705,7 @@ void TestReturnedHandleBounds(
 	Provider.ReturnedHandleCount = 4097;
 	PyObject* TooMany = CallInvoke(Context, "editor.host_test.many", Value, Handles);
 	Test.TestNotNull(TEXT("4097 returned handles produce a typed failed outcome"), TooMany);
-	Test.TestEqual(TEXT("4097 returned handles preserve the G1 code"),
+	Test.TestEqual(TEXT("4097 returned handles preserve the diagnostic code"),
 		GetOutcomeDiagnosticCode(TooMany),
 		FString(TEXT("PrimitiveOutcome.HandleResultLimitExceeded")));
 	Provider.ReturnedHandleCount = 4096;
@@ -824,7 +825,7 @@ void TestDiagnosticFidelity(
 		Context, "editor.host_test.echo", Value, Handles);
 	Provider.bReturnInvalidStatus = false;
 	Test.TestNotNull(TEXT("invalid provider outcome is projected as failed"), InvalidOutcome);
-	Test.TestEqual(TEXT("invalid provider outcome preserves G1 diagnostic"),
+	Test.TestEqual(TEXT("invalid provider outcome preserves its diagnostic"),
 		GetOutcomeDiagnosticCode(InvalidOutcome),
 		FString(TEXT("PrimitiveOutcome.InvalidStatus")));
 	Py_XDECREF(InvalidOutcome);

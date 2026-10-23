@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // rig.ikrig.read.v1: the authored state of an IK Rig (design §2.1, §3.3) as document-ready records. The rig is read
 // as stored after load (PostLoad already converted legacy UObject solvers into the struct stack); nothing is

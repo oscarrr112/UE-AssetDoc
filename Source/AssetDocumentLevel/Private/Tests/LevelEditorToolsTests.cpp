@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The editor tools:
 // UEAssetDoc.Level.UndoTool.UndoRedo: undo_editor undoes / redoes only the entry the caller names

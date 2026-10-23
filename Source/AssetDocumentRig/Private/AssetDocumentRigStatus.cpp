@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // rig.status.v1 and the "Compile" describer of IK Rigs and IK Retargeters (design §5.1): the processor
 // initializations behind the editors' output log, run headlessly.

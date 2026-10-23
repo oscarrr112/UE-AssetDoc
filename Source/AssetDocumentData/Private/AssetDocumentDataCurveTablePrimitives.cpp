@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // data.curve_table.read.v1 / data.curve_table.edit.v1: named curves of a UCurveTable (also
 // UCompositeCurveTable), as the Curve Table editor edits them (see AssetDocumentDataPrimitives.cpp).

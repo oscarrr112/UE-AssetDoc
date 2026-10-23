@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // create_folder / rename_folder / delete_folder: the Outliner's folder commands on the
 // world's folders (FActorFolders), with the Outliner's delete semantics: the folder's

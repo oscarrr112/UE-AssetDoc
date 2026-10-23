@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered Material / Material Function Profiles (profile.material.v1, profile.material_function.v1,
 profile.material_function_material_layer.v1, profile.material_function_material_layer_blend.v1).
 

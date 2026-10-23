@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -1224,42 +1225,42 @@ bool RequireCanonicalReadbackEntry(
 	const UBlackboardData& Blackboard,
 	const FString& Name)
 {
-	if (!RequireSuccess(Test, TEXT("H0 owned-local entry readback"), Outcome)
-		|| !Test.TestEqual(TEXT("H0 readback has only entry"), Outcome.Value.ObjectKeys,
+	if (!RequireSuccess(Test, TEXT("readback owned-local entry readback"), Outcome)
+		|| !Test.TestEqual(TEXT("readback has only entry"), Outcome.Value.ObjectKeys,
 			TArray<FString>{TEXT("entry")})
-		|| !Test.TestTrue(TEXT("H0 readback has one entry value"), Outcome.Value.Elements.Num() == 1))
+		|| !Test.TestTrue(TEXT("readback has one entry value"), Outcome.Value.Elements.Num() == 1))
 	{
 		return false;
 	}
 
 	const FAssetDocumentRuntimeValueDto& Entry = Outcome.Value.Elements[0];
-	if (!Test.TestEqual(TEXT("H0 readback uses the complete six-field entry shape"), Entry.ObjectKeys,
+	if (!Test.TestEqual(TEXT("readback uses the complete six-field entry shape"), Entry.ObjectKeys,
 		TArray<FString>{TEXT("Category"), TEXT("Description"), TEXT("KeyTypeClass"),
 			TEXT("KeyTypeProperties"), TEXT("Name"), TEXT("bInstanceSynced")})
-		|| !Test.TestTrue(TEXT("H0 readback has exactly six entry values"), Entry.Elements.Num() == 6))
+		|| !Test.TestTrue(TEXT("readback has exactly six entry values"), Entry.Elements.Num() == 6))
 	{
 		return false;
 	}
 
 	const FAssetDocumentRuntimeValueDto& ClassRef = Entry.Elements[2];
-	return Test.TestEqual(TEXT("H0 readback preserves empty Category"), Entry.Elements[0].StringValue, FString())
-		&& Test.TestEqual(TEXT("H0 readback preserves empty Description"), Entry.Elements[1].StringValue, FString())
-		&& Test.TestEqual(TEXT("H0 readback canonicalizes the exact KeyType class reference"),
+	return Test.TestEqual(TEXT("readback preserves empty Category"), Entry.Elements[0].StringValue, FString())
+		&& Test.TestEqual(TEXT("readback preserves empty Description"), Entry.Elements[1].StringValue, FString())
+		&& Test.TestEqual(TEXT("readback canonicalizes the exact KeyType class reference"),
 			ClassRef.ObjectKeys, TArray<FString>{TEXT("Kind"), TEXT("Path")})
-		&& Test.TestTrue(TEXT("H0 readback ClassRef has two values"), ClassRef.Elements.Num() == 2)
-		&& Test.TestEqual(TEXT("H0 readback ClassRef kind is exact"),
+		&& Test.TestTrue(TEXT("readback ClassRef has two values"), ClassRef.Elements.Num() == 2)
+		&& Test.TestEqual(TEXT("readback ClassRef kind is exact"),
 			ClassRef.Elements.IsValidIndex(0) ? ClassRef.Elements[0].StringValue : FString(), FString(TEXT("ClassRef")))
-		&& Test.TestEqual(TEXT("H0 readback ClassRef path is the exact loaded key type"),
+		&& Test.TestEqual(TEXT("readback ClassRef path is the exact loaded key type"),
 			ClassRef.Elements.IsValidIndex(1) ? ClassRef.Elements[1].StringValue : FString(),
 			UAssetDocumentAITypedPreimageTestZeroFieldKeyType::StaticClass()->GetPathName())
-		&& Test.TestTrue(TEXT("H0 readback preserves empty KeyTypeProperties"),
+		&& Test.TestTrue(TEXT("readback preserves empty KeyTypeProperties"),
 			Entry.Elements[3].Kind == EAssetDocumentRuntimeValueKind::Object
 			&& Entry.Elements[3].ObjectKeys.IsEmpty() && Entry.Elements[3].Elements.IsEmpty())
-		&& Test.TestEqual(TEXT("H0 readback preserves the owned local name"), Entry.Elements[4].StringValue, Name)
-		&& Test.TestFalse(TEXT("H0 readback preserves false bInstanceSynced"), Entry.Elements[5].BooleanValue)
-		&& Test.TestTrue(TEXT("H0 readback has no handles or changed set"),
+		&& Test.TestEqual(TEXT("readback preserves the owned local name"), Entry.Elements[4].StringValue, Name)
+		&& Test.TestFalse(TEXT("readback preserves false bInstanceSynced"), Entry.Elements[5].BooleanValue)
+		&& Test.TestTrue(TEXT("readback has no handles or changed set"),
 			Outcome.HandleResults.IsEmpty() && Outcome.ChangedSet.IsEmpty())
-		&& Test.TestEqual(TEXT("H0 readback object remains the exact Blackboard"),
+		&& Test.TestEqual(TEXT("readback object remains the exact Blackboard"),
 			Blackboard.GetClass(), UBlackboardData::StaticClass());
 }
 
@@ -1320,15 +1321,15 @@ bool RequireCanonicalPropertyReadback(
 	FAutomationTestBase& Test,
 	const FAssetDocumentPrimitiveOutcome& Outcome)
 {
-	if (!RequireSuccess(Test, TEXT("H0 property canonicalization readback"), Outcome)
-		|| !Test.TestTrue(TEXT("H0 property canonicalization has one entry"),
+	if (!RequireSuccess(Test, TEXT("readback property canonicalization readback"), Outcome)
+		|| !Test.TestTrue(TEXT("readback property canonicalization has one entry"),
 			Outcome.Value.ObjectKeys == TArray<FString>{TEXT("entry")}
 			&& Outcome.Value.Elements.Num() == 1))
 	{
 		return false;
 	}
 	const FAssetDocumentRuntimeValueDto& Entry = Outcome.Value.Elements[0];
-	if (!Test.TestTrue(TEXT("H0 property canonicalization has six entry fields"),
+	if (!Test.TestTrue(TEXT("readback property canonicalization has six entry fields"),
 		Entry.ObjectKeys == TArray<FString>{TEXT("Category"), TEXT("Description"),
 			TEXT("KeyTypeClass"), TEXT("KeyTypeProperties"), TEXT("Name"),
 			TEXT("bInstanceSynced")} && Entry.Elements.Num() == 6))
@@ -1336,22 +1337,22 @@ bool RequireCanonicalPropertyReadback(
 		return false;
 	}
 	const FAssetDocumentRuntimeValueDto& Properties = Entry.Elements[3];
-	return Test.TestEqual(TEXT("H0 property canonicalization preserves Category"),
+	return Test.TestEqual(TEXT("readback property canonicalization preserves Category"),
 		Entry.Elements[0].StringValue, FString(TEXT("Readback")))
-		&& Test.TestEqual(TEXT("H0 property canonicalization preserves Description"),
+		&& Test.TestEqual(TEXT("readback property canonicalization preserves Description"),
 			Entry.Elements[1].StringValue, FString(TEXT("Canonical properties")))
-		&& Test.TestEqual(TEXT("H0 property canonicalization sorts property names"),
+		&& Test.TestEqual(TEXT("readback property canonicalization sorts property names"),
 			Properties.ObjectKeys, TArray<FString>{TEXT("Int32Value"), TEXT("StringValue")})
-		&& Test.TestTrue(TEXT("H0 property canonicalization has two property values"),
+		&& Test.TestTrue(TEXT("readback property canonicalization has two property values"),
 			Properties.Elements.Num() == 2)
-		&& Test.TestEqual(TEXT("H0 property canonicalization preserves integer kind/value"),
+		&& Test.TestEqual(TEXT("readback property canonicalization preserves integer kind/value"),
 			Properties.Elements.IsValidIndex(0) ? Properties.Elements[0].IntegerValue : 0, 41ll)
-		&& Test.TestEqual(TEXT("H0 property canonicalization preserves string kind/value"),
+		&& Test.TestEqual(TEXT("readback property canonicalization preserves string kind/value"),
 			Properties.Elements.IsValidIndex(1) ? Properties.Elements[1].StringValue : FString(),
 			FString(TEXT("Canonical value")))
-		&& Test.TestEqual(TEXT("H0 property canonicalization preserves local name"),
+		&& Test.TestEqual(TEXT("readback property canonicalization preserves local name"),
 			Entry.Elements[4].StringValue, FString(TEXT("PropertyCanonical")))
-		&& Test.TestTrue(TEXT("H0 property canonicalization preserves true bInstanceSynced"),
+		&& Test.TestTrue(TEXT("readback property canonicalization preserves true bInstanceSynced"),
 			Entry.Elements[5].BooleanValue);
 }
 
@@ -1777,15 +1778,13 @@ bool FAssetDocumentAIBlackboardStructuralPublicationOwnershipTest::RunTest(const
 {
 	using namespace AssetDocumentAIBlackboardStructuralPublication;
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior: staging ownership follows the real Atomic runtime terminal, not
 	//   the caller binding or inner rollback callback.
 	// - Technique: state-transition testing plus the zero/one boundary for staged
 	//   object ownership.
-	// - Next RED: real Commit and Rollback release only when the runtime destroys
+	// - Test: real Commit and Rollback release only when the runtime destroys
 	//   its action; rejected publication and double-stage retain exactly one owner.
-	// - Expected failure: the old implementation releases on rejected snapshot
-	//   and inside rollback, and constructs before rejecting a second stage.
 	TStrongObjectPtr<UBlackboardData> Blackboard(NewObject<UBlackboardData>(
 		GetTransientPackage(), NAME_None, RF_Transactional));
 	TStrongObjectPtr<UBlackboardData> OtherBlackboard(NewObject<UBlackboardData>(
@@ -2012,14 +2011,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIBlackboardLifecycleTest,
 bool FAssetDocumentAIBlackboardLifecycleTest::RunTest(const FString&)
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
-	// Test Design Scan:
-	// - Behavior: each ordinary T3 Blackboard row consumes an existing Editor
+	// Test design:
+	// - Behavior: each ordinary Blackboard row consumes an existing Editor
 	//   payload through an AI-scoped target handle and leaves an atomic, exact
 	//   authored/derived rollback boundary.
 	// - Technique: lifecycle state transitions plus equivalence/failure boundaries.
 	// - Risk: accepting a direct Editor handle, enlisting footprint before action,
 	//   or replacing existing KeyType instances during an order-only change.
-	// - Next GREEN observations: authoritative write, exact ChangedSet, and exact
+	// - Observations: authoritative write, exact ChangedSet, and exact
 	//   shared-action rollback state are all externally observable.
 	const TSharedRef<IAssetDocumentPrimitiveProvider> Provider = CreateAssetDocumentAIPrimitiveProvider();
 	UPackage* Package = CreatePackage(*FString::Printf(
@@ -2086,7 +2085,7 @@ bool FAssetDocumentAIBlackboardLifecycleTest::RunTest(const FString&)
 			&& Outcome.Value.Elements[0].ObjectKeys.Contains(TEXT("Int32Value")));
 	}
 
-	// Direct Editor metadata must reject before the P-AI handler; the test-local
+	// Direct Editor metadata must reject before the AI handler; the test-local
 	// target result retains token, provider/kind/access metadata and payload identity.
 	{
 		FBlackboardLifecycleTransaction Transaction;
@@ -2713,17 +2712,16 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIBlackboardV2ReorderSuccessTest,
 bool FAssetDocumentAIBlackboardV2ReorderSuccessTest::RunTest(const FString&)
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: an owned-local identity request is a no-op, while a
 	//   valid permutation atomically reorders the complete authored projection.
 	// - Candidate technique: state-transition testing across identity -> fresh
 	//   reorder -> rollback, including derived Key-ID and loaded-consumer caches.
 	// - Risk or gap: a superficial array permutation can lose canonical Struct
 	//   DTO data, move engine-derived SelfActor, or leave derived consumers stale.
-	// - Next RED test: RetainedAdmittedStructCanonical (SC-ORD-001).
+	// - Test: RetainedAdmittedStructCanonical (SC-ORD-001).
 	// - Expected observable outcome: literal DTOs, stable same-name metadata and
 	//   KeyType instances, one order-only ChangedSet on permutation, exact rollback.
-	// - Expected failure reason: local_keys.reorder.v2 is still authority-closed.
 	UPackage* Package = CreatePackage(*FString::Printf(
 		TEXT("/Temp/AssetDocumentAI/BlackboardV2ReorderStruct_%s"),
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits)));
@@ -3086,7 +3084,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIBlackboardV2ReorderSaveReloadTe
 bool FAssetDocumentAIBlackboardV2ReorderSaveReloadTest::RunTest(const FString&)
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: a committed real permutation survives an external
 	//   save, unload/GC and fresh load with its complete admitted Struct state.
 	// - Candidate technique: state-transition characterization across provider
@@ -3097,7 +3095,7 @@ bool FAssetDocumentAIBlackboardV2ReorderSaveReloadTest::RunTest(const FString&)
 	// - Expected observable outcome: exact literal DTO/order and zero provider
 	//   persistence before the external save, then zero-residue fresh readback.
 	const FString PackageName = FString::Printf(
-		TEXT("/Game/AssetDocumentAITask4d/BlackboardReorderStructReload_%s"),
+		TEXT("/Game/AssetDocumentAIBlackboardReorder/BlackboardReorderStructReload_%s"),
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 	const FString AssetName = FPackageName::GetLongPackageAssetName(PackageName);
 	const FString ObjectPath = PackageName + TEXT(".") + AssetName;
@@ -3384,17 +3382,15 @@ bool FAssetDocumentAIBlackboardV2ReorderFailureTest::RunTest(const FString&)
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
 	using ELoadedFailure = AssetDocumentAIBlackboardLoadedConsumerCompletion::
 		ELoadedConsumerCompletionTestFailurePoint;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: exact local-name preflight is closed, identity avoids
 	//   every mutable seam, and a real permutation rolls back each late failure.
 	// - Candidate technique: equivalence partitions plus lifecycle transitions.
 	// - Risk or gap: a publication failure can retain Struct state, Key IDs, or a
 	//   loaded BehaviorTree cache after returning a superficially closed outcome.
-	// - Next RED test: RetainedStructClosedAndLateRollback (SC-ORD-002).
+	// - Test: RetainedStructClosedAndLateRollback (SC-ORD-002).
 	// - Expected observable outcome: zero preflight/identity residue and exactly
 	//   one action then footprint for every real late failure before rollback.
-	// - Expected failure reason: the current Reorder handler does not consume the
-	//   six SC-ORD-002 row, derived, and loaded-consumer points below.
 	UPackage* Package = CreatePackage(*FString::Printf(
 		TEXT("/Temp/AssetDocumentAI/BlackboardV2ReorderFailure_%s"),
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits)));
@@ -3741,7 +3737,7 @@ bool FAssetDocumentAIBlackboardV2ReorderFailureTest::RunTest(const FString&)
 			bBeforeConsumerTreeDirty, PrimedRuntimeValue + 1000);
 		return LocalPassed;
 	};
-	// These six late lanes intentionally form the formal SC-ORD-002 RED. The
+	// These six late lanes form the SC-ORD-002 late-failure group. The
 	// identity checks above prove that no injection can be consumed before a
 	// real mutable permutation reaches its matching lifecycle boundary.
 	Passed &= RunLateFailure(TEXT("SC-ORD-002 publication rejection"),
@@ -3774,18 +3770,17 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIBlackboardV2ReadbackTest,
 bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
-	// Test Design Scan:
-	// - Behavior under test: H0 returns one canonical, complete local Blackboard
+	// Test design:
+	// - Behavior under test: the readback returns one canonical, complete local Blackboard
 	//   entry without a handle, transaction, mutation, or retained lease state.
 	// - Candidate technique: equivalence classes for local/missing/inherited/
 	//   unavailable/malformed inputs plus lifecycle transitions.
 	// - Risk or gap: a v1-shaped or HA-backed helper could appear to read an
 	//   entry while accepting a handle, an active transaction, or an inherited key.
-	// - Next RED test: a zero-property, empty-metadata local entry and each
+	// - Test: a zero-property, empty-metadata local entry and each
 	//   failure class below.
 	// - Expected observable outcome: a six-field DTO on success; otherwise an
 	//   empty envelope with no state or footprint change.
-	// - Expected failure reason: entry.readback.v2 has no descriptor or binding.
 	const TSharedRef<IAssetDocumentPrimitiveProvider> Provider =
 		CreateAssetDocumentAIPrimitiveProvider();
 	UPackage* Package = CreatePackage(*FString::Printf(
@@ -3836,29 +3831,29 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 	UEnum* const TestEnum = StaticEnum<EAssetDocumentAITypedPreimageTestEnum>();
 	UUserDefinedEnum* SparseAssetEnum = NewObject<UUserDefinedEnum>(
 		Package, TEXT("SparseAssetEnum"), RF_Public | RF_Standalone);
-	if (!TestNotNull(TEXT("H0 Blackboard fixture exists"), Blackboard)
-		|| !TestNotNull(TEXT("H0 parent Blackboard fixture exists"), Parent)
-		|| !TestNotNull(TEXT("H0 zero-property local key type exists"), LocalKeyType)
-		|| !TestNotNull(TEXT("H0 zero-property inherited key type exists"), ParentKeyType)
-		|| !TestNotNull(TEXT("H0 property canonicalization key type exists"), PropertyKeyType)
-		|| !TestNotNull(TEXT("H0 object key type exists"), ObjectKeyType)
-		|| !TestNotNull(TEXT("H0 object class-value key type exists"), ObjectClassValueKeyType)
-		|| !TestNotNull(TEXT("H0 first object instance key type exists"), ObjectInstanceAKeyType)
-		|| !TestNotNull(TEXT("H0 second object instance key type exists"), ObjectInstanceBKeyType)
-		|| !TestNotNull(TEXT("H0 object CDO rejection fixture exists"), CdoObjectKeyType)
-		|| !TestNotNull(TEXT("H0 class key type exists"), ClassKeyType)
-		|| !TestNotNull(TEXT("H0 enum key type exists"), EnumKeyType)
-		|| !TestNotNull(TEXT("H0 null-enum-type key type exists"), NullEnumTypeKeyType)
-		|| !TestNotNull(TEXT("H0 asset enum key type exists"), AssetEnumKeyType)
-		|| !TestNotNull(TEXT("H0 internal enum key type exists"), InternalEnumKeyType)
-		|| !TestNotNull(TEXT("H0 mismatched native enum key type exists"), MismatchedNativeEnumKeyType)
-		|| !TestNotNull(TEXT("H0 native enum key type exists"), NativeEnumKeyType)
-		|| !TestNotNull(TEXT("H0 struct key type exists"), StructKeyType)
-		|| !TestNotNull(TEXT("H0 incompatible object key type exists"), IncompatibleObjectKeyType)
-		|| !TestNotNull(TEXT("H0 incompatible class key type exists"), IncompatibleClassKeyType)
-		|| !TestNotNull(TEXT("H0 unsupported-array key type exists"), UnsupportedArrayKeyType)
-		|| !TestNotNull(TEXT("H0 reflected enum exists"), TestEnum)
-		|| !TestNotNull(TEXT("H0 sparse asset enum exists"), SparseAssetEnum))
+	if (!TestNotNull(TEXT("readback Blackboard fixture exists"), Blackboard)
+		|| !TestNotNull(TEXT("readback parent Blackboard fixture exists"), Parent)
+		|| !TestNotNull(TEXT("readback zero-property local key type exists"), LocalKeyType)
+		|| !TestNotNull(TEXT("readback zero-property inherited key type exists"), ParentKeyType)
+		|| !TestNotNull(TEXT("readback property canonicalization key type exists"), PropertyKeyType)
+		|| !TestNotNull(TEXT("readback object key type exists"), ObjectKeyType)
+		|| !TestNotNull(TEXT("readback object class-value key type exists"), ObjectClassValueKeyType)
+		|| !TestNotNull(TEXT("readback first object instance key type exists"), ObjectInstanceAKeyType)
+		|| !TestNotNull(TEXT("readback second object instance key type exists"), ObjectInstanceBKeyType)
+		|| !TestNotNull(TEXT("readback object CDO rejection fixture exists"), CdoObjectKeyType)
+		|| !TestNotNull(TEXT("readback class key type exists"), ClassKeyType)
+		|| !TestNotNull(TEXT("readback enum key type exists"), EnumKeyType)
+		|| !TestNotNull(TEXT("readback null-enum-type key type exists"), NullEnumTypeKeyType)
+		|| !TestNotNull(TEXT("readback asset enum key type exists"), AssetEnumKeyType)
+		|| !TestNotNull(TEXT("readback internal enum key type exists"), InternalEnumKeyType)
+		|| !TestNotNull(TEXT("readback mismatched native enum key type exists"), MismatchedNativeEnumKeyType)
+		|| !TestNotNull(TEXT("readback native enum key type exists"), NativeEnumKeyType)
+		|| !TestNotNull(TEXT("readback struct key type exists"), StructKeyType)
+		|| !TestNotNull(TEXT("readback incompatible object key type exists"), IncompatibleObjectKeyType)
+		|| !TestNotNull(TEXT("readback incompatible class key type exists"), IncompatibleClassKeyType)
+		|| !TestNotNull(TEXT("readback unsupported-array key type exists"), UnsupportedArrayKeyType)
+		|| !TestNotNull(TEXT("readback reflected enum exists"), TestEnum)
+		|| !TestNotNull(TEXT("readback sparse asset enum exists"), SparseAssetEnum))
 	{
 		return false;
 	}
@@ -3866,7 +3861,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 	TArray<TPair<FName, int64>> SparseEnumNames{
 		{FName(*(SparseEnumScope + TEXT("First"))), 3},
 		{FName(*(SparseEnumScope + TEXT("Sparse"))), 17}};
-	if (!TestTrue(TEXT("H0 sparse asset enum fixture accepts non-contiguous values"),
+	if (!TestTrue(TEXT("readback sparse asset enum fixture accepts non-contiguous values"),
 		AssetDocumentEnums::SetEnums(*SparseAssetEnum, SparseEnumNames, UEnum::ECppForm::Namespaced,
 			EEnumFlags::None, true)))
 	{
@@ -4003,7 +3998,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 			MakeEntryReadbackInvocation(*Blackboard, Transaction.GetMutationToken(),
 				TEXT("OwnedLocal"), Phase), Handles, nullptr);
 		Passed &= RequireCanonicalReadbackEntry(*this, Outcome, *Blackboard, TEXT("OwnedLocal"));
-		Passed &= TestTrue(TEXT("H0 phase success leaves no footprint or authored mutation"),
+		Passed &= TestTrue(TEXT("readback phase success leaves no footprint or authored mutation"),
 			Before.Equals(*Blackboard) && Transaction.EnlistedFootprint.IsEmpty());
 	}
 	{
@@ -4011,7 +4006,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 			MakeEntryReadbackInvocation(*Blackboard, Transaction.GetMutationToken(),
 				TEXT("PropertyCanonical")), Handles, nullptr);
 		Passed &= RequireCanonicalPropertyReadback(*this, Outcome);
-		Passed &= TestTrue(TEXT("H0 property canonicalization has no mutation footprint"),
+		Passed &= TestTrue(TEXT("readback property canonicalization has no mutation footprint"),
 			Before.Equals(*Blackboard) && Transaction.EnlistedFootprint.IsEmpty());
 	}
 	{
@@ -4019,18 +4014,18 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 			MakeEntryReadbackInvocation(*Blackboard, Transaction.GetMutationToken(),
 				TEXT("ObjectCanonical")), Handles, nullptr);
 		const bool bCanonical = RequireCanonicalSpecialKeyReadback(*this,
-			TEXT("H0 Object KeyType canonicalization"), Outcome, *UBlackboardKeyType_Object::StaticClass(),
+			TEXT("readback Object KeyType canonicalization"), Outcome, *UBlackboardKeyType_Object::StaticClass(),
 			TEXT("ObjectCanonical"), {TEXT("BaseClass"), TEXT("DefaultValue")});
 		Passed &= bCanonical;
 		if (bCanonical)
 		{
 			const FAssetDocumentRuntimeValueDto& Properties = Outcome.Value.Elements[0].Elements[3];
-			Passed &= RequireCanonicalReference(*this, TEXT("H0 Object BaseClass"), Properties.Elements[0],
+			Passed &= RequireCanonicalReference(*this, TEXT("readback Object BaseClass"), Properties.Elements[0],
 				TEXT("ClassRef"), AActor::StaticClass()->GetPathName());
-			Passed &= TestEqual(TEXT("H0 Object null DefaultValue is canonical null"),
+			Passed &= TestEqual(TEXT("readback Object null DefaultValue is canonical null"),
 				Properties.Elements[1].Kind, EAssetDocumentRuntimeValueKind::Null);
 		}
-		Passed &= TestTrue(TEXT("H0 Object canonicalization has no footprint"),
+		Passed &= TestTrue(TEXT("readback Object canonicalization has no footprint"),
 			Before.Equals(*Blackboard) && Transaction.EnlistedFootprint.IsEmpty());
 	}
 	struct FObjectDefaultReadbackCase
@@ -4041,11 +4036,11 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 		const UObject* DefaultValue;
 	};
 	for (const FObjectDefaultReadbackCase& ObjectCase : {
-		FObjectDefaultReadbackCase{TEXT("ObjectClassValue"), TEXT("H0 Object UClass-value canonicalization"),
+		FObjectDefaultReadbackCase{TEXT("ObjectClassValue"), TEXT("readback Object UClass-value canonicalization"),
 			UClass::StaticClass(), APawn::StaticClass()},
-		FObjectDefaultReadbackCase{TEXT("ObjectInstanceA"), TEXT("H0 first live object default"),
+		FObjectDefaultReadbackCase{TEXT("ObjectInstanceA"), TEXT("readback first live object default"),
 			UBlackboardData::StaticClass(), Blackboard},
-		FObjectDefaultReadbackCase{TEXT("ObjectInstanceB"), TEXT("H0 second live object default"),
+		FObjectDefaultReadbackCase{TEXT("ObjectInstanceB"), TEXT("readback second live object default"),
 			UBlackboardData::StaticClass(), Parent}})
 	{
 		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(
@@ -4071,18 +4066,18 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 			MakeEntryReadbackInvocation(*Blackboard, Transaction.GetMutationToken(),
 				TEXT("ClassCanonical")), Handles, nullptr);
 		const bool bCanonical = RequireCanonicalSpecialKeyReadback(*this,
-			TEXT("H0 Class KeyType canonicalization"), Outcome, *UBlackboardKeyType_Class::StaticClass(),
+			TEXT("readback Class KeyType canonicalization"), Outcome, *UBlackboardKeyType_Class::StaticClass(),
 			TEXT("ClassCanonical"), {TEXT("BaseClass"), TEXT("DefaultValue")});
 		Passed &= bCanonical;
 		if (bCanonical)
 		{
 			const FAssetDocumentRuntimeValueDto& Properties = Outcome.Value.Elements[0].Elements[3];
-			Passed &= RequireCanonicalReference(*this, TEXT("H0 Class BaseClass"), Properties.Elements[0],
+			Passed &= RequireCanonicalReference(*this, TEXT("readback Class BaseClass"), Properties.Elements[0],
 				TEXT("ClassRef"), AActor::StaticClass()->GetPathName());
-			Passed &= RequireCanonicalReference(*this, TEXT("H0 Class DefaultValue"), Properties.Elements[1],
+			Passed &= RequireCanonicalReference(*this, TEXT("readback Class DefaultValue"), Properties.Elements[1],
 				TEXT("ClassRef"), APawn::StaticClass()->GetPathName());
 		}
-		Passed &= TestTrue(TEXT("H0 Class canonicalization has no footprint"),
+		Passed &= TestTrue(TEXT("readback Class canonicalization has no footprint"),
 			Before.Equals(*Blackboard) && Transaction.EnlistedFootprint.IsEmpty());
 	}
 	{
@@ -4090,20 +4085,20 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 			MakeEntryReadbackInvocation(*Blackboard, Transaction.GetMutationToken(),
 				TEXT("EnumCanonical")), Handles, nullptr);
 		const bool bCanonical = RequireCanonicalSpecialKeyReadback(*this,
-			TEXT("H0 Enum KeyType canonicalization"), Outcome, *UBlackboardKeyType_Enum::StaticClass(),
+			TEXT("readback Enum KeyType canonicalization"), Outcome, *UBlackboardKeyType_Enum::StaticClass(),
 			TEXT("EnumCanonical"), {TEXT("DefaultValue"), TEXT("EnumName"), TEXT("EnumType")});
 		Passed &= bCanonical;
 		if (bCanonical)
 		{
 			const FAssetDocumentRuntimeValueDto& Properties = Outcome.Value.Elements[0].Elements[3];
-			Passed &= TestEqual(TEXT("H0 Enum DefaultValue is the enumerator name"),
+			Passed &= TestEqual(TEXT("readback Enum DefaultValue is the enumerator name"),
 				Properties.Elements[0].StringValue, FString(TEXT("Replacement")));
-			Passed &= TestEqual(TEXT("H0 EnumName is the canonical enum path"),
+			Passed &= TestEqual(TEXT("readback EnumName is the canonical enum path"),
 				Properties.Elements[1].StringValue, TestEnum->GetPathName());
-			Passed &= RequireCanonicalReference(*this, TEXT("H0 EnumType"), Properties.Elements[2],
+			Passed &= RequireCanonicalReference(*this, TEXT("readback EnumType"), Properties.Elements[2],
 				TEXT("AssetRef"), TestEnum->GetPathName());
 		}
-		Passed &= TestTrue(TEXT("H0 Enum canonicalization has no footprint"),
+		Passed &= TestTrue(TEXT("readback Enum canonicalization has no footprint"),
 			Before.Equals(*Blackboard) && Transaction.EnlistedFootprint.IsEmpty());
 	}
 	{
@@ -4111,25 +4106,25 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 			MakeEntryReadbackInvocation(*Blackboard, Transaction.GetMutationToken(),
 				TEXT("AssetEnumCanonical")), Handles, nullptr);
 		const bool bCanonical = RequireCanonicalSpecialKeyReadback(*this,
-			TEXT("H0 sparse asset Enum canonicalization"), Outcome,
+			TEXT("readback sparse asset Enum canonicalization"), Outcome,
 			*UBlackboardKeyType_Enum::StaticClass(), TEXT("AssetEnumCanonical"),
 			{TEXT("DefaultValue"), TEXT("EnumName"), TEXT("EnumType")});
 		Passed &= bCanonical;
 		if (bCanonical)
 		{
 			const FAssetDocumentRuntimeValueDto& Properties = Outcome.Value.Elements[0].Elements[3];
-			Passed &= TestEqual(TEXT("H0 sparse Enum DefaultValue is the literal logical enumerator"),
+			Passed &= TestEqual(TEXT("readback sparse Enum DefaultValue is the literal logical enumerator"),
 				Properties.Elements[0].StringValue, FString(TEXT("Sparse")));
-			Passed &= TestEqual(TEXT("H0 asset-backed EnumName remains empty"),
+			Passed &= TestEqual(TEXT("readback asset-backed EnumName remains empty"),
 				Properties.Elements[1].StringValue, FString());
-			Passed &= RequireCanonicalReference(*this, TEXT("H0 sparse asset EnumType"),
+			Passed &= RequireCanonicalReference(*this, TEXT("readback sparse asset EnumType"),
 				Properties.Elements[2], TEXT("AssetRef"), SparseAssetEnum->GetPathName());
 		}
-		Passed &= TestTrue(TEXT("H0 sparse asset Enum canonicalization has no footprint"),
+		Passed &= TestTrue(TEXT("readback sparse asset Enum canonicalization has no footprint"),
 			Before.Equals(*Blackboard) && Transaction.EnlistedFootprint.IsEmpty());
 	}
 
-	// H0 must be independent of prior request/lease lifecycle: the second
+	// The readback must be independent of prior request/lease lifecycle: the second
 	// canonical observation has fresh invocation identity and cannot reuse a
 	// retained UObject, KeyType, Key ID, cache, or handle.
 	{
@@ -4140,7 +4135,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 			MakeEntryReadbackInvocation(*Blackboard, RepeatedTransaction.GetMutationToken(),
 				TEXT("OwnedLocal")), RepeatedHandles, nullptr);
 		Passed &= RequireCanonicalReadbackEntry(*this, Repeated, *Blackboard, TEXT("OwnedLocal"));
-		Passed &= TestTrue(TEXT("H0 repeated readback has no retained footprint"),
+		Passed &= TestTrue(TEXT("readback repeated readback has no retained footprint"),
 			RepeatedTransaction.EnlistedFootprint.IsEmpty() && Before.Equals(*Blackboard));
 	}
 
@@ -4181,7 +4176,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 			MakeEntryReadbackInvocation(*Blackboard, FailureTransaction.GetMutationToken(), UnsupportedName),
 			FailureHandles, nullptr);
 		Passed &= RequireReadbackFailure(*this,
-			FString::Printf(TEXT("H0 unsupported public %s property"), *UnsupportedName), Outcome,
+			FString::Printf(TEXT("readback unsupported public %s property"), *UnsupportedName), Outcome,
 			Before, *Blackboard, FailureTransaction,
 			TEXT("AIProvider.AuthorityUnavailable"));
 	}
@@ -4192,7 +4187,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(
 			MakeEntryReadbackInvocation(*Blackboard, FailureTransaction.GetMutationToken(),
 				TEXT("NativeEnumForbidden")), FailureHandles, nullptr);
-		Passed &= RequireReadbackFailure(*this, TEXT("H0 NativeEnum KeyType"), Outcome,
+		Passed &= RequireReadbackFailure(*this, TEXT("readback NativeEnum KeyType"), Outcome,
 			Before, *Blackboard, FailureTransaction,
 			TEXT("AIProvider.AuthorityUnavailable"));
 	}
@@ -4204,7 +4199,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 			MakeEntryReadbackInvocation(*Blackboard, FailureTransaction.GetMutationToken(), IncompatibleName),
 			FailureHandles, nullptr);
 		Passed &= RequireReadbackFailure(*this,
-			FString::Printf(TEXT("H0 incompatible %s default"), IncompatibleName), Outcome,
+			FString::Printf(TEXT("readback incompatible %s default"), IncompatibleName), Outcome,
 			Before, *Blackboard, FailureTransaction, TEXT("AIProvider.AuthorityUnavailable"));
 	}
 	for (const TCHAR* InvalidEnumName : {
@@ -4216,7 +4211,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 			MakeEntryReadbackInvocation(*Blackboard, FailureTransaction.GetMutationToken(), InvalidEnumName),
 			FailureHandles, nullptr);
 		Passed &= RequireReadbackFailure(*this,
-			FString::Printf(TEXT("H0 invalid exact Enum %s"), InvalidEnumName), Outcome,
+			FString::Printf(TEXT("readback invalid exact Enum %s"), InvalidEnumName), Outcome,
 			Before, *Blackboard, FailureTransaction, TEXT("AIProvider.AuthorityUnavailable"));
 	}
 	{
@@ -4225,7 +4220,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(
 			MakeEntryReadbackInvocation(*Blackboard, FailureTransaction.GetMutationToken(),
 				TEXT("CdoObjectForbidden")), FailureHandles, nullptr);
-		Passed &= RequireReadbackFailure(*this, TEXT("H0 exact stock KeyType CDO"), Outcome,
+		Passed &= RequireReadbackFailure(*this, TEXT("readback exact stock KeyType CDO"), Outcome,
 			Before, *Blackboard, FailureTransaction, TEXT("AIProvider.AuthorityUnavailable"));
 	}
 
@@ -4246,7 +4241,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 			MakeEntryReadbackInvocation(*Blackboard, FailureTransaction.GetMutationToken(), TEXT("OwnedLocal")),
 			FailureHandles, nullptr);
 		Passed &= RequireReadbackFailure(*this,
-			FString::Printf(TEXT("H0 forbidden %s KeyType class"), ForbiddenCase.Label), Outcome,
+			FString::Printf(TEXT("readback forbidden %s KeyType class"), ForbiddenCase.Label), Outcome,
 			Before, *Blackboard, FailureTransaction,
 			TEXT("AIProvider.AuthorityUnavailable"));
 	}
@@ -4258,7 +4253,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(
 			MakeEntryReadbackInvocation(*Blackboard, FailureTransaction.GetMutationToken(), MissingName),
 			FailureHandles, nullptr);
-		Passed &= RequireReadbackFailure(*this, FString::Printf(TEXT("H0 %s key"), MissingName),
+		Passed &= RequireReadbackFailure(*this, FString::Printf(TEXT("readback %s key"), MissingName),
 			Outcome, Before, *Blackboard, FailureTransaction,
 			FCString::Strcmp(MissingName, TEXT("InheritedOnly")) == 0
 				? TEXT("AIProvider.Blackboard.KeyInherited")
@@ -4274,7 +4269,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 			TEXT("/Temp/AssetDocumentAI/NoSuchBlackboard.NoSuchBlackboard");
 		const FAssetDocumentPrimitiveOutcome MissingTarget = Provider->Invoke(
 			UnavailableInvocation, FailureHandles, nullptr);
-		Passed &= RequireReadbackFailure(*this, TEXT("H0 unavailable Blackboard target"),
+		Passed &= RequireReadbackFailure(*this, TEXT("readback unavailable Blackboard target"),
 			MissingTarget, Before, *Blackboard, FailureTransaction,
 			TEXT("AIProvider.Blackboard.EntryReadbackUnavailable"));
 	}
@@ -4287,7 +4282,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 		Malformed.ValueArguments = ObjectValue({TEXT("blackboard_path")},
 			{StringValue(Blackboard->GetPathName())});
 		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(Malformed, FailureHandles, nullptr);
-		Passed &= RequireReadbackFailure(*this, TEXT("H0 malformed envelope"), Outcome,
+		Passed &= RequireReadbackFailure(*this, TEXT("readback malformed envelope"), Outcome,
 			Before, *Blackboard, FailureTransaction);
 	}
 
@@ -4308,7 +4303,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 		SuppliedHandle.HandleArguments = {{TEXT("asset"), Unexpected}};
 		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(
 			SuppliedHandle, FailureHandles, nullptr);
-		Passed &= RequireReadbackFailure(*this, TEXT("H0 supplied handle"), Outcome,
+		Passed &= RequireReadbackFailure(*this, TEXT("readback supplied handle"), Outcome,
 			Before, *Blackboard, FailureTransaction);
 	}
 
@@ -4318,7 +4313,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(
 			MakeEntryReadbackInvocation(*Blackboard, ActiveTransaction.GetMutationToken(), TEXT("OwnedLocal")),
 			FailureHandles, &ActiveTransaction);
-		Passed &= RequireReadbackFailure(*this, TEXT("H0 active transaction"), Outcome,
+		Passed &= RequireReadbackFailure(*this, TEXT("readback active transaction"), Outcome,
 			Before, *Blackboard, ActiveTransaction,
 			TEXT("AIProvider.InvalidTransaction"));
 	}
@@ -4326,7 +4321,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 	UAssetDocumentAITypedPreimageTestZeroFieldKeyType* NonBlackboard =
 		NewObject<UAssetDocumentAITypedPreimageTestZeroFieldKeyType>(
 			Package, TEXT("NonBlackboard"), RF_Public | RF_Standalone | RF_Transactional);
-	if (!TestNotNull(TEXT("H0 loaded non-Blackboard fixture exists"), NonBlackboard))
+	if (!TestNotNull(TEXT("readback loaded non-Blackboard fixture exists"), NonBlackboard))
 	{
 		return false;
 	}
@@ -4336,7 +4331,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(
 			MakeEntryReadbackInvocation(*NonBlackboard, FailureTransaction.GetMutationToken(), TEXT("OwnedLocal")),
 			FailureHandles, nullptr);
-		Passed &= RequireReadbackFailure(*this, TEXT("H0 non-Blackboard target"), Outcome,
+		Passed &= RequireReadbackFailure(*this, TEXT("readback non-Blackboard target"), Outcome,
 			Before, *Blackboard, FailureTransaction,
 			TEXT("AIProvider.Blackboard.EntryReadbackUnavailable"));
 	}
@@ -4351,14 +4346,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIBlackboardV2ReadbackFailureTest
 bool FAssetDocumentAIBlackboardV2ReadbackFailureTest::RunTest(const FString&)
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
-	// Test Design Scan:
-	// - Behavior under test: every H0 rejection is failure-closed and cannot
+	// Test design:
+	// - Behavior under test: every readback rejection is failure-closed and cannot
 	//   create a handle, ChangedSet, transaction footprint, or authored change.
 	// - Candidate technique: boundary/error partitioning across entry identity,
 	//   invocation envelope, runtime context, transaction and target class.
 	// - Risk or gap: a null KeyType or a wrapped public FKey lookup can leave a
 	//   local array match whose UBlackboardData::GetKey identity is different.
-	// - Expected failure reason: H0 is not registered on the current G1 base.
 	const TSharedRef<IAssetDocumentPrimitiveProvider> Provider =
 		CreateAssetDocumentAIPrimitiveProvider();
 	UPackage* Package = CreatePackage(*FString::Printf(
@@ -4372,10 +4366,10 @@ bool FAssetDocumentAIBlackboardV2ReadbackFailureTest::RunTest(const FString&)
 		NewObject<UAssetDocumentAITypedPreimageTestZeroFieldKeyType>(Package);
 	UBlackboardKeyType_Struct* UnsupportedStructKeyType =
 		NewObject<UBlackboardKeyType_Struct>(Blackboard);
-	if (!TestNotNull(TEXT("H0 failure Blackboard fixture exists"), Blackboard)
-		|| !TestNotNull(TEXT("H0 failure owned KeyType fixture exists"), OwnedKeyType)
-		|| !TestNotNull(TEXT("H0 failure non-Blackboard fixture exists"), NonBlackboard)
-		|| !TestNotNull(TEXT("H0 failure unsupported Struct fixture exists"), UnsupportedStructKeyType))
+	if (!TestNotNull(TEXT("readback failure Blackboard fixture exists"), Blackboard)
+		|| !TestNotNull(TEXT("readback failure owned KeyType fixture exists"), OwnedKeyType)
+		|| !TestNotNull(TEXT("readback failure non-Blackboard fixture exists"), NonBlackboard)
+		|| !TestNotNull(TEXT("readback failure unsupported Struct fixture exists"), UnsupportedStructKeyType))
 	{
 		return false;
 	}
@@ -4418,7 +4412,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackFailureTest::RunTest(const FString&)
 			MakeEntryReadbackInvocation(*Blackboard, Transaction.GetMutationToken(), EntryName),
 			Handles, nullptr);
 		Passed &= RequireReadbackFailure(*this,
-			FString::Printf(TEXT("H0 %s entry identity"), EntryName), Outcome,
+			FString::Printf(TEXT("readback %s entry identity"), EntryName), Outcome,
 			Before, *Blackboard, Transaction, TEXT("AIProvider.AuthorityUnavailable"));
 	}
 
@@ -4429,7 +4423,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackFailureTest::RunTest(const FString&)
 			*Blackboard, Transaction.GetMutationToken(), TEXT("OwnedLocal"),
 			EAssetDocumentRuntimeRequestPhase::Apply);
 		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(WrongPhase, Handles, nullptr);
-		Passed &= RequireExactFailureTerminal(*this, TEXT("H0 disallowed Apply phase"), Outcome,
+		Passed &= RequireExactFailureTerminal(*this, TEXT("readback disallowed Apply phase"), Outcome,
 			Before, *Blackboard, Transaction, TEXT("AIProvider.InvalidContext"));
 	}
 
@@ -4442,7 +4436,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackFailureTest::RunTest(const FString&)
 			MakeEntryReadbackInvocation(*Blackboard, Transaction.GetMutationToken(), TEXT("OwnedLocal")),
 			Handles, nullptr);
 		GIsEditor = bPreviousEditor;
-		Passed &= RequireReadbackFailure(*this, TEXT("H0 non-Editor context"), Outcome,
+		Passed &= RequireReadbackFailure(*this, TEXT("readback non-Editor context"), Outcome,
 			Before, *Blackboard, Transaction, TEXT("AIProvider.InvalidContext"));
 	}
 
@@ -4454,7 +4448,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackFailureTest::RunTest(const FString&)
 		Malformed.ValueArguments = ObjectValue(
 			{TEXT("blackboard_path")}, {StringValue(Blackboard->GetPathName())});
 		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(Malformed, Handles, nullptr);
-		Passed &= RequireReadbackFailure(*this, TEXT("H0 malformed failure envelope"), Outcome,
+		Passed &= RequireReadbackFailure(*this, TEXT("readback malformed failure envelope"), Outcome,
 			Before, *Blackboard, Transaction);
 	}
 
@@ -4466,7 +4460,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackFailureTest::RunTest(const FString&)
 		InvalidRuntimeValue.ValueArguments = {};
 		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(
 			InvalidRuntimeValue, Handles, nullptr);
-		Passed &= RequireExactFailureTerminal(*this, TEXT("H0 invalid Runtime value"), Outcome,
+		Passed &= RequireExactFailureTerminal(*this, TEXT("readback invalid Runtime value"), Outcome,
 			Before, *Blackboard, Transaction, TEXT("AIProvider.InvalidValueShape"));
 	}
 
@@ -4486,7 +4480,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackFailureTest::RunTest(const FString&)
 		Unexpected.Access = EAssetDocumentHandleAccess::Mutable;
 		WithHandle.HandleArguments = {{TEXT("asset"), Unexpected}};
 		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(WithHandle, Handles, nullptr);
-		Passed &= RequireExactFailureTerminal(*this, TEXT("H0 supplied-handle failure envelope"), Outcome,
+		Passed &= RequireExactFailureTerminal(*this, TEXT("readback supplied-handle failure envelope"), Outcome,
 			Before, *Blackboard, Transaction, TEXT("AIProvider.InvalidHandle"));
 	}
 
@@ -4496,7 +4490,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackFailureTest::RunTest(const FString&)
 		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(
 			MakeEntryReadbackInvocation(*Blackboard, ActiveTransaction.GetMutationToken(), TEXT("OwnedLocal")),
 			Handles, &ActiveTransaction);
-		Passed &= RequireReadbackFailure(*this, TEXT("H0 active-transaction failure envelope"), Outcome,
+		Passed &= RequireReadbackFailure(*this, TEXT("readback active-transaction failure envelope"), Outcome,
 			Before, *Blackboard, ActiveTransaction, TEXT("AIProvider.InvalidTransaction"));
 	}
 
@@ -4508,7 +4502,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackFailureTest::RunTest(const FString&)
 		Unavailable.ValueArguments.Elements[0].StringValue =
 			TEXT("/Temp/AssetDocumentAI/NoSuchBlackboard.NoSuchBlackboard");
 		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(Unavailable, Handles, nullptr);
-		Passed &= RequireReadbackFailure(*this, TEXT("H0 unavailable target failure envelope"), Outcome,
+		Passed &= RequireReadbackFailure(*this, TEXT("readback unavailable target failure envelope"), Outcome,
 			Before, *Blackboard, Transaction,
 			TEXT("AIProvider.Blackboard.EntryReadbackUnavailable"));
 	}
@@ -4519,7 +4513,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackFailureTest::RunTest(const FString&)
 		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(
 			MakeEntryReadbackInvocation(*NonBlackboard, Transaction.GetMutationToken(), TEXT("OwnedLocal")),
 			Handles, nullptr);
-		Passed &= RequireReadbackFailure(*this, TEXT("H0 non-Blackboard failure envelope"), Outcome,
+		Passed &= RequireReadbackFailure(*this, TEXT("readback non-Blackboard failure envelope"), Outcome,
 			Before, *Blackboard, Transaction,
 			TEXT("AIProvider.Blackboard.EntryReadbackUnavailable"));
 	}
@@ -4534,16 +4528,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIBlackboardV2UpdateExistingTest,
 bool FAssetDocumentAIBlackboardV2UpdateExistingTest::RunTest(const FString&)
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: the private prerequisite updates one same-class
 	//   owned-local entry through the verified AI mutable-asset lifecycle.
 	// - Candidate technique: lifecycle state transition.
 	// - Risk or gap: a property-only update can appear successful while omitting
 	//   entry metadata or bypassing the transaction-owned lifecycle.
-	// - Next RED test: a complete same-class state transition.
+	// - Test: a complete same-class state transition.
 	// - Expected observable outcome: all requested authored fields change
 	//   together and the operation returns success.
-	// - Expected failure reason: the metadata forward-write lifecycle is absent.
 	UPackage* Package = CreatePackage(*FString::Printf(
 		TEXT("/Temp/AssetDocumentAI/BlackboardV2UpdateExisting_%s"),
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits)));
@@ -4601,9 +4594,9 @@ bool FAssetDocumentAIBlackboardV2UpdateExistingTest::RunTest(const FString&)
 	{
 		const FString ActualDiagnostic = PublicOutcome.Diagnostics.IsEmpty()
 			? TEXT("<none>") : PublicOutcome.Diagnostics[0].Code;
-		AddInfo(FString::Printf(TEXT("public update-existing pre-GREEN diagnostic: %s"),
+		AddInfo(FString::Printf(TEXT("public update-existing diagnostic: %s"),
 			*ActualDiagnostic));
-		Passed &= TestTrue(TEXT("public update-existing RED reaches the absent registration"),
+		Passed &= TestTrue(TEXT("public update-existing failure reaches the absent registration"),
 			HasDiagnostic(PublicOutcome, TEXT("GenericProvider.UnknownPrimitive")));
 	}
 	if (PublicOutcome.Status == EAssetDocumentPrimitiveOutcomeStatus::Succeeded)
@@ -4626,7 +4619,7 @@ bool FAssetDocumentAIBlackboardV2UpdateExistingTest::RunTest(const FString&)
 			&& !Blackboard->GetOutermost()->IsDirty());
 	}
 
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: public same-class update writes an owned Struct KeyType's
 	//   complete canonical DefaultValue and returns its exact canonical entry/readback.
 	// - Risk or gap: generic leaf writes can reject the admitted Struct DTO before any
@@ -4723,10 +4716,10 @@ bool FAssetDocumentAIBlackboardV2UpdateExistingTest::RunTest(const FString&)
 	{
 		const FString ActualDiagnostic = StructOutcome.Diagnostics.IsEmpty()
 			? TEXT("<none>") : StructOutcome.Diagnostics[0].Code;
-		AddInfo(FString::Printf(TEXT("public Struct update-existing pre-GREEN diagnostic: %s"),
+		AddInfo(FString::Printf(TEXT("public Struct update-existing diagnostic: %s"),
 			*ActualDiagnostic));
 		StructPassed &= RequireExactFailureTerminal(*this,
-			TEXT("public Struct same-class update-existing pre-GREEN terminal"), StructOutcome,
+			TEXT("public Struct same-class update-existing terminal"), StructOutcome,
 			StructBefore, *StructBlackboard, StructTransaction,
 			TEXT("AIProvider.AuthorityUnavailable"));
 		TArray<FName> ActualStructNames;
@@ -4737,7 +4730,7 @@ bool FAssetDocumentAIBlackboardV2UpdateExistingTest::RunTest(const FString&)
 			PreservedStructKeyType != nullptr
 				? PreservedStructKeyType->DefaultValue.GetPtr<FAssetDocumentAIBlackboardCanonicalStructNested>()
 				: nullptr;
-		StructPassed &= TestTrue(TEXT("public Struct RED preserves pointer/default/order and clean package"),
+		StructPassed &= TestTrue(TEXT("public Struct failure preserves pointer/default/order and clean package"),
 			PreservedStructKeyType == OriginalStructKeyType
 			&& PreservedValue != nullptr && PreservedValue->Count == 3
 			&& PreservedValue->Label == TEXT("before")
@@ -4775,16 +4768,15 @@ bool FAssetDocumentAIBlackboardV2UpdateExistingTest::RunTest(const FString&)
 	}
 	Passed &= StructPassed;
 
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: an admitted same-class Struct update transitions one
 	//   valid native FInstancedStruct DefaultValue to the canonical Null state.
 	// - Candidate technique: finite-algebra state transition (valid -> Null).
 	// - Risk or gap: the live write path can prepare Null but reject its invalid
 	//   scratch at apply time, leaving the public UpdateExisting row incomplete.
-	// - Next RED test: a changed Null DefaultValue together with changed metadata.
+	// - Test: a changed Null DefaultValue together with changed metadata.
 	// - Expected observable outcome: complete public entry/order evidence, the
 	//   same KeyType instance, an invalid live DefaultValue, and typed rollback.
-	// - Expected failure reason: the current apply boundary rejects Null scratch.
 	UPackage* NullStructPackage = CreatePackage(*FString::Printf(
 		TEXT("/Temp/AssetDocumentAI/BlackboardV2UpdateExistingStructNull_%s"),
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits)));
@@ -4899,7 +4891,7 @@ bool FAssetDocumentAIBlackboardV2UpdateExistingTest::RunTest(const FString&)
 	}
 	Passed &= NullStructPassed;
 
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: an exact same-class Struct update is a no-op when
 	//   native DefaultValue, metadata, and local order already equal the literal DTO.
 	// - Risk or gap: a canonical Struct no-op can still capture a transaction or
@@ -5225,7 +5217,7 @@ bool FAssetDocumentAIBlackboardV2UpdateExistingFailureTest::RunTest(const FStrin
 				Blackboard->GetOutermost()->IsDirty());
 	};
 
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: a syntactically valid public Struct update rejects a
 	//   malformed nested admitted DTO at canonical WRITE preflight.
 	// - Risk or gap: a malformed nested value can be mistaken for an invocation
@@ -5905,13 +5897,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIBlackboardV2ParentReadbackTest,
 bool FAssetDocumentAIBlackboardV2ParentReadbackTest::RunTest(const FString&)
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: Parent is a single canonical path/null observation.
 	// - Candidate technique: equivalence partitioning for non-null and null Parent.
 	// - Risk or gap: a richer v1-style or inherited aggregate may appear valid.
-	// - Next RED test: exact one-member output for a live exact Blackboard.
+	// - Test: exact one-member output for a live exact Blackboard.
 	// - Expected observable outcome: canonical parent_path_or_null and no mutation.
-	// - Expected failure reason: parent.readback.v2 has no descriptor or binding.
 	const TSharedRef<IAssetDocumentPrimitiveProvider> Provider =
 		CreateAssetDocumentAIPrimitiveProvider();
 	UPackage* Package = CreatePackage(*FString::Printf(
@@ -5952,14 +5943,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIBlackboardV2ParentReadbackFailu
 bool FAssetDocumentAIBlackboardV2ParentReadbackFailureTest::RunTest(const FString&)
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: all rejected Parent observations are failure-closed.
 	// - Candidate technique: error partitioning across envelope, phase, runtime,
 	//   transaction and exact-target identity.
 	// - Risk or gap: a read-only descriptor could accidentally admit HA/Atomic.
-	// - Next RED test: one representative from each rejected input/context class.
+	// - Test: one representative from each rejected input/context class.
 	// - Expected observable outcome: empty output and no footprint or dirty state.
-	// - Expected failure reason: parent.readback.v2 has no descriptor or binding.
 	const TSharedRef<IAssetDocumentPrimitiveProvider> Provider =
 		CreateAssetDocumentAIPrimitiveProvider();
 	UPackage* Package = CreatePackage(*FString::Printf(
@@ -6157,7 +6147,7 @@ bool FAssetDocumentAIBlackboardV2AddSuccessTest::RunTest(const FString&)
 	Passed &= RunAdd(TEXT("entry add end index"), TEXT("Tail"), 4,
 		{TEXT("Head"), TEXT("First"), TEXT("Middle"), TEXT("Last"), TEXT("Tail")});
 
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: public staged add publishes one complete admitted
 	//   Struct KeyType entry and rolls it back without leaving a staged child.
 	// - Candidate technique: state transition with exact public DTO and rollback
@@ -6165,7 +6155,7 @@ bool FAssetDocumentAIBlackboardV2AddSuccessTest::RunTest(const FString&)
 	// - Risk or gap: generic leaf writes can reject Struct DefaultValue before
 	//   staging, or publication can appear to succeed without exact canonical
 	//   output, propagated state, or Atomic cleanup.
-	// - Next RED test: add StructCanonical at the authored-local end, then roll
+	// - Test: add StructCanonical at the authored-local end, then roll
 	//   back that same successful transaction.
 	// - Expected observable outcome: exact entry/order DTO, one LocalKeys
 	//   footprint, an owned native Struct value, and no post-rollback residue.
@@ -6206,7 +6196,7 @@ bool FAssetDocumentAIBlackboardV2AddSuccessTest::RunTest(const FString&)
 	{
 		const FString FirstDiagnostic = StructAddedOutcome.Diagnostics.IsEmpty()
 			? TEXT("<none>") : StructAddedOutcome.Diagnostics[0].Code;
-		AddInfo(FString::Printf(TEXT("entry add StructCanonical pre-GREEN diagnostic: %s"),
+		AddInfo(FString::Printf(TEXT("entry add StructCanonical diagnostic: %s"),
 			*FirstDiagnostic));
 		if (StructAddedTransaction.ActionEnlistCount != 0)
 		{
@@ -6361,7 +6351,7 @@ bool FAssetDocumentAIBlackboardV2AddSaveReloadTest::RunTest(const FString&)
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
 	const FString PackageName = FString::Printf(
-		TEXT("/Game/AssetDocumentAITask4a/BlackboardAddReload_%s"),
+		TEXT("/Game/AssetDocumentAIBlackboardAdd/BlackboardAddReload_%s"),
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 	const FString AssetName = FPackageName::GetLongPackageAssetName(PackageName);
 	const FString ObjectPath = PackageName + TEXT(".") + AssetName;
@@ -6695,17 +6685,16 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIBlackboardV2ReplaceClassSuccess
 bool FAssetDocumentAIBlackboardV2ReplaceClassSuccessTest::RunTest(const FString&)
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: replace one owned-local slot with a distinct exact
 	//   KeyType class and complete entry state while preserving name/order.
 	// - Candidate technique: state-transition plus exact output/rollback oracle.
 	// - Risk or gap: UPDATE dispatch, append/reorder, or loss of the old KeyType
 	//   can all look superficially successful.
-	// - Next RED test: replace the middle entry, inspect child derived state, then
+	// - Test: replace the middle entry, inspect child derived state, then
 	//   roll the completed operation back.
 	// - Expected observable outcome: exact full DTO, five actual ChangedSet paths,
 	//   stable slot/order, new class forward and old exact instance after rollback.
-	// - Expected failure reason: replace_class.v2 has no descriptor or binding.
 	UPackage* Package = CreatePackage(*FString::Printf(
 		TEXT("/Temp/AssetDocumentAI/BlackboardV2ReplaceClassSuccess_%s"),
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits)));
@@ -6829,7 +6818,7 @@ bool FAssetDocumentAIBlackboardV2ReplaceClassSuccessTest::RunTest(const FString&
 		CountDirectBlackboardKeyTypes(*Blackboard), DirectKeyTypesBefore);
 
 	// StructCanonicalBothDirections (SC-REP-001).
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: replacing an owned local non-Struct KeyType with the
 	//   exact stock Struct KeyType writes the admitted nested DefaultValue and
 	//   preserves the complete replace/rollback contract.
@@ -6837,11 +6826,9 @@ bool FAssetDocumentAIBlackboardV2ReplaceClassSuccessTest::RunTest(const FString&
 	//   and native-value oracles.
 	// - Risk or gap: a refusal, generic property write, incomplete entry, or a
 	//   rollback that restores only the slot can look like a valid replacement.
-	// - Next RED test: non-Struct -> exact Struct with Count=41 and Label=desired.
+	// - Test: non-Struct -> exact Struct with Count=41 and Label=desired.
 	// - Expected observable outcome: success, exact entry/order, one action and
 	//   footprint, staged Struct ownership/value, child refresh and full rollback.
-	// - Expected failure reason: the current product rejects the forward Struct
-	//   materialization at AIProvider.Blackboard.EntryMaterializationUnavailable.
 	UPackage* ToStructPackage = CreatePackage(*FString::Printf(
 		TEXT("/Temp/AssetDocumentAI/BlackboardV2ReplaceClassToStruct_%s"),
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits)));
@@ -6966,13 +6953,13 @@ bool FAssetDocumentAIBlackboardV2ReplaceClassSuccessTest::RunTest(const FString&
 		CountDirectBlackboardKeyTypes(*ToStructBlackboard), ToStructDirectKeyTypesBefore);
 	Passed &= ToStructPassed;
 
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: replacing an owned exact stock Struct with Int uses
 	//   released READ for the old value and never enters canonical WRITE.
 	// - Candidate technique: directional state-transition partition.
 	// - Risk or gap: forward-write routing can accidentally be used for the old
 	//   Struct pre-state, or rollback can lose its native FInstancedStruct value.
-	// - Next RED test: exact Struct -> non-Struct with independent fixture.
+	// - Test: exact Struct -> non-Struct with independent fixture.
 	// - Expected observable outcome: success, exact entry/order and rollback of
 	//   the old Struct pointer/value while both WRITE audits remain NotEntered.
 	// - Expected failure reason: a regression would enter canonical WRITE or
@@ -7174,7 +7161,7 @@ bool FAssetDocumentAIBlackboardV2ReplaceClassSaveReloadTest::RunTest(const FStri
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
 	const FString PackageName = FString::Printf(
-		TEXT("/Game/AssetDocumentAITask4b/BlackboardReplaceClassReload_%s"),
+		TEXT("/Game/AssetDocumentAIBlackboardReplaceClass/BlackboardReplaceClassReload_%s"),
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 	const FString AssetName = FPackageName::GetLongPackageAssetName(PackageName);
 	const FString ObjectPath = PackageName + TEXT(".") + AssetName;
@@ -8118,7 +8105,7 @@ bool FAssetDocumentAIBlackboardV2RemoveSaveReloadTest::RunTest(const FString&)
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
 	// RetainedAdmittedStructCanonical (SC-REM-003).
 	const FString PackageName = FString::Printf(
-		TEXT("/Game/AssetDocumentAITask4c/BlackboardRemoveStructReload_%s"),
+		TEXT("/Game/AssetDocumentAIBlackboardRemove/BlackboardRemoveStructReload_%s"),
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 	const FString AssetName = FPackageName::GetLongPackageAssetName(PackageName);
 	const FString ObjectPath = PackageName + TEXT(".") + AssetName;
@@ -8385,7 +8372,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIBlackboardV2ParentSetTest,
 bool FAssetDocumentAIBlackboardV2ParentSetTest::RunTest(const FString&)
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: a real Parent change uses the two ordered rollback
 	//   boundaries, returns the exact one-member DTO/ChangedSet, and a same-parent
 	//   request is a zero-action, zero-footprint, zero-dirty no-op.
@@ -8393,10 +8380,9 @@ bool FAssetDocumentAIBlackboardV2ParentSetTest::RunTest(const FString&)
 	//   rollback and identity no-op.
 	// - Risk or gap: v1's mutable overload/richer output or an unnecessary write
 	//   can superficially appear successful.
-	// - Next RED test: change ParentA to ParentB, roll back, then request ParentA.
+	// - Test: change ParentA to ParentB, roll back, then request ParentA.
 	// - Expected observable outcome: exact Parent/derived closure and dirty-last
 	//   rollback, followed by a no-op with empty ChangedSet.
-	// - Expected failure reason: parent.set.v2 has no descriptor or binding.
 	const TSharedRef<IAssetDocumentPrimitiveProvider> Provider =
 		CreateAssetDocumentAIPrimitiveProvider();
 	UPackage* Package = CreatePackage(*FString::Printf(
@@ -8554,17 +8540,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIBlackboardV2ParentSetFailureTes
 bool FAssetDocumentAIBlackboardV2ParentSetFailureTest::RunTest(const FString&)
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: invalid inputs/authority fail before write, and target
 	//   identity drift after footprint fails before success with Atomic rollback.
 	// - Candidate technique: error partitioning plus identity state transition.
 	// - Risk or gap: final readback may prove only Parent value, while a missing
 	//   exact Parent handle may be misclassified as a missing domain Parent.
-	// - Next RED test: real row-owned handle miss and post-footprint target rename.
+	// - Test: real row-owned handle miss and post-footprint target rename.
 	// - Expected observable outcome: AuthorityUnavailable before capture; target
 	//   drift fails with empty outputs and rollback restores Parent/derived closure.
-	// - Expected failure reason: handle miss returns ParentUnavailable and target
-	//   identity is not revalidated during completion.
 	const TSharedRef<IAssetDocumentPrimitiveProvider> Provider =
 		CreateAssetDocumentAIPrimitiveProvider();
 	UPackage* Package = CreatePackage(*FString::Printf(
@@ -8919,13 +8903,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIBlackboardV2LocalKeysReadbackTe
 bool FAssetDocumentAIBlackboardV2LocalKeysReadbackTest::RunTest(const FString&)
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: owned local names are returned in stored local order.
 	// - Candidate technique: equivalence partitioning for non-empty and empty local lists.
 	// - Risk or gap: sorting or inherited-name aggregation can appear canonical.
-	// - Next RED test: an intentionally non-lexicographic local sequence.
+	// - Test: an intentionally non-lexicographic local sequence.
 	// - Expected observable outcome: exact ordered_local_key_names with no mutation.
-	// - Expected failure reason: local_keys.readback.v2 has no descriptor or binding.
 	const TSharedRef<IAssetDocumentPrimitiveProvider> Provider =
 		CreateAssetDocumentAIPrimitiveProvider();
 	UPackage* Package = CreatePackage(*FString::Printf(
@@ -8964,14 +8947,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIBlackboardV2LocalKeysReadbackFa
 bool FAssetDocumentAIBlackboardV2LocalKeysReadbackFailureTest::RunTest(const FString&)
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: all invalid local-name observations fail closed.
 	// - Candidate technique: error partitioning across DTO, phase, handle,
 	//   transaction, exact-target identity and local-name validity.
 	// - Risk or gap: a read-only descriptor might admit HA/Atomic or emit a value.
-	// - Next RED test: representative invalid inputs and malformed stored evidence.
+	// - Test: representative invalid inputs and malformed stored evidence.
 	// - Expected observable outcome: empty output, no footprint and stable terminal code.
-	// - Expected failure reason: local_keys.readback.v2 has no descriptor or binding.
 	const TSharedRef<IAssetDocumentPrimitiveProvider> Provider =
 		CreateAssetDocumentAIPrimitiveProvider();
 	UPackage* Package = CreatePackage(*FString::Printf(
@@ -9908,18 +9890,16 @@ bool FAssetDocumentAIBlackboardKeyTypeStructCanonicalWriteTest::RunTest(const FS
 		&& TestTrue(TEXT("WR001.PathBudget leaves the live target unchanged"),
 			PathBudgetBefore.Equals(*Blackboard));
 
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: each frozen canonical WRITE caller performs exactly
 	//   one balanced DefaultValue lifecycle, while pre-live rejection stays inert
 	//   and an after-assignment rejection still dispatches its matching post-edit.
 	// - Candidate technique: lifecycle state transition with failure injection.
 	// - Risk or gap: the native assignment can bypass observation, omit post-edit,
 	//   or write after a failed prepared identity recheck.
-	// - Next RED test: three successful callers, then identity and injected failure cells.
+	// - Test: three successful callers, then identity and injected failure cells.
 	// - Expected observable outcome: one exact event per success; zero before-live
 	//   events; and an after-assignment event that has both lifecycle halves.
-	// - Expected failure reason: the current canonical WRITE path has no lifecycle
-	//   audit emission or failure-injection handling.
 	const FAssetDocumentRuntimeValueDto LifecycleDesired = ObjectValue({TEXT("DefaultValue")},
 		{ObjectValue({TEXT("Properties"), TEXT("Struct")},
 			{ObjectValue({TEXT("Count"), TEXT("Label")},
@@ -10099,13 +10079,11 @@ bool FAssetDocumentAIBlackboardKeyTypeStructCanonicalReadTest::RunTest(const FSt
 {
 	using namespace AssetDocumentAIBlackboardLifecycleTests;
 	using namespace AssetDocumentAIBlackboardKeyTypeStructCanonicalRead;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior: the private no-load codec emits the frozen exact DTO for one
 	//   representative containing every admitted scalar/reference/container kind.
 	// - Technique: equivalence partition with literal expected output; ordering
-	//   and closed-terminal partitions follow as separate RED cycles.
-	// - Expected RED: the current FVector-only GREEN refuses this aggregate value
-	//   at the first unsupported admitted field and publishes no partial DTO.
+	//   and closed-terminal partitions are covered by separate tests.
 	UPackage* Package = CreatePackage(*FString::Printf(
 		TEXT("/Temp/AssetDocumentAI/StructCanonical_%s"),
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits)));

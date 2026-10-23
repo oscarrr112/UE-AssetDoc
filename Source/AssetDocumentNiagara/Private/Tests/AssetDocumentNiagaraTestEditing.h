@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -609,7 +610,7 @@ struct FRoundTripTiming
 // The extract of Source (an asset of the test folder) written as a Create document of a new system: emitters with a
 // Parent are added from it, lightweight ones as lightweight, the others empty, and every region is authored
 // (stacks, inputs, handlers, stages, renderers, properties). The created system's document equals the source's
-// (Set Parameters names masked), and re-applying it is a no-op. System scratch pads are added and authored (N4);
+// (Set Parameters names masked), and re-applying it is a no-op. System scratch pads are added and authored;
 // emitters with scratch pads and no Parent cannot be made by the system editor (their pads come with an emitter asset),
 // systems with legacy module names (LegacyModuleNames), deprecated data interface functions or Vector / Position links
 // without a conversion node in a scratch pad cannot be created through the editor (OutNote).

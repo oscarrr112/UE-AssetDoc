@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // audio.metasound.compile.v1 (design §5.1): what the MetaSound editor does after its edits.
 //   1. Register: UMetaSoundEditorSubsystem::RegisterGraphWithFrontend(Asset, bForceViewSync=true)

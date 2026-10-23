@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.Shutdown.ServiceDiscoveryCoalesced: external route changes (the AssetDocument and level
 //   routes register about twenty at startup, and unregister them at shutdown) bind or unbind only that route and
@@ -47,7 +48,7 @@ bool FAssetDocumentServiceDiscoveryCoalescedTest::RunTest(const FString& Paramet
 
 	TArray<FDelegateHandle> Handles;
 	const TArray<FString> Paths = {
-		TEXT("/assetdoc/test/p62/one"), TEXT("/assetdoc/test/p62/two"), TEXT("/assetdoc/test/p62/three")};
+		TEXT("/assetdoc/test/discovery/one"), TEXT("/assetdoc/test/discovery/two"), TEXT("/assetdoc/test/discovery/three")};
 	for (const FString& Path : Paths)
 	{
 		FAssetDocumentExternalRoute Route;
@@ -87,7 +88,7 @@ bool FAssetDocumentServiceDiscoveryCoalescedTest::RunTest(const FString& Paramet
 	if (bRunning)
 	{
 		const FString Text = ReadDiscoveryFile();
-		TestFalse(TEXT("discovery file no longer lists the test routes"), Text.Contains(TEXT("/assetdoc/test/p62/")));
+		TestFalse(TEXT("discovery file no longer lists the test routes"), Text.Contains(TEXT("/assetdoc/test/discovery/")));
 		TestTrue(TEXT("discovery file still lists the AssetDocument routes"), Text.Contains(TEXT("/assetdoc/assetdocument/validate")));
 	}
 	return true;

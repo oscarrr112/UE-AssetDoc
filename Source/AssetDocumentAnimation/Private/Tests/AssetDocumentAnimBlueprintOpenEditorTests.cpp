@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.AnimBlueprint.OpenEditorApply: an Anim Blueprint open in the Animation Blueprint
 // editor (Persona) takes an apply that adds a variable, a Two Way Blend bound to it in the AnimGraph and a state

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Open-editor apply of Physics Assets (Runtime/AssetDocumentOpenEditor.h, design §P3): close, apply, reopen
 // (PhysicsAsset.EditorReopened). The Physics Asset Editor keeps its selection as body / constraint / shape indices, a

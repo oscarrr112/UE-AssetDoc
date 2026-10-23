@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // rig.controlrig.read.v1: the authored state of a Control Rig (docs/architecture/asset-document-controlrig-design.md
 // §2.1, §3) as document-ready records. The rig is read as stored after load (PostLoad / HandlePackageDone already

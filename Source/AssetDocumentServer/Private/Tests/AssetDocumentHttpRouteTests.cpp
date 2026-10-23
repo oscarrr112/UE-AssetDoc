@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.HttpServer.Routes: the routes the HTTP server binds itself. health, context, screenshot,
 //   execute and delete answer (requests to the running editor's server); the routes of the removed legacy generator

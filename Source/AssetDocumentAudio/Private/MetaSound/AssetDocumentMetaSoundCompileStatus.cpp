@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Compile status of a MetaSound (design §5.1 / §5.2): the node messages the MetaSound editor's validation shows
 // (FGraphBuilder::ValidateGraph), derived from public builder queries on every page of the normalised document,

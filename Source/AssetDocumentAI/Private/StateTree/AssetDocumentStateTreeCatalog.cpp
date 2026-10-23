@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // StateTree primitives (ai.state_tree.*, served by the AI provider "ai", owner AI). Editor-equivalent paths:
 //   states             -> FStateTreeViewModel (AddState / AddChildState / MoveSelectedStates /

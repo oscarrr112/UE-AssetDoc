@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.HttpServer.BindFailure: after an editor crash and restart the port was
 //   still held, the HTTP server did not bind, and the editor ran on with only a log line. Now Start reports false and

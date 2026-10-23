@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // ai.state_tree.compile.v1 and the StateTree editor hooks:
 //   * compile: the editor's Compile button (UStateTreeEditingSubsystem::CompileStateTree, which runs

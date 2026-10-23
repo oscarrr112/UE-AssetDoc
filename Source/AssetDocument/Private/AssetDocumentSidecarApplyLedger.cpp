@@ -1,10 +1,11 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentSidecarApplyLedger.h"
 
+#include "AssetDocumentSidecar.h"
 #include "Dom/JsonObject.h"
 #include "HAL/FileManager.h"
-#include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/SecureHash.h"
 #include "UObject/Package.h"
@@ -13,7 +14,8 @@
 FString FAssetDocumentSidecarApplyLedger::HashFile(const FString& FilePath)
 {
 	TArray<uint8> Bytes;
-	if (FilePath.IsEmpty() || !FFileHelper::LoadFileToArray(Bytes, *FilePath, FILEREAD_Silent))
+	FString Error;
+	if (FilePath.IsEmpty() || !FAssetDocumentSidecar::LoadBytes(FilePath, Bytes, Error))
 	{
 		return FString();
 	}

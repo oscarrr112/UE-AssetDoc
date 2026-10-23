@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #include "AssetDocumentGenericRuntimeRoute.h"
 #include "AssetDocumentTestDirectoryBlock.h"
 #include "AssetDocumentGenericRuntimeBootstrap.h"
@@ -203,7 +204,7 @@ struct FHarness
   const TArray<FAssetDocumentMutationPreparationBinding> PreparationBindings{
    {Providers[0], PrepareAssetDocumentEditorMutationBatch}};
   const auto Selected = BuildAssetDocumentRequiredPrimitiveProjection(Providers, Requirements,
-   GetG1FrozenAuthorityExceptionRecords(), PreparationBindings,
+   GetFrozenAuthorityExceptionRecords(), PreparationBindings,
    [this](const FString& Provider, const FAssetDocumentPrimitiveInvocation& Invocation,
     IAssetDocumentHandleResolver& Handles, IAssetDocumentAtomicTransaction* Transaction,
     TFunctionRef<FAssetDocumentPrimitiveOutcome()> Forward)
@@ -214,7 +215,7 @@ struct FHarness
   FAssetDocumentPythonRevisionCandidate Candidate;
   Candidate.RuntimeRevision = 1; Candidate.EntryModuleRelativePath = TEXT("bt_production_entry.py");
   Candidate.Providers = Projection->Providers; Candidate.RequiredPrimitives = Projection->Requirements;
-  Candidate.AuthorityCatalog.Append(GetG1FrozenAuthorityExceptionRecords());
+  Candidate.AuthorityCatalog.Append(GetFrozenAuthorityExceptionRecords());
   const auto Activated = Runtime->TryActivateRevision(Candidate);
   for (const auto& D : Activated.Diagnostics) Test.AddInfo(D.Code + TEXT(": ") + D.Message);
   if (!Test.TestTrue(TEXT("real BT Profile runtime activates"), Activated.bActivated)) return false;

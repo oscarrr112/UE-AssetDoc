@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Functions declared on an interface, called on a class that implements it
 // (IEnhancedInputSubsystemInterface's AddMappingContext / GetUserSettings on the Enhanced Input local player

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // pin / unpin: the World Outliner's Pin and Unpin of World Partition actors
 // (UWorldPartition::PinActors / UnpinActors). Post-commit helpers (design §3.1 step 9,

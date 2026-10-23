@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.Blueprint.OpenEditorApply: an Actor Blueprint open in the Blueprint editor, with a
 // function graph's tab open and a component selected, takes an apply that adds a function graph, a variable, a

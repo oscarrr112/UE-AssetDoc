@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.Niagara.Profile.*: the Profiles' reads through the production Service (system Apply:
 // AssetDocumentNiagaraApplyTests.cpp; emitter asset and collection Apply: AssetDocumentNiagaraEmitterAssetTests.cpp).

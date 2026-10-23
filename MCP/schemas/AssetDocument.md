@@ -15,7 +15,7 @@ The document `Class` picks a **profile**: an exact one (its section, see "Profil
 
 ## Sidecar Files And The File Watcher
 
-A sidecar is `<Content dir>/<path>/<AssetName>.assetdoc.json`: `/Game/AI/BB_Enemy` is `<Content dir>/AI/BB_Enemy.assetdoc.json`. `health_check` reports the editor's `contentDir`. The document `Target` must equal the path-derived `/Game` target; a file outside `Content` fails with `Unable to resolve expected Target from sidecar file`. There is no inline apply.
+A sidecar is `<Content dir>/<path>/<AssetName>.assetdoc.json`: `/Game/AI/BB_Enemy` is `<Content dir>/AI/BB_Enemy.assetdoc.json`. `health_check` gives `contentDir`. Its `Target` must equal the path-derived `/Game` target; a file outside `Content` (or linked out) fails unread with `Unable to resolve expected Target from sidecar file`. There is no inline apply.
 
 **The editor applies a sidecar as soon as it is written** (about 0.5 s after the file changes, and saves), once per file content. If the watcher already applied this content successfully and the asset is unchanged since, `apply_asset_document_file` returns its result (`applied_by: "file_watcher"`; a `Create` reports the creation, not `TargetExists`); otherwise it applies itself. A failed create leaves no asset and keeps the sidecar (`sidecar_kept: true`): fix it and apply again, or delete it. An apply that changes the asset rewrites the sidecar (`Create` as `CreateOrUpdate`): edit and save it again.
 

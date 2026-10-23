@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "Provider/Blackboard/AssetDocumentAIBlackboardPrimitives.h"
 #include "Provider/Blackboard/AuthorityException/AssetDocumentAIBlackboardStructuralPublication.h"
@@ -51,7 +52,7 @@ FAssetDocumentPrimitiveDescriptor MakeAssetDocumentAIBlackboardLocalKeysReorderV
 	A.SaveReloadEvidenceId = Descriptor.PrimitiveId + TEXT(".provider-no-persistence-fresh-reload.v2");
 	A.FailureInjectionTestIds = {TEXT("UEAssetDoc.AIProvider.BlackboardV2.Reorder.Failure")};
 	A.VerificationTestIds = {TEXT("UEAssetDoc.AIProvider.Authority.PublicSurface"),
-		TEXT("UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceGate"),
+		TEXT("UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceCheck"),
 		TEXT("UEAssetDoc.AIProvider.BlackboardV2.Reorder")};
 	A.SourceMarker = TEXT("ASSETDOCUMENT_AUTHORITY_BRIDGE_ADMISSION(AD.AI.BLACKBOARD.LOCAL-KEYS-PUBLICATION-v1)");
 	A.RawLifecycleAllowlistId = TEXT("ASSETDOCUMENT_AUTHORITY_BRIDGE_CALLSITE(AD.AI.BLACKBOARD.LOCAL-KEYS-PUBLICATION-v1|ai.blackboard.local_keys.reorder.v2)");

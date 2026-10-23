@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -85,7 +86,7 @@ bool FAssetDocumentAnimationFloatCurveStateRoundTripTest::RunTest(const FString&
     using namespace AssetDocumentAnimationFloatCurveStateTests;
     const TArray<FFloatCurve> Native = NativeFixture();
     FAssetDocumentRuntimeValueDto Wire;
-    if (!TestTrue(TEXT("C1 produces wire"), CaptureAnimationFloatCurveSnapshotV2(Native, Wire))) return false;
+    if (!TestTrue(TEXT("snapshot produces wire"), CaptureAnimationFloatCurveSnapshotV2(Native, Wire))) return false;
     TArray<FAssetDocumentAnimationFloatCurveState> Parsed, Captured;
     if (!TestTrue(TEXT("wire parses"), ParseAnimationFloatCurveStateV2(Wire, Parsed))
         || !TestTrue(TEXT("native captures typed"), CaptureAnimationFloatCurveStateV2(Native, Captured))) return false;
@@ -200,7 +201,7 @@ bool FAssetDocumentAnimationFloatCurveStateInvalidTest::RunTest(const FString&)
 {
     using namespace AssetDocumentAnimationFloatCurveStateTests;
     FAssetDocumentRuntimeValueDto Wire;
-    if (!TestTrue(TEXT("C1 fixture wire"), CaptureAnimationFloatCurveSnapshotV2(NativeFixture(), Wire))) return false;
+    if (!TestTrue(TEXT("snapshot fixture wire"), CaptureAnimationFloatCurveSnapshotV2(NativeFixture(), Wire))) return false;
     // Prefix the malformed row with a valid differently named row to exercise
     // all-or-nothing output after one row has already been parsed.
     Wire.Elements.Swap(0, 1);

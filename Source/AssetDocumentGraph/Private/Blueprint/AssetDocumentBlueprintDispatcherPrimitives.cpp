@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Event dispatcher primitives (provider "blueprint"). A dispatcher is a PC_MCDelegate
 // member variable plus its delegate signature graph; both are created and removed

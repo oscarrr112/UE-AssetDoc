@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.TestOnlyTypes: the plugin's test-only reflected types (fixture classes, structs, enums, row structs)
 //   never reach a user's editor session. They live in the test-only modules (LoadingPhase "None"), which the editor

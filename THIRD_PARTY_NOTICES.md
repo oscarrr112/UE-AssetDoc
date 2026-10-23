@@ -12,7 +12,7 @@ The Python code under `Content/Python/` uses the Python standard library and the
 
 ## npm packages (MCP stdio bridge)
 
-The `ue-assetdoc` stdio bridge in `MCP/` depends on one package directly, `@modelcontextprotocol/sdk`, and through it on the packages below. The list is the production closure recorded in `MCP/package-lock.json` (93 packages; `content-type` is installed in two versions). The bridge is an optional component for MCP clients that only start stdio servers; the plugin itself does not need Node.js. The packages are installed by `npm install` and are not copied into this repository. The licence texts are in each package, under `MCP/node_modules/<name>/` after installation.
+The `ue-assetdoc` stdio bridge in `MCP/` depends on one package directly, `@modelcontextprotocol/sdk`, and through it on the packages below. The list is the production closure recorded in `MCP/package-lock.json` (93 packages; `content-type` is installed in two versions). The bridge is an optional component for MCP clients that only start stdio servers; the plugin itself does not need Node.js. The packages are installed by `npm ci` (or `npm install`) and are not copied into this repository. The licence texts are in each package, under `MCP/node_modules/<name>/` after installation.
 
 | Package | Version | Licence | Copyright |
 |---|---|---|---|

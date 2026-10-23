@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """The summarized inspect: one shape for every profile with large inspect details.
 
 ``inspect_asset_document_target`` over HTTP asks for a summary unless the request passes ``detail: true``

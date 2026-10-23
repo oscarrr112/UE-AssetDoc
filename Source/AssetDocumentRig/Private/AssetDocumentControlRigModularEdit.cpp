@@ -1,7 +1,8 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Modular rig ops of rig.controlrig.edit.v1 (docs/architecture/asset-document-controlrig-design.md §3.7, §4.4 step 9,
-// phase CR4) through UModularRigController, the controller the Module Assembly panel, the module drag and drop, the
+// Modular rig ops of rig.controlrig.edit.v1 (docs/architecture/asset-document-controlrig-design.md §3.7, §4.4 step 9)
+// through UModularRigController, the controller the Module Assembly panel, the module drag and drop, the
 // connector widgets and the module Details use, plus the hierarchy import of "Create Control Rig" on a mesh. Undo is
 // off (the edit primitive's own transaction covers the call). The modular controller reports refusals through
 // LogControlRig, which the op captures; its checks (CanConnectConnectorToElements, CanBindModuleVariable,

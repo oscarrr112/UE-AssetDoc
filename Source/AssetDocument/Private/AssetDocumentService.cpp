@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentService.h"
 #include "Runtime/AssetDocumentRuntimeTypes.h"
@@ -53,15 +54,17 @@ TArray<TSharedPtr<FJsonValue>> CollectDiffEntries(const FJsonObject& Payload)
 }
 
 // A sidecar that does not load: Document.DuplicateKey as a diagnostic at the key when that is the cause (two keys of
-// one object that are equal ignoring letter case), otherwise the load error.
+// one object that are equal ignoring letter case), otherwise the load error. The text is read again only through the
+// sidecar check, so a file outside Content is never read for the diagnostic either.
 FAssetDocumentResult ServiceSidecarLoadFailure(const FString& FilePath, const FString& Error)
 {
 	FString Text;
 	FString Path;
 	FString First;
 	FString Second;
+	FString ReadError;
 	FAssetDocumentResult Result = FAssetDocumentResult::Failure(Error);
-	if (FFileHelper::LoadFileToString(Text, *FilePath) && FAssetDocumentJson::FindDuplicateKey(Text, Path, First, Second))
+	if (FAssetDocumentSidecar::LoadText(FilePath, Text, ReadError) && FAssetDocumentJson::FindDuplicateKey(Text, Path, First, Second))
 	{
 		FAssetDocumentDiagnostic Diagnostic;
 		Diagnostic.Code = TEXT("Document.DuplicateKey");

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Shared fixtures of the EnvQuery automation tests (AssetDocumentEnvQueryTests.cpp): /Game targets, the editor-side
 // operations (what the Environment Query editor does on palette drops, Add Test, Details edits, toggles, wires,

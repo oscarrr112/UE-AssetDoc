@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentModule.h"
 #include "AssetDocumentService.h"
@@ -19,7 +20,7 @@ namespace
 FString MakeTarget(const TCHAR* Stem)
 {
 	return FString::Printf(
-		TEXT("/Game/AssetDocumentG3BlackboardData/%s_%s"),
+		TEXT("/Game/AssetDocumentBlackboardDataTests/%s_%s"),
 		Stem,
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 }
@@ -42,7 +43,7 @@ FString MakeKey(
 			? TEXT("{\"DefaultValue\":0.0}")
 			: TEXT("{\"DefaultValue\":0}");
 	return FString::Printf(
-		TEXT("{\"Category\":\"G3\",\"Description\":\"%s\",\"")
+		TEXT("{\"Category\":\"Lifecycle\",\"Description\":\"%s\",\"")
 		TEXT("KeyTypeClass\":{\"Kind\":\"ClassRef\",\"Path\":\"%s\"},")
 		TEXT("\"KeyTypeProperties\":%s,\"Name\":\"%s\",\"bInstanceSynced\":false}"),
 		Description,
@@ -93,7 +94,7 @@ public:
 		, ObjectPath(MakeObjectPath(InTarget))
 		, SidecarPath(FPaths::Combine(
 			FPaths::ProjectContentDir(),
-			TEXT("AssetDocumentG3BlackboardData"),
+			TEXT("AssetDocumentBlackboardDataTests"),
 			FPackageName::GetLongPackageAssetName(InTarget) + TEXT(".assetdoc.json")))
 		, PackagePath(FPackageName::LongPackageNameToFilename(
 			InTarget,
@@ -261,8 +262,8 @@ bool FAssetDocumentBlackboardDataFullLifecycleTest::RunTest(
 		return false;
 	}
 	FAssetDocumentService& Service = FAssetDocumentModule::Get().GetService();
-	FScopedFixture Parent(MakeTarget(TEXT("BB_G3Parent")));
-	FScopedFixture Child(MakeTarget(TEXT("BB_G3Lifecycle")));
+	FScopedFixture Parent(MakeTarget(TEXT("BB_LifecycleParent")));
+	FScopedFixture Child(MakeTarget(TEXT("BB_Lifecycle")));
 	const FString Bool = TEXT("/Script/AIModule.BlackboardKeyType_Bool");
 	const FString Int = TEXT("/Script/AIModule.BlackboardKeyType_Int");
 	const FString Float = TEXT("/Script/AIModule.BlackboardKeyType_Float");

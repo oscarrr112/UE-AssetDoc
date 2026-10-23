@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered UserDefinedStruct Profile (profile.user_defined_struct.v1): create, read and edit the
 members of a User Defined Struct as the Struct editor does (FStructureEditorUtils).
 

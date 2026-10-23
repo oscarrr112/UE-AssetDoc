@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Core package-snapshot rollback of a Blueprint through the registered
 // derived-state rebuilder: after a failure in the middle of

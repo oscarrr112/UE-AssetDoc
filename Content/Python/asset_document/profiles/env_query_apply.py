@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """EnvQuery Apply: the Environment Query editor's own operations through ai.env_query.edit.v1.
 
 Order (docs/architecture/asset-document-eqs-design.md §3): checks (classes, properties, option order, open editor),

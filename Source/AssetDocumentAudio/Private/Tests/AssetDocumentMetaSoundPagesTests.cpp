@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// MetaSound documents, phase M3 (graph pages, page input defaults, the operator build check), through the production
+// MetaSound documents (graph pages, page input defaults, the operator build check), through the production
 // Service as the MCP tools send them (design §6.2-6.4). The project's MetaSound pages ("Low", "High") are set for each
 // test as Project Settings sets them (FScopedProjectPages: in memory, restored afterwards).
 //
@@ -25,7 +26,7 @@
 #include "Subsystems/AssetEditorSubsystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-namespace AssetDocumentMetaSoundM3Tests
+namespace AssetDocumentMetaSoundPagesTests
 {
 using namespace AssetDocumentMetaSoundApplyTests;
 
@@ -176,14 +177,14 @@ UObject* MakePagedFixture(FAutomationTestBase& Test, const FTarget& Target)
 	}
 	return Save(Test, Asset, TEXT("paged fixture")) ? Asset : nullptr;
 }
-} // namespace AssetDocumentMetaSoundM3Tests
+} // namespace AssetDocumentMetaSoundPagesTests
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentMetaSoundPagesTest, "UEAssetDoc.MetaSound.Pages",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FAssetDocumentMetaSoundPagesTest::RunTest(const FString& Parameters)
 {
-	using namespace AssetDocumentMetaSoundM3Tests;
+	using namespace AssetDocumentMetaSoundPagesTests;
 	const FScopedProjectPages Pages(TestPages());
 	if (GEditor == nullptr || GEditor->Trans == nullptr || !TestTrue(TEXT("project pages set"), Pages.IsValid()))
 	{
@@ -348,7 +349,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentMetaSoundPageFreeEditsTest, "UEAs
 
 bool FAssetDocumentMetaSoundPageFreeEditsTest::RunTest(const FString& Parameters)
 {
-	using namespace AssetDocumentMetaSoundM3Tests;
+	using namespace AssetDocumentMetaSoundPagesTests;
 	const FScopedProjectPages Pages(TestPages());
 	UObject* Source = LoadQuiet(OneShot);
 	if (GEditor == nullptr || GEditor->Trans == nullptr || !TestTrue(TEXT("project pages set"), Pages.IsValid())
@@ -494,7 +495,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentMetaSoundPagesOpenEditorTest, "UE
 
 bool FAssetDocumentMetaSoundPagesOpenEditorTest::RunTest(const FString& Parameters)
 {
-	using namespace AssetDocumentMetaSoundM3Tests;
+	using namespace AssetDocumentMetaSoundPagesTests;
 	const FScopedProjectPages Pages(TestPages());
 	UAssetEditorSubsystem* Editors = GEditor != nullptr ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr;
 	if (Editors == nullptr || GEditor->Trans == nullptr || !TestTrue(TEXT("project pages set"), Pages.IsValid()))
@@ -580,7 +581,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentMetaSoundBuildCheckTest, "UEAsset
 
 bool FAssetDocumentMetaSoundBuildCheckTest::RunTest(const FString& Parameters)
 {
-	using namespace AssetDocumentMetaSoundM3Tests;
+	using namespace AssetDocumentMetaSoundPagesTests;
 	UObject* Source = LoadQuiet(OneShot);
 	if (GEditor == nullptr || GEditor->Trans == nullptr || !TestNotNull(TEXT("MSS_PlayRandom_Oneshot loads"), Source))
 	{

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.IKRig.Read: an editor-built IK Rig (UE4 tutorial mannequin, Auto Characterize +
 //   Auto FBIK) and a retargeter between two such rigs: Extract / Inspect / Diff through the Python Profiles, stable

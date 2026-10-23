@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 from asset_document.dto import RuntimePhase
@@ -13,10 +16,10 @@ from asset_document.diagnostics import RuntimeDiagnostic
 EXACT_CLASS = "/Script/AIModule.BehaviorTree"
 TARGET = "/Game/AI/BT_ProfileCandidate"
 ROUTE_ID = "ai_profile"
-GRAPH_BLOCKER = "AD.G1.BLOCK.AI.GRAPH_INSTALL_AUTHORITY"
-DECORATOR_INPUT_BLOCKER = "AD.G1.BLOCK.AI.DECORATOR_INPUT_AUTHORITY"
-VALUE_OR_KEY_BLOCKER = "AD.G1.BLOCK.AI.VALUE_OR_KEY_REFRESH_AUTHORITY"
-DECORATOR_REFRESH_BLOCKER = "AD.G1.BLOCK.AI.DECORATOR_REFRESH_AUTHORITY"
+GRAPH_BLOCKER = "AD.BLOCK.AI.GRAPH_INSTALL_AUTHORITY"
+DECORATOR_INPUT_BLOCKER = "AD.BLOCK.AI.DECORATOR_INPUT_AUTHORITY"
+VALUE_OR_KEY_BLOCKER = "AD.BLOCK.AI.VALUE_OR_KEY_REFRESH_AUTHORITY"
+DECORATOR_REFRESH_BLOCKER = "AD.BLOCK.AI.DECORATOR_REFRESH_AUTHORITY"
 
 
 def body(tree: dict | None = None, blackboard: str | None = "/Game/AI/BB_Profile") -> dict:

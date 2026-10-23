@@ -1,4 +1,7 @@
-"""Registered MetaSound Profiles (profile.metasound_source.v1, profile.metasound_patch.v1), phases M1-M3.
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Registered MetaSound Profiles (profile.metasound_source.v1, profile.metasound_patch.v1).
 
 Document (docs/architecture/asset-document-metasound-design.md §3)::
 
@@ -37,7 +40,7 @@ Document (docs/architecture/asset-document-metasound-design.md §3)::
 * Omitted: member ``Default`` / ``SortOrder`` and node ``Position`` keep the live value; other member fields and
   node ``Inputs`` / ``Defaults`` / ``Comment`` are complete (omitted = none / class default).  Apply is
   ``metasound_apply``.
-* Pages (M3): ``Graphs`` has one entry per graph page, ``Default`` first, then the pages of the project's
+* Pages: ``Graphs`` has one entry per graph page, ``Default`` first, then the pages of the project's
   ``UMetaSoundSettings`` in settings order (a page the settings no longer define is named by its 32 hex digits).
   ``Inputs.<n>.PageDefaults`` ``{"<page>": value}`` holds an input's values for the pages other than Default.
 """

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // validate_asset_document on MetaSound Sources, Patches and presets, Create and Update:
 // Validate runs the apply on a staged trial copy (AssetDocumentMetaSoundTrial.cpp) and reports what Apply would --

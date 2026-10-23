@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Open-editor apply of IK Rigs and IK Retargeters (AssetDocumentRigOpenEditor.cpp: close, apply, reopen):
 // UEAssetDoc.IKRig.OpenEditorApply.Rig: a rig open in the IK Rig editor; the apply (retarget root, a

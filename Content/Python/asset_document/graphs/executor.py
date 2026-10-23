@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Execute a reconcile Plan through ``context.invoke`` (graph primitives v1).
 
 The executor owns the doc-id -> GUID binding table, re-queries a graph after

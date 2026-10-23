@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -15,11 +16,11 @@
 namespace AssetDocumentAnimationTimelineLifecycleTests
 {
 constexpr const TCHAR* AnimationProfileConsumer = TEXT("animation_profile");
-constexpr const TCHAR* TimelineGate = TEXT("T0-TIMELINE");
+constexpr const TCHAR* TimelineGroup = TEXT("ANIMATION-TIMELINE");
 constexpr const TCHAR* NotifyLibraryDependency =
-	TEXT("AD.PANIM.BLOCK.NOTIFY_LIBRARY_DEPENDENCY");
+	TEXT("AD.ANIMATION.BLOCK.NOTIFY_LIBRARY_DEPENDENCY");
 constexpr const TCHAR* RuntimeHandleBootstrap =
-	TEXT("AD.PANIM.BLOCK.RUNTIME_HANDLE_BOOTSTRAP");
+	TEXT("AD.ANIMATION.BLOCK.RUNTIME_HANDLE_BOOTSTRAP");
 
 struct FTimelineDecisionExpectation
 {
@@ -46,7 +47,7 @@ const FTimelineDecisionExpectation TimelineDecisions[] = {
 		EAssetDocumentAnimationBootstrapDependency::Asset,
 		EAssetDocumentAnimationBootstrapDisposition::VerifiedAssetIdentityReady},
 	{TEXT("animation.notify_event.remove.v1"),
-		TEXT("AD.PANIM.BLOCK.NOTIFY_EVENT_IDENTITY_AUTHORITY"),
+		TEXT("AD.ANIMATION.BLOCK.NOTIFY_EVENT_IDENTITY_AUTHORITY"),
 		RuntimeHandleBootstrap, true, 2,
 		EAssetDocumentAnimationBootstrapDependency::AssetAndProviderDerived,
 		EAssetDocumentAnimationBootstrapDisposition::RuntimeHandleBootstrapBlocked},
@@ -109,11 +110,11 @@ const FAssetDocumentAnimationDecision* FindDecision(FStringView PrimitiveId)
 	return nullptr;
 }
 
-const FAssetDocumentAnimationT0DecisionRecord* FindT0Decision(
+const FAssetDocumentAnimationAuthorityDecisionRecord* FindAuthorityDecision(
 	FStringView PrimitiveId)
 {
-	for (const FAssetDocumentAnimationT0DecisionRecord& Decision :
-		GetAssetDocumentAnimationT0DecisionRecords())
+	for (const FAssetDocumentAnimationAuthorityDecisionRecord& Decision :
+		GetAssetDocumentAnimationAuthorityDecisionRecords())
 	{
 		if (FStringView(Decision.DecisionId) == PrimitiveId)
 		{
@@ -234,8 +235,8 @@ bool FAssetDocumentAnimationTimelineLifecycleTest::RunTest(const FString&)
 		TestEqual(FString::Printf(TEXT("%s retains its exact consumer"),
 			Expected.PrimitiveId), Decision->ConsumerId,
 			FString(AnimationProfileConsumer));
-		TestEqual(FString::Printf(TEXT("%s retains the timeline T0 gate"),
-			Expected.PrimitiveId), Decision->AuthorityGateId, FString(TimelineGate));
+		TestEqual(FString::Printf(TEXT("%s retains the timeline authority group"),
+			Expected.PrimitiveId), Decision->AuthorityGroupId, FString(TimelineGroup));
 		TestEqual(FString::Printf(TEXT("%s retains its final diagnostic"),
 			Expected.PrimitiveId), Decision->StableBlockerDiagnostic,
 			FString(Expected.FinalDiagnostic));
@@ -244,38 +245,38 @@ bool FAssetDocumentAnimationTimelineLifecycleTest::RunTest(const FString&)
 		TestEqual(FString::Printf(TEXT("%s has no callable binding"),
 			Expected.PrimitiveId), CountBindings(Expected.PrimitiveId), 0);
 
-		const FAssetDocumentAnimationT0DecisionRecord* T0Decision =
-			FindT0Decision(Expected.PrimitiveId);
-		TestNotNull(FString::Printf(TEXT("T0 evidence retains %s"),
-			Expected.PrimitiveId), T0Decision);
-		if (T0Decision == nullptr)
+		const FAssetDocumentAnimationAuthorityDecisionRecord* AuthorityDecision =
+			FindAuthorityDecision(Expected.PrimitiveId);
+		TestNotNull(FString::Printf(TEXT("authority evidence retains %s"),
+			Expected.PrimitiveId), AuthorityDecision);
+		if (AuthorityDecision == nullptr)
 		{
 			continue;
 		}
-		TestFalse(FString::Printf(TEXT("%s is not a G1 blocker"),
-			Expected.PrimitiveId), T0Decision->bFrozenG1Blocker);
-		TestEqual(FString::Printf(TEXT("%s T0 gate is exact"),
-			Expected.PrimitiveId), FString(T0Decision->AuthorityGateId),
-			FString(TimelineGate));
+		TestFalse(FString::Printf(TEXT("%s is not a frozen blocker"),
+			Expected.PrimitiveId), AuthorityDecision->bFrozenBlocker);
+		TestEqual(FString::Printf(TEXT("%s authority group is exact"),
+			Expected.PrimitiveId), FString(AuthorityDecision->AuthorityGroupId),
+			FString(TimelineGroup));
 		TestEqual(FString::Printf(TEXT("%s row evidence is exact"),
-			Expected.PrimitiveId), FString(T0Decision->RowDiagnostic),
+			Expected.PrimitiveId), FString(AuthorityDecision->RowDiagnostic),
 			FString(Expected.RowDiagnostic));
 		TestEqual(FString::Printf(TEXT("%s final evidence is exact"),
-			Expected.PrimitiveId), FString(T0Decision->FinalDiagnostic),
+			Expected.PrimitiveId), FString(AuthorityDecision->FinalDiagnostic),
 			FString(Expected.FinalDiagnostic));
 		TestEqual(FString::Printf(TEXT("%s mutability is frozen"),
-			Expected.PrimitiveId), T0Decision->bMutating, Expected.bMutating);
+			Expected.PrimitiveId), AuthorityDecision->bMutating, Expected.bMutating);
 		TestEqual(FString::Printf(TEXT("%s handle count is frozen"),
-			Expected.PrimitiveId), T0Decision->RequiredInputHandleCount,
+			Expected.PrimitiveId), AuthorityDecision->RequiredInputHandleCount,
 			Expected.RequiredInputHandleCount);
 		TestEqual(FString::Printf(TEXT("%s bootstrap dependency is frozen"),
-			Expected.PrimitiveId), T0Decision->BootstrapDependency,
+			Expected.PrimitiveId), AuthorityDecision->BootstrapDependency,
 			Expected.BootstrapDependency);
 		TestEqual(FString::Printf(TEXT("%s bootstrap disposition is frozen"),
-			Expected.PrimitiveId), T0Decision->BootstrapDisposition,
+			Expected.PrimitiveId), AuthorityDecision->BootstrapDisposition,
 			Expected.BootstrapDisposition);
 		TestEqual(FString::Printf(TEXT("%s final disposition is frozen"),
-			Expected.PrimitiveId), T0Decision->FinalDisposition,
+			Expected.PrimitiveId), AuthorityDecision->FinalDisposition,
 			EAssetDocumentAnimationFinalDisposition::StableBlocker);
 
 		const FAssetDocumentPrimitiveInvocation Invocation =

@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """MetaSound Profiles: document validation, node keys, assembling the Body from the audio.metasound.read.v1
 records, Diff and the Apply planner (ops, refusals, validation outcome).  The editor side (normalised read, literal
 codec, catalog, stability on the fidelity corpus) is covered by UEAssetDoc.MetaSound.*."""

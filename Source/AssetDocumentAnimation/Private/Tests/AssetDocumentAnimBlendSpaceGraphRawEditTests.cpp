@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Behaviour test of the raw-edit file AnimBlueprint/AssetDocumentAnimBlendSpaceGraphRawEdits:
 // the blend space of a Blend Space Graph node is edited the way the Blend Space Graph editor

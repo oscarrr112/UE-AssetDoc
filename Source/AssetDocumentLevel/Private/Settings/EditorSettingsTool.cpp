@@ -1,10 +1,13 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "Settings/EditorSettingsTool.h"
 
 #include "AssetDocumentEditorNonInteractiveScope.h"
 #include "AssetDocumentEditorObjectProperties.h"
 #include "AssetDocumentServerEditorTransaction.h"
+#include "AssetDocumentPaths.h"
+#include "AssetDocumentSettings.h"
 #include "Dom/JsonValue.h"
 #include "Editor.h"
 #include "Engine/Level.h"
@@ -144,7 +147,12 @@ TSharedRef<FJsonObject> SectionJson(const FSettingsSection& Entry)
 		{
 			Json->SetStringField(TEXT("config_file"), IsProjectConfigFile(File, &Relative) ? Relative : FPaths::GetCleanFilename(File));
 		}
-		Json->SetBoolField(TEXT("writable"), !File.IsEmpty() && bDefaultConfig && IsProjectConfigFile(File));
+		const bool bProtected = !UAssetDocumentSettings::WhyWriteProtected(Object).IsEmpty();
+		Json->SetBoolField(TEXT("writable"), !bProtected && !File.IsEmpty() && bDefaultConfig && IsProjectConfigFile(File));
+		if (bProtected)
+		{
+			Json->SetBoolField(TEXT("protected"), true);
+		}
 	}
 	return Json;
 }
@@ -768,6 +776,12 @@ FLevelToolResult RunProject(const FSettingsRequest& Request)
 			TEXT("The section has no settings object."))});
 	}
 	TSharedRef<FJsonObject> Payload = SectionJson(Entry);
+	// The plugin's own server and security settings: neither read nor written (dry runs included).
+	if (UAssetDocumentSettings::IsProtectedSettingsObject(Object))
+	{
+		return FLevelToolResult::Failure({MakeLevelDiagnostic(TEXT("/section"), TEXT("Settings.Protected"), FString::Printf(TEXT("%s: %s"),
+			*Entry.Key(), *UAssetDocumentSettings::DescribeProtectedSettings()))}, Payload);
+	}
 	if (Request.Action == TEXT("read"))
 	{
 		TSharedRef<FJsonObject> Properties = MakeShared<FJsonObject>();
@@ -782,7 +796,13 @@ FLevelToolResult RunProject(const FSettingsRequest& Request)
 			Properties->Values.Num()), Payload);
 	}
 
-	// write
+	// write. Settings that make the editor run code (Python startup scripts and remote execution, servers that run
+	// commands for their clients, command lines a render runs) are read only: the whole section, whatever is written.
+	if (const FString Why = UAssetDocumentSettings::WhyWriteProtected(Object); !Why.IsEmpty())
+	{
+		return FLevelToolResult::Failure({MakeLevelDiagnostic(TEXT("/section"), TEXT("Settings.Protected"), FString::Printf(TEXT("%s: %s"),
+			*Entry.Key(), *Why))}, Payload);
+	}
 	if (Entry.Section.IsValid() && !Entry.Section->CanEdit())
 	{
 		return FLevelToolResult::Failure({MakeLevelDiagnostic(TEXT("/section"), TEXT("Settings.SectionReadOnly"), FString::Printf(
@@ -950,24 +970,26 @@ FLevelToolResult RunList()
 }
 } // namespace
 
-bool IsProjectConfigFile(const FString& Filename, FString* OutRelative)
+bool IsConfigFileInProject(const FString& ProjectDir, const FString& ConfigDir, const FString& Filename, FString* OutRelative)
 {
-	FString Full = FPaths::ConvertRelativePathToFull(Filename);
-	FPaths::NormalizeFilename(Full);
-	FPaths::CollapseRelativeDirectories(Full);
-	FString ConfigDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir());
-	FPaths::NormalizeDirectoryName(ConfigDir);
-	ConfigDir += TEXT("/");
-	if (!Full.EndsWith(TEXT(".ini"), ESearchCase::IgnoreCase) || !Full.StartsWith(ConfigDir, ESearchCase::IgnoreCase)
-		|| Full.Contains(TEXT("/../")))
+	// Judged by the files the write opens: a Config/ (or a file or folder in it) that links out of the
+	// project is not the project's.
+	FString Relative;
+	if (!Filename.EndsWith(TEXT(".ini"), ESearchCase::IgnoreCase) || !AssetDocumentPaths::IsWithin(ProjectDir, Filename)
+		|| !AssetDocumentPaths::MakeRelativeWithin(ConfigDir, Filename, Relative) || Relative.IsEmpty())
 	{
 		return false;
 	}
 	if (OutRelative != nullptr)
 	{
-		*OutRelative = TEXT("Config/") + Full.RightChop(ConfigDir.Len());
+		*OutRelative = TEXT("Config/") + Relative;
 	}
 	return true;
+}
+
+bool IsProjectConfigFile(const FString& Filename, FString* OutRelative)
+{
+	return IsConfigFileInProject(FPaths::ProjectDir(), FPaths::ProjectConfigDir(), Filename, OutRelative);
 }
 
 FLevelToolResult RunEditorSettings(const TSharedPtr<FJsonObject>& RequestJson)

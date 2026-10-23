@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 import unittest
 
 from asset_document import bootstrap
@@ -166,7 +169,7 @@ NIAGARA_REQUIREMENTS = frozenset(
     _rows("fx_profile", 1,
           "fx.niagara.read.v1", "fx.niagara.edit.v1", "fx.niagara.compile.v1", "editor.class.resolve_canonical.v1", "editor.asset.resolve_existing.v1",
           "editor.scratch.create_by_factory.v1", "editor.asset.rollback_created.v1",
-          # N4: script graphs and scratch pads through the shared graph primitives.
+          # Script graphs and scratch pads through the shared graph primitives.
           "graph.list.v1", "graph.query.v1", "graph.actions.enumerate.v1", "graph.node.spawn.v1",
           "graph.node.remove.v1", "graph.pin.connect.v1", "graph.pin.break.v1", "graph.pin.default.set.v1",
           "graph.node.property.get.v1", "graph.node.property.set.v1", "graph.node.layout.set.v1",
@@ -217,7 +220,7 @@ PHYSICS_REQUIREMENTS = frozenset(
     + _rows("physics_profile", 2, "editor.scratch.clone_asset.v2", "editor.asset.create_by_factory.v2"))
 
 # Level Sequence (profile.level_sequence.v1) on the seq_profile route: the "seq" provider (read, inspect, catalog,
-# edit, status), the generic factory lifecycle and (phase S5) the hosted Director Blueprint's member and graph rows.
+# edit, status), the generic factory lifecycle and the hosted Director Blueprint's member and graph rows.
 SEQ_REQUIREMENTS = frozenset(
     _rows("seq_profile", 1,
           "seq.read.v1", "seq.inspect.v1", "seq.catalog.v1", "seq.edit.v1", "seq.status.v1",

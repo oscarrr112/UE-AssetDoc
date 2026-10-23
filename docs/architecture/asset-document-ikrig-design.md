@@ -1,6 +1,5 @@
 # AssetDocument IK Rig and IK Retargeter profiles: design
 
-Status: design 2026-10-06; R0-R2 implemented (results in [asset-document-ikrig-matrix.md](asset-document-ikrig-matrix.md)). R3 open-editor apply done 2026-10-18: close, apply, reopen (tests `IKRig.OpenEditorApply.Rig`, `IKRig.OpenEditorApply.Retargeter`).
 Governing rules: [design rules](asset-document-design-rules.md) §3 (rollback = functional
 equivalence), §3.1 (Undo history), §3.2 (dependent assets), §4 (editor-equivalent code; raw paths allowed when the
 editor does it that way, in their own file with a behaviour test; no private headers, no unexported symbols) and §5
@@ -366,7 +365,7 @@ rename / remove, bones, root offset) → `Current` poses.
   reconciles from that default stack (unlisted default ops are removed), so the extract of the result equals the
   document. Without `Ops` the default stack stays, and after `SetIKRig` the profile calls `AssignIKRigToAllOps` for
   both sides so the default ops are configured as the editor shows them when first opened (`CleanAsset`). Whether
-  the real editor's first open leaves exactly that state is checked by a behaviour test before M-R1 is accepted.
+  the real editor's first open leaves exactly that state is checked by a behaviour test.
 
 ### 4.4 Primitives and module
 
@@ -438,15 +437,15 @@ initialized, as in the editor) and that is not a failure.
   controller's `BroadcastNeedsReinitialized` so open processors and anim nodes re-init). Goal subobjects created by the
   apply are new authored objects the snapshot removes.
 - Created asset: factory rollback deletes the package.
-- Dependents (§3.2 of the reset). Retargeters reference IK Rigs; anim graphs reference both. The editor propagates
+- Dependents (design rules §3.2). Retargeters reference IK Rigs; anim graphs reference both. The editor propagates
   chain add / rename / remove from an IK Rig only to **retargeters open in an editor**
   (`FIKRetargetEditorController` binds `OnRetargetChainRenamed` ...); closed retargeters re-sync on next load
   (`CleanOpStack` → `ReinitializeWithIKRigs`: a renamed target chain loses its mapping and settings, a renamed source
   chain's mapping becomes none). The profile follows the editor and reports it: an IK Rig apply that renames or
   removes chains lists the retargeters that reference the rig (asset registry referencers) and the affected op
   mappings as `IKRig.DependentsAffected` warnings, so the AI can apply those retargeters' documents next. Decision
-  §8.2 asks whether to go further.
-- Open editors (R3, done): an IK Rig or retargeter open in its editor is closed for the apply and reopened on the
+  §8.2: follow the editor, no further edits.
+- Open editors: an IK Rig or retargeter open in its editor is closed for the apply and reopened on the
   result (Info `IKRig.EditorReopened`, `IKRetargeter.EditorReopened`). The editors hold processors, struct wrappers
   that copy struct memory (written back whole by the next Details edit, not refreshed on Undo) and delegate bindings;
   their refresh calls are not exported, so a reopen rebuilds them from the applied asset.
@@ -467,7 +466,7 @@ The install ships **4 IK Rigs and 4 retargeters**, all in plugins that are off b
 | 5 | `/MoverTests/Characters/Mannequins/Rigs/IK_Mannequin` | MoverTests (experimental) | same family, saved in Main |
 | 6 | `/MoverTests/Characters/Mannequins/Rigs/RTG_Mannequin` | same | |
 
-Sandbox recipe (`ue.sh`): enable `MoverExamples` (and `MetaHumanCharacter` when the decision §8.1 allows), copy
+Test project recipe: enable `MoverExamples` (and `MetaHumanCharacter` when the decision §8.1 allows), copy
 `Templates/TemplateResources/High/Characters/Content` to `/Game/Characters` (UE5 mannequin `SKM_Manny_Simple`,
 `SKM_Quinn_Simple`, `SK_Mannequin`), and duplicate #3 to `/Game/Characters/Mannequins/Rigs/IK_Mannequin` so #4's
 references resolve. Tests skip with a note when a plugin is not enabled.
@@ -528,15 +527,13 @@ Undo test: human edit in the IK Rig editor, save, AI apply, Ctrl+Z behaviour per
   root motion from the pelvis. Status: no errors; the retargeter retargets one frame. Then error cases at their
   document paths with rollback: unknown bone, unknown solver type, second goal on a Limb solver, singleton op twice,
   child op under the wrong parent, unknown chain in `ChainMapping`, incompatible preview mesh.
-- **Black-box trial** (MCP only + schema section): "make an IK Rig for this mesh with foot IK", "retarget the
+- **AI black-box** (MCP only + schema section): "make an IK Rig for this mesh with foot IK", "retarget the
   mannequin to this character and fix the arms in an A-pose", "add a pin-bone op that copies `ik_hand_gun` from
   `hand_r`".
 
-## 7. Risks, unknowns and phases
+## 7. Risks and unknowns
 
-### 7.1 Risks and unknowns
-
-| Risk | Effect | Answer |
+| Risk | Effect | Handling |
 |---|---|---|
 | Solvers have no identity | reorders of same-type solvers become settings rewrites | functional equivalence (§3.5); documented; tests compare state, not identity |
 | Struct-viewer writes are done directly (the viewer itself is a transient UI object) | subtle differences (reinit triggers, hidden fields) | one raw file; behaviour test drives the real `UIKRigStructViewer` with `SetStructToView` + property handles and compares |
@@ -550,18 +547,7 @@ Undo test: human edit in the IK Rig editor, save, AI apply, Ctrl+Z behaviour per
 | Corpus plugins are off by default (MetaHuman is heavy) | thin real-content fidelity | builder-made fixtures cover every type; decision §8.1 |
 | Performance | rigs ≤ 300 KB; processors are cheap | status runs once per apply; suggestions only on request |
 
-### 7.2 Phases (each independently mergeable)
-
-| Phase | Content | Acceptance |
-|---|---|---|
-| **R0 read** | `AssetDocumentRig` module, `read` + `status` + `catalog` primitives, Python Extract / Inspect / Diff for both classes (Apply refused with `IKRig.ReadOnly`), `list_types` kinds, compile-status describer | extract stable (twice equal, equal after reload) on corpus #1–6 and the fixtures; Inspect status equals the editor's output log on open |
-| **R1 IK Rig apply** | edit primitive for the rig, create (factory + mesh), all IK Rig regions, struct writes raw file + behaviour test, rollback rebuilder, open-editor refusal, `DependentsAffected` | §6.2 on #1, #3, #5 and the rig fixtures; §6.3 rig edits; rig part of §6.4; rollback on a failed validation and a failed op; Undo test |
-| **R2 retargeter apply** | edit primitive for the retargeter, create (factory + rigs + `AssignIKRigToAllOps`), `Source`/`Target`, `Ops` (all types, children, mappings, chain rows), `Poses` | §6.2 on #2, #4, #6 and the retargeter fixture; §6.3 retargeter edits |
-| **R3 AI surface** (open-editor apply done 2026-10-18) | `rig.suggest.v1` (auto-characterize, auto-FBIK, auto-align, auto-map), `MCP/schemas/assetdocument/IKRig.md`, open-editor apply (refresh the editors) if decided | §6.4 Python test and black-box trial; matrix doc approved |
-
 ## 8. Decisions
-
-Decided by the user on 2026-10-06 (all as recommended):
 
 1. **Corpus.** MoverExamples is enabled in the test sandboxes only; MetaHumanCharacter is optional (its corpus tests
    skip with a note). The UEAssetDoc plugin itself depends only on IKRig.
@@ -573,24 +559,3 @@ Decided by the user on 2026-10-06 (all as recommended):
    `UEAssetDoc.uplugin`.
 5. **Retarget profiles** are read only (Inspect lists them; documents cannot change them,
    `IKRetargeter.ProfilesNotAuthored`).
-
-The questions as they were put (with the recommendations):
-
-
-1. **Corpus plugins.** Real IK content exists only in MoverExamples / MoverTests (experimental) and
-   MetaHumanCharacter (beta, heavy dependencies). Recommendation: enable **MoverExamples** in the test sandbox only
-   (like Harmonix for MetaSound), make MetaHumanCharacter optional (tests skip with a note), and rely on the
-   editor-built fixtures for type coverage. The UEAssetDoc plugin itself depends only on IKRig.
-2. **Chain renames and dependent retargeters.** The editor only updates retargeters open in an editor; closed ones
-   silently lose the mapping of a renamed chain on next load. Options: (a) follow the editor and warn with
-   `IKRig.DependentsAffected` (recommended: no edits outside the target package, the AI can fix the retargeters with
-   their own documents); (b) also apply `HandleRetargetChainRenamed` / `Removed` to loaded referencing retargeters
-   under the §3.2 dependents rule (refuse if dirty, report as updated). (b) is friendlier but edits packages the
-   document did not name.
-3. **Automatic tools.** Recommendation: expose auto-characterize, auto-FBIK, auto-align and auto-map only as
-   read-only suggestions in Inspect (§3.6), not as document keys, so every document stays declarative and re-apply
-   stays a no-op. The alternative (a create-only `Generate` key) is shorter for the AI but hides state.
-4. **Module / owner.** New module `AssetDocumentRig` with owner `Rig` (11) and the `IKRig` plugin dependency in
-   `UEAssetDoc.uplugin` (recommended), versus folding it into `AssetDocumentAnimation`.
-5. **Retarget profiles** (`Profiles`, `CurrentProfile`): no editor UI in 5.7. Recommendation: read only (Inspect
-   lists them; a document cannot change them, `IKRetargeter.ProfilesNotAuthored`), revisit if a project needs them.

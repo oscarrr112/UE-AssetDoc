@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "Provider/Montage/MontageStructuralOperations.h"
 #include "Provider/Montage/MontageNotifyArguments.h"
@@ -8,8 +9,8 @@ namespace AssetDocumentMontage
 {
 struct FPreparedNotifyStaging;
 TSharedPtr<const FPreparedStructuralEdit> GetMontageNotifyPreparedStructure(const FPreparedNotifyStaging& State);
-// M3 may replace both declared managed families in one capture/inverse/footprint;
-// M4 remains state-only. Omitted family blocks preserve that family's events.
+// notifies.replace may replace both declared managed families in one capture/inverse/footprint;
+// notify_states.replace remains state-only. Omitted family blocks preserve that family's events.
 FAssetDocumentContractValidationResult PrepareMontageNotifyReplacement(
  UAnimMontage& Target, const FAssetDocumentRuntimeValueDto& FrozenArguments, bool bStates,
  const FAssetDocumentRuntimeRequestDto& Request, int32 StepIndex,

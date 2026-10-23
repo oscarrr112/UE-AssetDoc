@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Tests/AssetDocumentSkeletonTestHarness.h"
 #include "Animation/AnimData/CurveIdentifier.h"
@@ -18,7 +19,7 @@ FOptions Options(const FString& Failure = {})
  FOptions O;
  O.FailAfter = Failure;
  O.ExtraRequirements.Add({Primitive, 1, TEXT("animation_profile")});
- // Test-owned caller extends S1's phase/host/evidence machinery. No production
+ // Test-owned caller extends the Skeleton caller's phase/host/evidence machinery. No production
  // registration or Python file is changed. Preview has no read-only primitive:
  // its provider checks completion, and native assertions below check live/durable
  // state. This is not a claim of production canonical Preview extraction.
@@ -73,7 +74,7 @@ class PreviewDispatch(caller.SkeletonS1Dispatch):
         return tuple(changed)
 
     def _verify(self, request, context, properties, preview):
-        # S1 verifies the admitted scalar. Native const getter checks Preview
+        # The Skeleton caller verifies the admitted scalar. Native const getter checks Preview
         # after terminal; FreshRead checks its ordinary same-path deserialization.
         super()._verify(request, context, properties, None)
 

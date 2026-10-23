@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // End-to-end CurveTable / CompositeCurveTable / StringTable through the production Service and
 // the Python Profiles (profile.curve_table.v1, profile.composite_curve_table.v1,

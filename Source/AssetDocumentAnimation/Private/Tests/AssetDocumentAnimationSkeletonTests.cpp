@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #if WITH_DEV_AUTOMATION_TESTS
 #include "AssetDocumentAnimationMutationPreparation.h"
 #include "AssetDocumentAnimationPrimitiveProvider.h"
@@ -228,7 +229,7 @@ bool FAssetDocumentSkeletonPreparationRejectionTest::RunTest(const FString&)
  return true;
 }
 // This resolver owns real Editor-issued payloads. It supplies Animation metadata
-// solely for direct-provider tests; Integration tests own actual H1 evidence.
+// solely for direct-provider tests; Integration tests own actual handle evidence.
 namespace AssetDocumentAnimationSkeletonTests
 {
 class FResolver final : public IAssetDocumentHandleResolver

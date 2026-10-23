@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """profile.anim_sequence.v1: document validation, lowering, extract projection, diff and orchestration."""
 from __future__ import annotations
 

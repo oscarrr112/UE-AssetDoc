@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Compile status of a Niagara system as the toolbar shows it. The toolbar's own status is not exported, so the
 // status is derived here from the same scripts (system spawn / update and every enabled emitter's compilable

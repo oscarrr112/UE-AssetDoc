@@ -1,7 +1,8 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Helpers of the MetaSound apply tests (AssetDocumentMetaSoundApplyTests.cpp, AssetDocumentMetaSoundM2Tests.cpp,
-// AssetDocumentMetaSoundM3Tests.cpp):
+// Helpers of the MetaSound apply tests (AssetDocumentMetaSoundApplyTests.cpp, AssetDocumentMetaSoundPresetNodeTests.cpp,
+// AssetDocumentMetaSoundPagesTests.cpp):
 // document editing, the editor side of the free edits (FEditorSide: the editor's builder calls in a transaction,
 // then its registration) and the comparison of a document-edited and an editor-edited graph.
 
@@ -586,7 +587,7 @@ inline TSharedPtr<FJsonObject> SetInputs(const TSharedPtr<FJsonObject>& Document
 	}
 	return Inputs;
 }
-// ---- shared by the M2 / M3 tests ------------------------------------------------------------------------------
+// ---- shared by the preset and page tests ------------------------------------------------------------------------------
 
 inline bool Save(FAutomationTestBase& Test, UObject* Asset, const FString& Stage)
 {
@@ -631,7 +632,7 @@ inline bool StartBoth(FAutomationTestBase& Test, const FTarget& DocumentSide, co
 	{
 		return false;
 	}
-	Child(BodyOf(Start), TEXT("Metadata"))->SetStringField(TEXT("Description"), TEXT("M2 free edits"));
+	Child(BodyOf(Start), TEXT("Metadata"))->SetStringField(TEXT("Description"), TEXT("free edits"));
 	return ApplyOk(Test, DocumentSide, ForTarget(Start, DocumentSide, TEXT("Update")), Stage + TEXT(" start (document side)"))
 		&& ApplyOk(Test, EditorSide, ForTarget(Start, EditorSide, TEXT("Update")), Stage + TEXT(" start (editor side)"));
 }
@@ -743,7 +744,7 @@ inline void UnloadMetaSoundsNeedingAudio(FAutomationTestBase& Test, const UObjec
 	}
 }
 
-// ---- project page settings (M3) -----------------------------------------------------------------------------
+// ---- project page settings -----------------------------------------------------------------------------
 
 // MetaSound pages of the project for one test, set as Project Settings > Audio > MetaSound > Pages sets them
 // (PreEditChange, the PageSettings array changed, PostEditChangeProperty: ConformPageSettings, OnPageSettingsUpdated,

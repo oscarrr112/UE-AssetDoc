@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "Import/AssetImportTool.h"
 
@@ -323,13 +324,59 @@ bool ParseRequest(const FJsonObject& Json, FImportRequest& Out, TArray<FAssetDoc
 // ---------------------------------------------------------------------------------------------
 // Sources and routes
 
+// Where a source path points. Separators are unified first, so "\\server\share", "//server/share", "/\server/share" and the
+// Windows long-path form "\\?\UNC\server\share" all classify the same.
+enum class ESourceKind : uint8
+{
+	Local,
+	// A URL, or a path on a network share.
+	NonLocal,
+	// A Windows device-namespace path on a drive ("\\?\C:\..."): not supported, the plain drive path names the same file.
+	DeviceDrive,
+};
+
+ESourceKind ClassifySource(const FString& Path)
+{
+	if (Path.Contains(TEXT("://")))
+	{
+		return ESourceKind::NonLocal;
+	}
+	FString Unified = Path;
+	Unified.ReplaceInline(TEXT("\\"), TEXT("/"));
+	if (!Unified.StartsWith(TEXT("//")))
+	{
+		return ESourceKind::Local;
+	}
+	const bool bDevice = Unified.StartsWith(TEXT("//?/")) || Unified.StartsWith(TEXT("//./"));
+	const bool bDeviceUnc = Unified.StartsWith(TEXT("//?/UNC/"), ESearchCase::IgnoreCase)
+		|| Unified.StartsWith(TEXT("//./UNC/"), ESearchCase::IgnoreCase);
+	return bDevice && !bDeviceUnc ? ESourceKind::DeviceDrive : ESourceKind::NonLocal;
+}
+
+bool IsNonLocalSource(const FString& Path)
+{
+	return ClassifySource(Path) != ESourceKind::Local;
+}
+
 bool CheckSourceFile(const FString& Path, const FString& Pointer, FString& OutFull, TArray<FAssetDocumentDiagnostic>& Diagnostics)
 {
-	if (Path.Contains(TEXT("://")) || Path.StartsWith(TEXT("\\\\")) || Path.StartsWith(TEXT("//")))
+	const auto Refuse = [&Pointer, &Diagnostics, &Path](ESourceKind Kind)
 	{
-		Diagnostics.Add(Error(Pointer, TEXT("Import.SourceNotLocal"), FString::Printf(TEXT("'%s' is not a local file: only files on this "
-			"machine are imported (no URLs or network shares). Download the file first and pass its local path."), *Path)));
+		if (Kind == ESourceKind::DeviceDrive)
+		{
+			Diagnostics.Add(Error(Pointer, TEXT("Import.SourceNotLocal"), FString::Printf(TEXT("'%s' is a Windows device path, which is "
+				"not supported: pass the plain absolute path (for example C:/Art/Hero.fbx)."), *Path)));
+		}
+		else
+		{
+			Diagnostics.Add(Error(Pointer, TEXT("Import.SourceNotLocal"), FString::Printf(TEXT("'%s' is not a local file: only files on this "
+				"machine are imported (no URLs or network shares). Download the file first and pass its local path."), *Path)));
+		}
 		return false;
+	};
+	if (const ESourceKind Kind = ClassifySource(Path); Kind != ESourceKind::Local)
+	{
+		return Refuse(Kind);
 	}
 	if (FPaths::IsRelative(Path))
 	{
@@ -339,6 +386,10 @@ bool CheckSourceFile(const FString& Path, const FString& Pointer, FString& OutFu
 	}
 	FString Full = FPaths::ConvertRelativePathToFull(Path);
 	FPaths::NormalizeFilename(Full);
+	if (const ESourceKind Kind = ClassifySource(Full); Kind != ESourceKind::Local)
+	{
+		return Refuse(Kind);
+	}
 	if (IFileManager::Get().DirectoryExists(*Full))
 	{
 		Diagnostics.Add(Error(Pointer, TEXT("Import.SourceNotFile"), FString::Printf(TEXT("'%s' is a folder; list the files to import."),
@@ -1426,6 +1477,19 @@ FLevelToolResult RunReimport(const FImportRequest& Request)
 		if (NewSource.IsEmpty())
 		{
 			const FString Stored = Sources.IsEmpty() ? FString() : Sources[0];
+			FString StoredFull = Stored;
+			if (!Stored.IsEmpty() && !FPaths::IsRelative(Stored))
+			{
+				StoredFull = FPaths::ConvertRelativePathToFull(Stored);
+				FPaths::NormalizeFilename(StoredFull);
+			}
+			if (IsNonLocalSource(Stored) || IsNonLocalSource(StoredFull))
+			{
+				Diagnostics.Add(Error(Pointer, TEXT("Import.SourceNotLocal"), FString::Printf(TEXT("The source file of %s (%s) is not a "
+					"local file: only files on this machine are imported (no URLs, network shares or Windows device paths). Pass 'source' "
+					"with a local file to reimport it from there."), *Asset->GetPathName(), *Stored)));
+				continue;
+			}
 			if (Stored.IsEmpty() || !IFileManager::Get().FileExists(*Stored))
 			{
 				Diagnostics.Add(Error(Pointer, TEXT("Import.SourceNotFound"), FString::Printf(TEXT("The source file of %s (%s) no longer "

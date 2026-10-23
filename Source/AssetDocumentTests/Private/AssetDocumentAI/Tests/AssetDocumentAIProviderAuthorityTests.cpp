@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -199,7 +200,7 @@ bool ExtractExactFunctionPacket(FStringView Source, FStringView Symbol, FString&
 	}
 }
 
-void RequireBlackboardRowTopologySourceGate(FAutomationTestBase& Test)
+void RequireBlackboardRowTopologySourceCheck(FAutomationTestBase& Test)
 {
 	TArray<FStructuralPublicationSource> Sources;
 	if (!LoadStructuralPublicationSources(Test, Sources)) return;
@@ -362,7 +363,7 @@ void RequireStructCanonicalWriteAuthority(FAutomationTestBase& Test)
 	Test.TestEqual(TEXT("STATIC-SC-WRITE-AUTHORITY-001 freezes exactly three WRITE callers"),
 		CountOccurrences(Header->Text,
 			TEXT("enum class ECaller : uint8 { UpdateExistingV2, AddV2, ReplaceClassV2 };")), 1);
-	Test.TestEqual(TEXT("STATIC-SC-WRITE-AUTHORITY-001 has no H0 WRITE caller"),
+	Test.TestEqual(TEXT("STATIC-SC-WRITE-AUTHORITY-001 has no readback WRITE caller"),
 		CountAcrossStructuralPublicationSources(Sources, TEXT("ECaller::H0")), 0);
 	for (const TCHAR* ForbiddenCaller : {TEXT("ECaller::ApplyPropertiesV1"),
 		TEXT("ECaller::Remove"), TEXT("ECaller::Reorder")})
@@ -482,7 +483,7 @@ void RequireStructCanonicalWriteAuthority(FAutomationTestBase& Test)
 			TEXT("AssetDocumentAIBlackboardMutation::RuntimeValueEquals(")), 1);
 }
 
-void RequireStructuralPublicationSourceGate(FAutomationTestBase& Test)
+void RequireStructuralPublicationSourceCheck(FAutomationTestBase& Test)
 {
 	TArray<FStructuralPublicationSource> Sources;
 	if (!LoadStructuralPublicationSources(Test, Sources)) return;
@@ -944,8 +945,8 @@ void RequireStructCanonicalReadAuthority(FAutomationTestBase& Test)
 			Readback = &Descriptor; break;
 		}
 	}
-	if (!Test.TestNotNull(TEXT("H0 descriptor binds canonical Struct READ"), Readback)) return;
-	Test.TestTrue(TEXT("H0 fingerprint binds the private READ ID and exact live source"),
+	if (!Test.TestNotNull(TEXT("readback descriptor binds canonical Struct READ"), Readback)) return;
+	Test.TestTrue(TEXT("readback fingerprint binds the private READ ID and exact live source"),
 		Readback->Admission.AuthorityFingerprint.EndsWith(TEXT(
 			"|AD.AI.BLACKBOARD.KEYTYPE-STRUCT-CANONICAL-READ-v1|"
 			"AssetDocumentAIBlackboardKeyTypeStructCanonicalRead::ReadCanonicalValue(ExactLiveDefaultValue)")));
@@ -1392,7 +1393,7 @@ void RequireEntryRemoveAuthority(FAutomationTestBase& Test)
 	}
 }
 
-void RequireLoadedConsumerCompletionSourceGate(FAutomationTestBase& Test)
+void RequireLoadedConsumerCompletionSourceCheck(FAutomationTestBase& Test)
 {
 	TArray<FStructuralPublicationSource> Sources;
 	if (!LoadStructuralPublicationSources(Test, Sources)) return;
@@ -1631,25 +1632,25 @@ bool FAssetDocumentAIProviderAuthorityTest::RunTest(const FString&)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAssetDocumentAIBlackboardStructuralSourceGateTest,
-	"UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceGate",
+	FAssetDocumentAIBlackboardStructuralSourceCheckTest,
+	"UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceCheck",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAssetDocumentAIBlackboardStructuralSourceGateTest::RunTest(const FString&)
+bool FAssetDocumentAIBlackboardStructuralSourceCheckTest::RunTest(const FString&)
 {
-	AssetDocumentAIProviderAuthorityTests::RequireBlackboardRowTopologySourceGate(*this);
+	AssetDocumentAIProviderAuthorityTests::RequireBlackboardRowTopologySourceCheck(*this);
 	AssetDocumentAIProviderAuthorityTests::RequireStructCanonicalWriteAuthority(*this);
 	AssetDocumentAIProviderAuthorityTests::RequireEntryRemoveAuthority(*this);
-	AssetDocumentAIProviderAuthorityTests::RequireStructuralPublicationSourceGate(*this);
-	AssetDocumentAIProviderAuthorityTests::RequireLoadedConsumerCompletionSourceGate(*this);
+	AssetDocumentAIProviderAuthorityTests::RequireStructuralPublicationSourceCheck(*this);
+	AssetDocumentAIProviderAuthorityTests::RequireLoadedConsumerCompletionSourceCheck(*this);
 	return !HasAnyErrors();
 }
 
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIDerivedCompletionSourceGate,
- "UEAssetDoc.AIProvider.BehaviorTree.DerivedCompletionSourceGate",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIDerivedCompletionSourceCheck,
+ "UEAssetDoc.AIProvider.BehaviorTree.DerivedCompletionSourceCheck",
  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-bool FAssetDocumentAIDerivedCompletionSourceGate::RunTest(const FString&)
+bool FAssetDocumentAIDerivedCompletionSourceCheck::RunTest(const FString&)
 {
  using namespace AssetDocumentAIProviderAuthorityTests;
  TArray<FStructuralPublicationSource> Sources;
@@ -1723,10 +1724,10 @@ bool FAssetDocumentAIDerivedCompletionSourceGate::RunTest(const FString&)
 }
 
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAISelectorBatchSourceGate,
- "UEAssetDoc.AIProvider.BehaviorTree.SelectorBatchSourceGate",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAISelectorBatchSourceCheck,
+ "UEAssetDoc.AIProvider.BehaviorTree.SelectorBatchSourceCheck",
  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-bool FAssetDocumentAISelectorBatchSourceGate::RunTest(const FString&)
+bool FAssetDocumentAISelectorBatchSourceCheck::RunTest(const FString&)
 {
  using namespace AssetDocumentAIProviderAuthorityTests;
  TArray<FStructuralPublicationSource> Sources;

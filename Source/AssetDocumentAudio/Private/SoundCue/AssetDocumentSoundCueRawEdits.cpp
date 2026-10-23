@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Raw editor-equivalent edits of the SoundCue profile (raw paths only where the editor does the same, in their own
 // file, each with a behaviour test):

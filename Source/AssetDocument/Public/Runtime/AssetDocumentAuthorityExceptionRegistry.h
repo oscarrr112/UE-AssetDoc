@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -533,11 +534,11 @@ inline FAssetDocumentAuthorityCandidateRecord MakeFrozenCandidate(
 	Candidate.ExactSurface = Surface;
 	Candidate.ImplementationSymbol = ImplementationSymbol;
 	Candidate.State = State;
-	Candidate.ResearcherId = TEXT("w0-umg-candidate-researcher");
-	Candidate.ImplementerId = TEXT("g1-contract-owner");
+	Candidate.ResearcherId = TEXT("umg-candidate-researcher");
+	Candidate.ImplementerId = TEXT("contract-owner");
 	Candidate.ProviderOwnerId = Owner == EAssetDocumentPrimitiveOwner::UMG
-		? TEXT("p-umg-provider-owner")
-		: TEXT("p-blueprint-provider-owner");
+		? TEXT("umg-provider-owner")
+		: TEXT("blueprint-provider-owner");
 	Candidate.ResubmissionCondition = ResubmissionCondition;
 	Candidate.HelperReplacementCondition = HelperReplacementCondition;
 	Candidate.Reviews.Add(MakeInitialCandidateReview(GovernanceId, Verdict, State));
@@ -626,9 +627,9 @@ inline FAssetDocumentAuthorityCandidateRecord MakeBlackboardStructuralBridgeReco
 	Candidate.ExactSurface = Surface;
 	Candidate.ImplementationSymbol = ImplementationSymbol;
 	Candidate.State = EAssetDocumentAuthorityState::BridgeAdmitted;
-	Candidate.ResearcherId = TEXT("a-bb-structural-authority-researcher");
-	Candidate.ImplementerId = TEXT("p-ai-blackboard-structural-publication-implementer");
-	Candidate.ProviderOwnerId = TEXT("p-ai-blackboard-provider-owner");
+	Candidate.ResearcherId = TEXT("blackboard-structural-researcher");
+	Candidate.ImplementerId = TEXT("blackboard-structural-publication-implementer");
+	Candidate.ProviderOwnerId = TEXT("blackboard-provider-owner");
 	Candidate.HelperReplacementCondition =
 		TEXT("Remove this exception when a stock public/exported Blackboard lifecycle helper covers the exact reviewed surface.");
 	Candidate.Reviews.Add(MakeReviewRecord(
@@ -650,9 +651,9 @@ inline FAssetDocumentAuthorityCandidateRecord MakeBlackboardKeyTypeStagingRecord
 		TEXT("AD.AI.BLACKBOARD.KEYTYPE-STAGING-v1"),
 		TEXT("One NewObject<UBlackboardKeyType> staging/materialization callsite for add and replace-class only."),
 		TEXT("AssetDocumentAIBlackboardStructuralPublication::StageKeyType"),
-		TEXT("/root/main_keytype_candidate_review"),
+		TEXT("blackboard-keytype-candidate-reviewer"),
 		TEXT("d53888bc04f986eb835e442e7fa87389700a1e9fe8f4b465c11ed6fef38b6d65"),
-		TEXT("/root/main_keytype_bridge_review"),
+		TEXT("blackboard-keytype-bridge-reviewer"),
 		TEXT("7ecd0a82233442960c4097248442eb0aa6aca0c0287af98ace9490fd6b8c4217"));
 }
 
@@ -662,14 +663,14 @@ inline FAssetDocumentAuthorityCandidateRecord MakeBlackboardLocalKeysPublication
 		TEXT("AD.AI.BLACKBOARD.LOCAL-KEYS-PUBLICATION-v1"),
 		TEXT("One complete UBlackboardData::Keys snapshot publication callsite for the four v2 rows and the exact immutable v1 compatibility caller."),
 		TEXT("AssetDocumentAIBlackboardStructuralPublication::PublishLocalKeysSnapshot"),
-		TEXT("/root/main_local_keys_candidate_review"),
+		TEXT("blackboard-local-keys-candidate-reviewer"),
 		TEXT("c67dc7df1cf67317bf9e10e1f1ff41a2d07a8b329d4081406806be5cbcd60746"),
-		TEXT("/root/main_local_keys_bridge_review"),
+		TEXT("blackboard-local-keys-bridge-reviewer"),
 		TEXT("66f0e1194458077c4ae50c3150e5b9556a383d85d32b08efddd3dd6153debd5d"));
 }
 
-// Root-approved M1/M2 records. The original AD.ANIMATION publication IDs map to
-// these existing-format governance IDs; no generic identity rule is broadened.
+// Montage slots and sections snapshot publication. The governance ids follow the catalog's existing id format; no
+// generic identity rule is broadened.
 inline FAssetDocumentAuthorityCandidateRecord MakeMontageStructuralBridgeRecord(bool bSlots)
 {
  FAssetDocumentAuthorityCandidateRecord C;
@@ -682,21 +683,21 @@ inline FAssetDocumentAuthorityCandidateRecord MakeMontageStructuralBridgeRecord(
   ? TEXT("PublishMontageSlots;PublishMontageSections;PublishMontageNotifyEvents;UAnimCompositeBase::SetCompositeLength")
   : TEXT("PublishMontageSections;PublishMontageNotifyEvents");
  C.State = EAssetDocumentAuthorityState::BridgeAdmitted;
- C.ResearcherId = TEXT("/root/montage_native_seams");
- C.ImplementerId = TEXT("/root"); C.ProviderOwnerId = TEXT("/root");
+ C.ResearcherId = TEXT("montage-native-seams-researcher");
+ C.ImplementerId = TEXT("assetdocument-maintainer"); C.ProviderOwnerId = TEXT("assetdocument-maintainer");
  C.HelperReplacementCondition = TEXT("Migrate the unique structural caller when stock public APIs cover typed collection publication and equivalent restoration, then remove these private exceptions.");
  C.Reviews.Add(MakeReviewRecord(FString(TEXT("candidate-review.initial/")) + C.GovernanceId,
-  TEXT("/root/montage_source_review"), EAssetDocumentIndependentVerdict::Pass,
+  TEXT("montage-source-reviewer"), EAssetDocumentIndependentVerdict::Pass,
   EAssetDocumentAuthorityState::CandidateApproved, TEXT("cfe9113147e5b0034f1125d0fee606add90d0f193a9acf352834de9557a83709"), TEXT("4aeea7541f3000b2211ab6719b6041d1b6998f85")));
  auto B = MakeReviewRecord(FString(TEXT("bridge-review.initial/")) + C.GovernanceId,
-  TEXT("/root/montage_structural_fixtures"), EAssetDocumentIndependentVerdict::Pass,
+  TEXT("montage-structural-fixtures-reviewer"), EAssetDocumentIndependentVerdict::Pass,
   EAssetDocumentAuthorityState::BridgeAdmitted, TEXT("9c62436673d3e6915d966f36b80e8686239b4c1c5f4aac1bf6482e996428b5c3"), TEXT("80e7074aa58df8a441df54c68e3609fa7faf2d6a"));
  B.ReviewKind = EAssetDocumentAuthorityReviewKind::Bridge; C.Reviews.Add(MoveTemp(B));
  return C;
 }
 
-// C0 maps the approved AD.ANIMATION scope to the existing canonical ID format.
-// These two source gates are historical evidence, not runtime/save claims.
+// Exact float-curve state publication, in the catalog's existing id format. Its two reviews are source reviews, not
+// runtime or save evidence.
 inline FAssetDocumentAuthorityCandidateRecord MakeAnimationFloatCurveBridgeRecord()
 {
  FAssetDocumentAuthorityCandidateRecord C;
@@ -705,20 +706,21 @@ inline FAssetDocumentAuthorityCandidateRecord MakeAnimationFloatCurveBridgeRecor
  C.ExactSurface = TEXT("Ordered complete float-curve replacement on exact stock Montage/Composite UAnimDataModel; sole private default/nine-key-field member patch after public controller edits and before public attributes notification.");
  C.ImplementationSymbol = TEXT("PublishExactFloatCurveState (approved plugin bridge; public Controller + exact member)");
  C.State = EAssetDocumentAuthorityState::BridgeAdmitted;
- C.ResearcherId = TEXT("/root/curve_c1_implementation");
- C.ImplementerId = TEXT("/root"); C.ProviderOwnerId = TEXT("/root");
+ C.ResearcherId = TEXT("float-curve-researcher");
+ C.ImplementerId = TEXT("assetdocument-maintainer"); C.ProviderOwnerId = TEXT("assetdocument-maintainer");
  C.HelperReplacementCondition = TEXT("Replace the unique exact-member patch when stock public controller APIs preserve all default and key bits with equivalent forward/inverse/save behavior.");
  C.Reviews.Add(MakeReviewRecord(TEXT("candidate-review.initial/ANIMATION-FLOAT-CURVE-EXACT-STATE-v1"),
-  TEXT("/root/independent_review"), EAssetDocumentIndependentVerdict::Pass,
+  TEXT("float-curve-candidate-reviewer"), EAssetDocumentIndependentVerdict::Pass,
   EAssetDocumentAuthorityState::CandidateApproved, TEXT("995e94b9de2329ae89a395166275912c962c8c4406515b8144bad699edcc29b5"), TEXT("1e3f186d5ee49e20d5a402026450dc1284d09942")));
  auto B = MakeReviewRecord(TEXT("bridge-review.initial/ANIMATION-FLOAT-CURVE-EXACT-STATE-v1"),
-  TEXT("/root/curve_c0_bridge_review"), EAssetDocumentIndependentVerdict::Pass,
+  TEXT("float-curve-bridge-reviewer"), EAssetDocumentIndependentVerdict::Pass,
   EAssetDocumentAuthorityState::BridgeAdmitted, TEXT("cacacf35cbb5546f10699c63d0f604d17b7bc5e5893a7dadf8d20be29ab955e9"), TEXT("2ec1903b0672f82b1a45c928184bc2a1b5b8ccd0"));
  B.ReviewKind = EAssetDocumentAuthorityReviewKind::Bridge; C.Reviews.Add(MoveTemp(B));
  return C;
 }
 
-// M3/M4 source gates bind actual independent reviews; runtime evidence is separate.
+// Montage notify and notify-state replacement. Both reviews are independent source reviews; runtime evidence is
+// separate.
 inline FAssetDocumentAuthorityCandidateRecord MakeMontageNotifyBridgeRecord(bool bStates)
 {
  FAssetDocumentAuthorityCandidateRecord C;
@@ -727,20 +729,20 @@ inline FAssetDocumentAuthorityCandidateRecord MakeMontageNotifyBridgeRecord(bool
  C.ExactSurface = TEXT("One request-local concrete notify family replacement, actual staged allocation set, existing Editor safe property configuration, and full retained mixed-timeline publication; Apply only.");
  C.ImplementationSymbol = TEXT("StageMontageNotifyObject;ConfigureAssetDocumentEditorStagedMontageNotifyProperties;PublishMontageNotifyEvents");
  C.State = EAssetDocumentAuthorityState::BridgeAdmitted;
- C.ResearcherId = TEXT("/root/montage_native_seams"); C.ImplementerId = TEXT("/root"); C.ProviderOwnerId = TEXT("/root");
+ C.ResearcherId = TEXT("montage-native-seams-researcher"); C.ImplementerId = TEXT("assetdocument-maintainer"); C.ProviderOwnerId = TEXT("assetdocument-maintainer");
  C.HelperReplacementCondition = TEXT("Stock exported APIs cover safe staged notify configuration and whole mixed-timeline publication with equivalent rollback.");
  C.Reviews.Add(MakeReviewRecord(FString(TEXT("candidate-review.initial/")) + C.GovernanceId,
-  TEXT("/root/montage_notify_candidate_review"), EAssetDocumentIndependentVerdict::Pass,
+  TEXT("montage-notify-candidate-reviewer"), EAssetDocumentIndependentVerdict::Pass,
   EAssetDocumentAuthorityState::CandidateApproved, TEXT("4e82009337ae72c48268b2d6d46da22e59861312b1a65a1147d21fdce53c6375"), TEXT("dce40e326922a2ed49f14040391cacf6fe8b5b6c")));
  auto B = MakeReviewRecord(FString(TEXT("bridge-review.initial/")) + C.GovernanceId,
-  TEXT("/root/montage_source_review"), EAssetDocumentIndependentVerdict::Pass,
+  TEXT("montage-source-reviewer"), EAssetDocumentIndependentVerdict::Pass,
   EAssetDocumentAuthorityState::BridgeAdmitted, TEXT("cebd7cf87a329cc9f78b26944d806a147799e3bde456b46d3a91d2b7783a769f"), TEXT("ff48b6ee1149262917d1e1153edc4939338fae84"));
  B.ReviewKind = EAssetDocumentAuthorityReviewKind::Bridge; C.Reviews.Add(MoveTemp(B));
  return C;
 }
 
-// D5 projects the existing A2 source review and independent bridge closure review.
-// Evidence: bt-a2-independent-review.md and bt-d5-20260908/bridge-projection-source-review{,03}.json.
+// Behavior Tree graph installation and Blackboard ValueOr cache invalidation: an independent source review of the
+// candidate and a separate independent review of the bridge.
 inline FAssetDocumentAuthorityCandidateRecord MakeBehaviorTreeBridgeRecord(bool bInstall)
 {
  FAssetDocumentAuthorityCandidateRecord C;
@@ -754,12 +756,12 @@ inline FAssetDocumentAuthorityCandidateRecord MakeBehaviorTreeBridgeRecord(bool 
   : TEXT("Replace only with a stock public exported exact ValueOr cache invalidation lifecycle covering all eleven families.");
  C.PhysicalOwner = EAssetDocumentPrimitiveOwner::AI;
  C.State = EAssetDocumentAuthorityState::BridgeAdmitted;
- C.ResearcherId = TEXT("/root"); C.ImplementerId = TEXT("/root"); C.ProviderOwnerId = TEXT("/root");
+ C.ResearcherId = TEXT("assetdocument-maintainer"); C.ImplementerId = TEXT("assetdocument-maintainer"); C.ProviderOwnerId = TEXT("assetdocument-maintainer");
  C.Reviews.Add(MakeReviewRecord(FString(TEXT("candidate-review.A2/")) + C.GovernanceId,
-  TEXT("/root/a3s_review"), EAssetDocumentIndependentVerdict::Pass,
+  TEXT("behavior-tree-source-reviewer"), EAssetDocumentIndependentVerdict::Pass,
   EAssetDocumentAuthorityState::CandidateApproved, TEXT("a8a1c63275a70e047d775b4dabc71f626b3484baca4e74418454ddfc3115b378"), TEXT("2d07c76b5a65155346639f8967b4592a6218b17b")));
  auto B = MakeReviewRecord(FString(bInstall ? TEXT("bridge-review.D5/") : TEXT("bridge-review.BTProduction/")) + C.GovernanceId,
-  bInstall ? TEXT("/root/bt_bridge_projection_review") : TEXT("/root/production_boundary_review"), EAssetDocumentIndependentVerdict::Pass,
+  bInstall ? TEXT("behavior-tree-bridge-projection-reviewer") : TEXT("behavior-tree-production-boundary-reviewer"), EAssetDocumentIndependentVerdict::Pass,
   EAssetDocumentAuthorityState::BridgeAdmitted,
   bInstall ? TEXT("8a4cde32d19ef46644acfa6599c40fe765a90a03da3a885b6b950d69896fd773") : TEXT("0259a302a91345388a67f9f8f60fa9dcf82158c8fabdfbb923acc6fee3becd05"),
   bInstall ? TEXT("ca953c4edc9063faca22344994b2ea7f1300e17f") : TEXT("74321d579e4c7c61bbde093fd2bb8b99f5084843"));
@@ -838,17 +840,17 @@ inline bool HasExactFrozenIdentities(TConstArrayView<FAssetDocumentAuthorityCand
 }
 } // namespace UE::AssetDocument::AuthorityGovernance::Private
 
-inline TConstArrayView<FAssetDocumentAuthorityCandidateRecord> GetG1FrozenAuthorityExceptionRecords()
+inline TConstArrayView<FAssetDocumentAuthorityCandidateRecord> GetFrozenAuthorityExceptionRecords()
 {
 	static const TArray<FAssetDocumentAuthorityCandidateRecord> Catalog =
 		UE::AssetDocument::AuthorityGovernance::Private::BuildFrozenCatalog();
 	return Catalog;
 }
 
-inline FAssetDocumentContractValidationResult ValidateG1FrozenAuthorityExceptionRecords()
+inline FAssetDocumentContractValidationResult ValidateFrozenAuthorityExceptionRecords()
 {
 	using namespace UE::AssetDocument::AuthorityGovernance::Private;
-	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Catalog = GetG1FrozenAuthorityExceptionRecords();
+	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Catalog = GetFrozenAuthorityExceptionRecords();
 	const FAssetDocumentContractValidationResult GenericResult =
 		ValidateAssetDocumentAuthorityExceptionCatalog(Catalog);
 	if (!GenericResult.bValid)
@@ -857,7 +859,7 @@ inline FAssetDocumentContractValidationResult ValidateG1FrozenAuthorityException
 	}
 	if (!HasExactFrozenIdentities(Catalog))
 	{
-		return MakeValidationResult(false, TEXT("AuthorityCatalog.FrozenIdentityMismatch"), TEXT("Frozen G1 authority identities or states changed."));
+		return MakeValidationResult(false, TEXT("AuthorityCatalog.FrozenIdentityMismatch"), TEXT("Frozen authority identities or states changed."));
 	}
 	return MakeValidationResult(true, TEXT(""), TEXT(""));
 }

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // rig.ikretargeter.read.v1: the authored state of an IK Retargeter (design §2.2, §3.3) as document-ready records.
 // The retargeter is read as stored after load (PostLoad already converted older formats into the op stack);

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -886,12 +887,12 @@ bool RequireUnchangedFixtureState(
 	const FAssetDocumentAITestFixture& Fixture)
 {
 	const FFixtureState After = CaptureFixtureState(Fixture);
-	return Test.TestEqual(TEXT("lookup RED preserves fixture scratch tree"), After.Tree, Before.Tree)
-		&& Test.TestEqual(TEXT("lookup RED preserves fixture scratch graph"), After.Graph, Before.Graph)
-		&& Test.TestEqual(TEXT("lookup RED preserves fixture root"), After.Root, Before.Root)
-		&& Test.TestEqual(TEXT("lookup RED preserves installed graph pointer"), After.InstalledGraph, Before.InstalledGraph)
-		&& Test.TestEqual(TEXT("lookup RED preserves scratch graph outer"), After.GraphOuter, Before.GraphOuter)
-		&& Test.TestEqual(TEXT("lookup RED preserves root graph membership"), After.RootGraph, Before.RootGraph)
+	return Test.TestEqual(TEXT("failed lookup preserves fixture scratch tree"), After.Tree, Before.Tree)
+		&& Test.TestEqual(TEXT("failed lookup preserves fixture scratch graph"), After.Graph, Before.Graph)
+		&& Test.TestEqual(TEXT("failed lookup preserves fixture root"), After.Root, Before.Root)
+		&& Test.TestEqual(TEXT("failed lookup preserves installed graph pointer"), After.InstalledGraph, Before.InstalledGraph)
+		&& Test.TestEqual(TEXT("failed lookup preserves scratch graph outer"), After.GraphOuter, Before.GraphOuter)
+		&& Test.TestEqual(TEXT("failed lookup preserves root graph membership"), After.RootGraph, Before.RootGraph)
 		&& Test.TestEqual(TEXT("scratch operations preserve the live Tree Blackboard mirror"), After.TreeBlackboard, Before.TreeBlackboard)
 		&& Test.TestEqual(TEXT("scratch operations preserve the live Root Blackboard source"), After.RootBlackboard, Before.RootBlackboard)
 		&& Test.TestEqual(TEXT("scratch operations preserve the live Blackboard parent"), After.BlackboardParent, Before.BlackboardParent)
@@ -900,10 +901,10 @@ bool RequireUnchangedFixtureState(
 		&& Test.TestEqual(TEXT("scratch operations preserve live graph node GUID order"), After.NodeGuids, Before.NodeGuids)
 		&& Test.TestEqual(TEXT("scratch operations preserve live graph node classes"), After.NodeClasses, Before.NodeClasses)
 		&& Test.TestEqual(TEXT("scratch operations preserve live graph node instances"), After.NodeInstances, Before.NodeInstances)
-		&& Test.TestEqual(TEXT("lookup RED preserves scratch tree package dirty state"), After.bTreePackageDirty, Before.bTreePackageDirty)
-		&& Test.TestEqual(TEXT("lookup RED preserves scratch graph package dirty state"), After.bGraphPackageDirty, Before.bGraphPackageDirty)
+		&& Test.TestEqual(TEXT("failed lookup preserves scratch tree package dirty state"), After.bTreePackageDirty, Before.bTreePackageDirty)
+		&& Test.TestEqual(TEXT("failed lookup preserves scratch graph package dirty state"), After.bGraphPackageDirty, Before.bGraphPackageDirty)
 		&& Test.TestEqual(TEXT("scratch operations preserve live Blackboard package dirty state"), After.bBlackboardPackageDirty, Before.bBlackboardPackageDirty)
-		&& Test.TestEqual(TEXT("lookup RED preserves scratch graph node count"), After.NodeCount, Before.NodeCount)
+		&& Test.TestEqual(TEXT("failed lookup preserves scratch graph node count"), After.NodeCount, Before.NodeCount)
 		&& Test.TestEqual(TEXT("scratch operations leave no public toolkit window"), After.OpenEditorCount, Before.OpenEditorCount)
 		&& Test.TestEqual(TEXT("scratch operations leave no edited-asset registration"), After.EditedAssetCount, Before.EditedAssetCount);
 }
@@ -973,7 +974,7 @@ bool FAssetDocumentAIBehaviorTreeActionSchemaTest::RunTest(const FString&)
 		return false;
 	}
 	UBlackboardData* LiveBlackboard = NewObject<UBlackboardData>(
-		Fixture.GetScratchTree(), TEXT("AssetDocumentAIT4LiveBlackboard"), RF_Transactional);
+		Fixture.GetScratchTree(), TEXT("AssetDocumentAITestLiveBlackboard"), RF_Transactional);
 	if (!TestNotNull(TEXT("test-owned live Blackboard exists"), LiveBlackboard))
 	{
 		return false;
@@ -1013,12 +1014,12 @@ bool FAssetDocumentAIBehaviorTreeActionSchemaTest::RunTest(const FString&)
 		{
 			AddError(*FString::Printf(TEXT("required descriptor is absent: %s"), Expected.Id));
 			const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(Invocation, Handles, &Transaction);
-			TestEqual(TEXT("missing descriptor terminates as a failed lookup RED"), Outcome.Status,
+			TestEqual(TEXT("missing descriptor terminates as a failed lookup"), Outcome.Status,
 				EAssetDocumentPrimitiveOutcomeStatus::Failed);
 			TestTrue(TEXT("missing descriptor returns GenericProvider.UnknownPrimitive"),
 				HasDiagnostic(Outcome, UnknownPrimitiveCode));
-			TestTrue(TEXT("lookup RED returns no value handles"), Outcome.HandleResults.IsEmpty());
-			TestTrue(TEXT("lookup RED returns no changed set"), Outcome.ChangedSet.IsEmpty());
+			TestTrue(TEXT("failed lookup returns no value handles"), Outcome.HandleResults.IsEmpty());
+			TestTrue(TEXT("failed lookup returns no changed set"), Outcome.ChangedSet.IsEmpty());
 			RequireNoSideEffectDelta(*this, Expected.Id, CountsBeforeInvocation, Handles, Transaction);
 			continue;
 		}
@@ -1156,11 +1157,11 @@ bool FAssetDocumentAIBehaviorTreeActionSchemaTest::RunTest(const FString&)
 		MakeBehaviorInvocation(TEXT("ai.behavior_tree.graph.create.v1"),
 			EAssetDocumentRuntimeRequestPhase::Apply, Transaction.GetMutationToken(),
 			ObjectValue({TEXT("behavior_tree_path"), TEXT("graph_name")},
-				{StringValue(*LivePath), StringValue(TEXT("AssetDocumentAIT4ScratchGraph"))})),
+				{StringValue(*LivePath), StringValue(TEXT("AssetDocumentAITestScratchGraph"))})),
 		Handles, &Transaction);
 	RequireSuccess(*this, TEXT("factory-owned scratch graph creation succeeds"), GraphCreate);
 	UBehaviorTreeGraph* ScratchGraph = FindUniqueScratchGraph(
-		*this, TEXT("AssetDocumentAIT4ScratchGraph"));
+		*this, TEXT("AssetDocumentAITestScratchGraph"));
 	if (ScratchGraph != nullptr)
 		RequireScratchChangedSet(*this, TEXT("graph create"), GraphCreate, LivePath,
 			*ScratchGraph, {});
@@ -1455,7 +1456,7 @@ bool FAssetDocumentAIBehaviorTreeActionSchemaTest::RunTest(const FString&)
 				{ObjectValue({TEXT("h"), TEXT("w"), TEXT("x"), TEXT("y")},
 					{NumberValue(120.0), NumberValue(240.0),
 						NumberValue(640.0), NumberValue(160.0)}),
-					StringValue(TEXT("P-AI scratch comment"))}),
+					StringValue(TEXT("scratch comment"))}),
 			{{TEXT("graph"), GraphHandle.GetValue()}}),
 		Handles, &Transaction);
 	RequireSuccess(*this, TEXT("public comment action succeeds"), CommentCreate);

@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import re
@@ -195,7 +198,7 @@ class GenericProfileCandidate:
                 "BlockedFragments": [
                     {
                         "kind": "EmbeddedObject",
-                        "code": "AD.G1.BLOCK.EDITOR.EMBEDDED_OBJECT_AUTHORITY",
+                        "code": "AD.BLOCK.EDITOR.EMBEDDED_OBJECT_AUTHORITY",
                     }
                 ],
             }

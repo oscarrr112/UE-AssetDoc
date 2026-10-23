@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #include "Provider/Sequence/AssetDocumentAnimationSequenceOwnedFragmentLifecycle.h"
 
 #include "AssetDocumentEditorNativeState.h"
@@ -424,8 +425,8 @@ FAssetDocumentContractValidationResult FExistingReplacement::Apply(const FAssetD
 	R = Impl->Parent->ValidateIdentity(C, Lease, Handles, T); if (!R.bValid) return R;
 	R = Impl->PublishExistingOrder(); if (!R.bValid) return R;
 	// Stock pointer publication has no notification or derived-data completion.
-	// Its public getters must expose this exact requested order immediately; G1
-	// already verifies every raw native field value without default callbacks.
+	// Its public getters must expose this exact requested order immediately; the pure
+	// Prepare already verifies every raw native field value without default callbacks.
 	R = Impl->Parent->ValidateIdentity(C, Lease, Handles, T); if (!R.bValid) return R;
 	return Result(Impl->Parent->GetParent().GetOutermost()->IsDirty() == Impl->Parent->WasPackageDirty(),
 		TEXT("SequenceOwnedFragment.Lifecycle.PackageStateDrift"));

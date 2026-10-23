@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Control Rig Validate, diff-only Extract, class Inspect and FactoryContext.
 // UEAssetDoc.ControlRig.Validate: validate_asset_document runs apply's checks on a transient trial rig

@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Template / Camera Animation Sequences (design §7.2, phase S4):
+// Template / Camera Animation Sequences (design §7.2):
 // UEAssetDoc.Sequencer.Template.RoundTrip: a Template Sequence and a Camera Animation Sequence made as
 //   the editor makes them (New asset factory with its bound actor class, a component binding added as
 //   UTemplateSequence::FindOrAddBinding adds it, transform / focal-length keys, a spawnable template edit, folder,

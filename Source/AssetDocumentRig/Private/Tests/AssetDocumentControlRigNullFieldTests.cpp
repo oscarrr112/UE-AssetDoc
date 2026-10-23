@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // rig.controlrig.edit.v1 ops called directly. node.set position / size / title / color and function.set color
 // have no "reset to default" in the editor (the controller and the Details panel take a value); a null there was

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Open-editor apply for the Persona assets (Runtime/AssetDocumentOpenEditor.h). Persona editors edit the asset itself
 // (no working copy), but most of their panels only rebuild from the asset on the editor's own edits or on Undo

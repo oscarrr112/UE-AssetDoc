@@ -1,6 +1,6 @@
 # 独立动画资产支持矩阵（Skeleton、BlendSpace 系、PoseAsset、AnimComposite）
 
-**状态：** 2026-10-04。上位规则：[设计规则](asset-document-design-rules.md)
+上位规则：[设计规则](asset-document-design-rules.md)
 §3（回滚 = 功能等价）、§4（编辑器等价的原始编辑放在独立文件并有行为测试）、§5（支持矩阵、能力不倒退）。
 
 这些类原来走通用反射路由（只有 `Properties`；骨骼没有槽位、Blend Space 没有轴和样本可写）。现在由 Python
@@ -83,23 +83,22 @@ Profile（`Content/Python/asset_document/profiles/{skeleton,blend_space,pose_ass
 | 其它 Details | 顶层 `Properties` | Supported | 通用 Properties 区域 |
 | 资产在动画编辑器中打开时 apply | — | Supported | 与 Montage / Sequence 相同的处理（原地修改后重建文档页签、刷新预览）；测试 `AnimationAssets.OpenEditorApply.AnimComposite` |
 
-## 5. AnimMontage 后续（AI 试用 1 任务 7）
+## 5. AnimMontage 与骨骼槽位
 
-- 根因：引擎新建的 Montage 带一条 `DefaultSlot` 轨道（`UAnimMontage` 构造函数）；教程骨骼没有任何槽位组，
-  所以"只给 Skeleton"的新建在设置骨骼时被 `IncompatibleReference` 拒绝，而 AI 既看不到也加不了槽位。
-- 现在：Montage profile 在 preflight 通过 `animation_asset.skeleton.read.v1` 读取骨骼槽位，缺失时报
+- 引擎新建的 Montage 带一条 `DefaultSlot` 轨道（`UAnimMontage` 构造函数）；骨骼没有对应槽位组时，"只给 Skeleton"的新建在设置骨骼时会被 `IncompatibleReference` 拒绝。
+- Montage profile 在 preflight 通过 `animation_asset.skeleton.read.v1` 读取骨骼槽位，缺失时报
   `AnimMontage.UnknownSlot`，路径为 `/Body/SlotAnimTracks/<i>/SlotName`（未写轨道的新建：`/Body/SlotAnimTracks`；
   改骨骼：`/Body/Skeleton`），消息给出骨骼路径和它的槽位列表，并指向 Skeleton 文档的 `Body.SlotGroups`。C++ 侧
-  `AnimationProvider.Montage.InvalidSlot` / `AnimationProvider.Skeleton.IncompatibleReference` 的消息也改为指出
+  `AnimationProvider.Montage.InvalidSlot` / `AnimationProvider.Skeleton.IncompatibleReference` 的消息指出
   骨骼、缺少的槽位或不兼容的动画。
-- 任务 7 路径（`AnimationAssets.MontageSlot`）：骨骼文档添加 `DefaultSlot` / `UpperBody`（并在 `Properties` 写
+- 测试 `AnimationAssets.MontageSlot`：骨骼文档添加 `DefaultSlot` / `UpperBody`（并在 `Properties` 写
   `CompatibleSkeletons`）→ 只给 Skeleton 新建 Montage 成功（得到 `DefaultSlot` 轨道）→ 用引擎教程动画新建
   `UpperBody` 轨道的 Montage 成功（同一文档写 `CompositeSections`）→ 骨骼文档删除该槽位被 `Skeleton.SlotInUse` 拒绝。
-- 跑通任务 7 时 Montage 结构原语另有两处过严，已按编辑器行为放宽：
+- Montage 结构原语按编辑器行为放行：
   - 新建（从未有通知轨道）的 Montage 改变长度时，引擎会建默认通知轨道 "1"（`UAnimSequenceBase::InitializeNotifyTrack`，
-    与 Montage 编辑器和每次加载相同），原先整体拒绝（"would initialize an unowned notify track"）。
-  - 没有 `SyncGroup` 时，`SyncSlotIndex` 所指轨道的槽位可以改变（编辑器的槽位下拉框同样可改）；有 `SyncGroup` 时仍拒绝。
-  - 保留的 section / notify 所在槽位被替换时仍拒绝，但消息现在指出槽位并说明在同一文档写 `CompositeSections`。
-- Diff：经 Diff 请求传入的文档里整数可能是浮点（`LoopingCount: 1.0`）；Montage 的 Diff 现在把整数值浮点视为整数。
+    与 Montage 编辑器和每次加载相同），这不算改动未拥有的通知轨道。
+  - 没有 `SyncGroup` 时，`SyncSlotIndex` 所指轨道的槽位可以改变（编辑器的槽位下拉框同样可改）；有 `SyncGroup` 时拒绝。
+  - 保留的 section / notify 所在槽位被替换时拒绝，消息指出槽位并说明在同一文档写 `CompositeSections`。
+- Diff：经 Diff 请求传入的文档里整数可能是浮点（`LoopingCount: 1.0`）；Montage 的 Diff 把整数值浮点视为整数。
 - 不做：编辑器的 Montage 面板在打开时会把 Montage 用到的槽位自动注册到骨骼（`RegisterSlotNode`）。AssetDocument
   不在 Montage apply 中顺带修改另一个资产（骨骼），而是给出明确诊断，由骨骼文档显式添加。

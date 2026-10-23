@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -19,7 +20,7 @@ struct FAssetDocumentAnimationFloatCurveState
     TArray<FRichCurveKey> Keys;
 };
 
-// Input is the C1 curves array, not the enclosing {"curves": ...} object.
+// Input is the snapshot curves array, not the enclosing {"curves": ...} object.
 // Both functions clear OutStates on failure and publish only complete sets.
 bool ParseAnimationFloatCurveStateV2(
     const FAssetDocumentRuntimeValueDto& Curves,

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // edit_level apply and verify (design §3.1 steps 5-6). Runs inside the batch
 // transaction. Actors and components are re-resolved by path / name at every step:

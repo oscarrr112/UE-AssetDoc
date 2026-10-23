@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Graph edits Apply refuses are refused by Validate too, with the same code, on the production route.
 //   ByRefDefault    A literal PinOverride on a by-ref input (the Blackboard's SetValueAsObject KeyName) fails Validate

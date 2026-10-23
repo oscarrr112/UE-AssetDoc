@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.Generic.OpenEditorApply: a generic asset (UTestDataAsset) open in the plain
 // details-panel asset editor takes an apply that changes its properties. The editor's details panel edits the asset

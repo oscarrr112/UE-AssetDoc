@@ -1,6 +1,6 @@
 # AssetDocument 通用图原子操作（Graph primitives v1）
 
-**状态：** Phase 1 冻结接口（2026-10-03）。C++ provider（`Source/AssetDocumentGraph`）与 Python 图模型（`Content/Python/asset_document/graphs/**`）都以本文为准。修改本文需要 Root 同意，并同时更新两侧与 `Content/Python/asset_document/tests/fixtures/graph_dto/*.json`。
+**定位：** C++ provider（`Source/AssetDocumentGraph`）与 Python 图模型（`Content/Python/asset_document/graphs/**`）两侧共同遵循的接口，以本文为准。修改本文须同时更新两侧与 `Content/Python/asset_document/tests/fixtures/graph_dto/*.json`。
 
 上位规则：[设计规则](asset-document-design-rules.md)。回滚由 Core 统一提供（整包快照 + 派生状态重建），本文的原子操作**不写 typed inverse**。
 
@@ -108,7 +108,7 @@ GraphSnapshot 还带 `schema_version`、`node_count`、`next_node_offset`（分�
 - `IAssetDocumentGraphHostAdapter`（按资产类匹配）：`EnumerateGraphs`、`CreateGraph`、`RemoveGraph`、`RenameGraph`、`Finalize`；`Finalize` 同时注册为 Core 的派生状态重建钩子。
 - Blueprint host 的 `EnumerateGraphs` 按编辑器实现接口时创建的顺序（`ImplementNewInterface`：接口函数的迭代顺序）报告接口图：存储顺序还带着接口的修改历史（接口后加的函数被 conform 追加到末尾），而编辑器不能调整接口图的顺序（`MoveGraphBeforeOtherGraph` 只移动函数图与宏图）。
 - 注册：各模块 `StartupModule` 调 `RegisterAssetDocumentGraphSchemaAdapter` / `RegisterAssetDocumentGraphHostAdapter`。
-- 本阶段实现：K2 schema、Blueprint host、通用 fallback（`GetGraphContextActions` + `FEdGraphSchemaAction_NewNode`）；BT（AssetDocumentAI）；AnimGraph / 状态机 / ABP host / ABP 设置（AssetDocumentAnimation，见 §9）。
+- 已实现：K2 schema、Blueprint host、通用 fallback（`GetGraphContextActions` + `FEdGraphSchemaAction_NewNode`）；BT（AssetDocumentAI）；AnimGraph / 状态机 / ABP host / ABP 设置（AssetDocumentAnimation，见 §9）。
 - 可选 `SetNodeSetting(asset, node, path, value, bOutHandled, error)`（schema 适配器）：`graph.node.property.set.v1`（container `node`）先交给适配器；不是普通反射属性的节点设置（如 state alias 指向的状态、动画节点属性绑定）在此处理并置 `bOutHandled`，否则走反射属性路径。默认不处理。K2：`Pure`（Variable Get 的 “Convert to Branch / Validated Get / pure Get”，函数调用的 “Show / Hide Exec pins”；菜单项绑定私有成员，按其函数体执行：Modify → 反射写 `CurrentVariation` / `NodePurityOverride` → `ReconstructNode`）、`LocalVariables`（函数 Entry：`FBlueprintEditorUtils::AddLocalVariable` / `RemoveLocalVariable` / `ChangeLocalVariableType`，默认值 / 分类 / 说明写入变量描述，按列表排序；完成后刷新 action 数据库，使 `K2:VariableGet:<类>:<函数>:<变量>` 可 spawn；Python 计划在签名之后、节点之前以 `graph.local_variables.set` 执行）。
 - `IAssetDocumentBlueprintSettingsAdapter`（按 Blueprint 类匹配，最深者优先）：不是可编辑反射属性的类级设置（如 ABP 预览网格）。`blueprint.member.query.v1` 以 `settings` 返回 `QuerySettings`；`blueprint.member.setting.set.v1` `{name, value}` → `{settings}` 调 `SetSetting`；无适配器 → `BlueprintMember.SettingNotFound`。
 - `graph.node.property.set.v1` 的 Details 编辑事件为 `PostEditChangeChainProperty`（链 = 顶层成员 + 叶属性，与 Details 面板相同），叶属性专属处理（如 `Node.InstanceClass`）会执行。
@@ -161,7 +161,7 @@ K2:<NodeClass 去掉 K2Node_ 前缀>[:<OwnerPath>][:<FieldName>][@<Binding>]
 - 新建 Blueprint 自带的 ghost 事件节点应复用，不重复创建。
 - split pin 暂不支持。
 
-## 9. AnimBlueprint 增补（P2）
+## 9. AnimBlueprint 增补
 
 - **模块分层**：AnimGraph / 状态机 / ABP host / 设置适配器在 `AssetDocumentAnimation`，依赖 `AssetDocumentGraph` 的公共适配器注册表；因此 `AssetDocumentGraph` 是其它 provider（AI、Animation、Blueprint、UMG、Widget）之下的一层，反向依赖仍被 `Architecture.ModuleGraph.NoReverseDependencies` 禁止。
 - **action_key**：`Anim:<Kind>`（`UAnimGraphNode_<Kind>`，菜单中任意动画节点）、`Anim:SaveCachedPose:<Cache>`、`Anim:UseCachedPose:<Cache>`、`Anim:LinkedAnimLayer:<Layer>`（自有 layer 或已实现接口的 layer）、`Anim:BlendSpaceGraph:<BlendSpaceClass>` / `Anim:RotationOffsetBlendSpaceGraph:<Class>`（菜单的类变体 spawner，按 blend space 类区分）、`Anim:LinkedInputPose`（只在可编辑 layer 图中提供，等同 layer Details 的 Inputs “+”）；状态机图中 `SM:State`、`SM:Conduit`、`SM:StateAlias`、`SM:Transition`。implicit_role：`root`（Output Pose / 状态结果 / 自定义混合结果 / 采样结果）、`sm_entry`、`result`（转换 / conduit 规则结果）、`source_pose` / `destination_pose`（自定义混合图中按 DataSource 的第一个姿势求值节点）。
@@ -173,7 +173,7 @@ K2:<NodeClass 去掉 K2Node_ 前缀>[:<OwnerPath>][:<FieldName>][@<Binding>]
 - **比较**：`ublueprint_graph_compare` 可传入节点标签函数（ABP 用 `anim_label`）；严格比较中 `@Property` / `@Extra` 的浮点按 5 位小数取整（float32 读回）。
 - **快照**：`FAssetDocumentPackageSnapshot` 恢复时，新建的 `UEdGraphNode` 先对每个 pin `BreakAllPinLinks()` 再移除，避免存活节点留下指向已释放 pin 的连线（对所有图资产生效）。
 
-## 10. SoundCue 增补（S0 / S1，2026-10-07，Root / 用户已批准，见 [SoundCue 设计](asset-document-soundcue-design.md) §8）
+## 10. SoundCue 增补（见 [SoundCue 设计](asset-document-soundcue-design.md) §8）
 
 - **适配器**（`AssetDocumentAudio/Private/SoundCue/`）：schema 适配器 tag `SoundCue`（`USoundCueGraphSchema`，按类路径匹配，不包含私有头）；host 适配器 `USoundCue`，一个图（role `other`，path `SoundCue`，不可 create / rename / remove）；`Finalize` 同时注册为派生状态重建器。
 - **action_key**：`SoundCue:Node:<USoundNode 类路径>`（调色板列出的非抽象、未隐藏 / 弃用的类，经调色板 action `FSoundCueGraphSchemaAction_NewNode::PerformAction` 生成，反射构造其 UScriptStruct）、`SoundCue:Comment`（`GetCreateCommentAction`）。未知或调色板不提供的类：`Graph.ActionNotFound`。

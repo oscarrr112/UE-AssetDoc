@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The "layers" and "data_layers" fields of spawn / duplicate / set: whole lists, as the
 // Layers panel (ULayersSubsystem, non-partitioned levels; missing layers are created)

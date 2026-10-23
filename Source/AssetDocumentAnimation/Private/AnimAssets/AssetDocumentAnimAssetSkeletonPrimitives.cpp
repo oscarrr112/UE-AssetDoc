@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // animation_asset.skeleton.read.v1 / edit.v1: the Skeleton editor's authorable surface. Edits go
 // through IEditableSkeleton (the object the Skeleton editor's Anim Slot Manager, skeleton tree,

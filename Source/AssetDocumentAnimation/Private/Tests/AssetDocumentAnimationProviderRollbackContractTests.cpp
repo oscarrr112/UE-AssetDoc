@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -160,8 +161,8 @@ bool FAssetDocumentAnimationProviderRollbackContractTest::RunTest(const FString&
 	using namespace AnimationProviderRollbackContractTestsLocal;
 	int32 MutatingCandidateCount = 0;
 	int32 MutatingStableBlockerCount = 0;
-	for (const FAssetDocumentAnimationT0DecisionRecord& Decision :
-		GetAssetDocumentAnimationT0DecisionRecords())
+	for (const FAssetDocumentAnimationAuthorityDecisionRecord& Decision :
+		GetAssetDocumentAnimationAuthorityDecisionRecords())
 	{
 		if (Decision.bMutating)
 		{
@@ -214,11 +215,11 @@ bool FAssetDocumentAnimationProviderRollbackContractTest::RunTest(const FString&
 	FAssetDocumentPreflightReceipt Receipt;
 	Receipt.RequestId = FGuid::NewGuid();
 	Receipt.RuntimeRevision = 1;
-	Receipt.ReceiptHash = TEXT("sha256:p-anim-t0-rollback");
+	Receipt.ReceiptHash = TEXT("sha256:animation-rollback");
 	Receipt.bSucceeded = true;
 	Receipt.CompleteFootprint.Add({
 		EAssetDocumentMutationFootprintKind::UObjectState,
-		TEXT("Object:/Game/PANIM.Target"),
+		TEXT("Object:/Game/AnimationRollback.Target"),
 		TEXT("animation.preimage"),
 	});
 
@@ -267,7 +268,7 @@ bool FAssetDocumentAnimationProviderRollbackContractTest::RunTest(const FString&
 		EAssetDocumentAtomicState::Mutating);
 	TestTrue(
 		TEXT("transaction-owned Animation preimage rolls back"),
-		Transaction->Rollback(TEXT("AD.PANIM.TEST.INJECTED_FAILURE")).bValid);
+		Transaction->Rollback(TEXT("AD.ANIMATION.TEST.INJECTED_FAILURE")).bValid);
 	TestEqual(
 		TEXT("rollback reaches its terminal state"),
 		Transaction->GetState(),
@@ -279,7 +280,7 @@ bool FAssetDocumentAnimationProviderRollbackContractTest::RunTest(const FString&
 	TestEqual(
 		TEXT("Animation preimage receives the stable failure code"),
 		Action->ObservedFailureCode,
-		FString(TEXT("AD.PANIM.TEST.INJECTED_FAILURE")));
+		FString(TEXT("AD.ANIMATION.TEST.INJECTED_FAILURE")));
 
 	return true;
 }

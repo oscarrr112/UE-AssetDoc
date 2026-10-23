@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Struct values that list only some of their fields verify against the full
 // read-back. An omitted struct member is the member's default, also inside array elements:

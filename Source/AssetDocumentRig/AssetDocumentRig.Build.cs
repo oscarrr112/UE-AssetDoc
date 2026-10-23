@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 using UnrealBuildTool;
 
@@ -47,7 +48,7 @@ public class AssetDocumentRig : ModuleRules
 			// Tests: the open editors' UI is ticked (FSlateApplication).
 			"Slate",
 			"SlateCore",
-			// Edits (CR1): member variable pin types (RigVMDeveloperTypeUtils.h includes EdGraphSchema_K2.h).
+			// Edits: member variable pin types (RigVMDeveloperTypeUtils.h includes EdGraphSchema_K2.h).
 			"BlueprintGraph",
 			// Tests: duplicates of real rigs are made as the Content Browser does; Control Rig fixtures are made with
 			// the Content Browser's factory.

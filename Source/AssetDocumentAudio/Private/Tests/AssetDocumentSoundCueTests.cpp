@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // SoundCue profile, read side and identity (docs/architecture/asset-document-soundcue-design.md):
 // UEAssetDoc.SoundCue.ListTypes: list_types kind sound_node (the palette's classes, inputs, defaults).

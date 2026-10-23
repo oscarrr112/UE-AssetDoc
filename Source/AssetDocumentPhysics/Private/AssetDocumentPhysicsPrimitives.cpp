@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Physics asset primitives (provider "physics", owner Physics) of the Physics Asset profile
 // (docs/architecture/asset-document-physics-asset-design.md §4):

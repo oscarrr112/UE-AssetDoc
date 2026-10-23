@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The sidecar an apply writes back (the canonical document) is indented, two spaces per level,
 // so that a person can read and hand-edit it after the first apply; it used to be one compact line. The layout is

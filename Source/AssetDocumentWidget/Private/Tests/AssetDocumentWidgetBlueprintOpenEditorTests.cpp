@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.WidgetBlueprint.OpenEditorApply: a Widget Blueprint open in the Widget Blueprint
 // editor, with a widget selected in the Designer, takes an apply that removes that widget, adds another one, changes

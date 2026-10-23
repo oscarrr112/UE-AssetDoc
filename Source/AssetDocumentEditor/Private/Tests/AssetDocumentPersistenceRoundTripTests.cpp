@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // In-process persistence round trip through the production Service:
 // ApplyFile (saved) -> Extract -> unload the package -> load it from disk -> Extract.

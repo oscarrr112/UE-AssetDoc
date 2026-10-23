@@ -1,4 +1,7 @@
-"""Test-owned S1 entry. No default registration, UE wrappers, or persistence IO.
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Test-owned Skeleton caller entry. No default registration, UE wrappers, or persistence IO.
 
 Use configure() before constructing a Host. The callable dispatch exposes the
 same native registration projection getter as registered_runtime.build_dispatch.
@@ -22,7 +25,7 @@ from asset_document.runtime import _success_result
 
 EXACT_CLASS = '/Script/Engine.AnimMontage'
 SKELETON_CLASS = '/Script/Engine.Skeleton'
-ENTRY_MODULE = 'asset_document/tests/fixtures/skeleton_s1_caller.py'
+ENTRY_MODULE = 'asset_document/tests/fixtures/skeleton_caller.py'
 SET = 'animation.asset.skeleton.set.v1'
 WRITE = 'editor.property.write_admitted_batch.v1'
 # The shared generic factory lifecycle; the Skeleton is the factory context.
@@ -61,10 +64,10 @@ def interpret(document):
         raise _error('Expected a document with object Body.')
     body = document.get('Body', {})
     if set(body) - {'Skeleton', 'References'}:
-        raise _error('S1 only owns Skeleton Body semantics.')
+        raise _error('The Skeleton caller only owns Skeleton Body semantics.')
     refs = body.get('References', {})
     if type(refs) is not dict or set(refs) - {'Skeleton'}:
-        raise _error('S1 References must be an object containing only Skeleton.')
+        raise _error('Skeleton caller References must be an object containing only Skeleton.')
     properties = document.get('Properties', {})
     if type(properties) is not dict or any(type(key) is not str or not key for key in properties):
         raise _error('Properties must be an object of named admitted values.')
@@ -135,7 +138,7 @@ class SkeletonS1Dispatch:
     def _factory_intent(self, request, skeleton):
         path = self.options.factory_skeleton_path or (skeleton or {}).get('skeleton_path')
         if path is None:
-            raise _error('Create needs a non-null L1 factory Skeleton context.', 'FactoryContextRequired')
+            raise _error('Create needs a non-null factory Skeleton context.', 'FactoryContextRequired')
         package, name = request.target_asset_path.rsplit('.', 1)
         return {'asset_class_path': EXACT_CLASS, 'factory_context_path': canonical_reference(path),
                 'package_path': package.rsplit('/', 1)[0], 'asset_name': name}
@@ -245,7 +248,7 @@ class SkeletonS1Dispatch:
                 value = self.registration_projection()
                 return self._evidence(typed, value)
             if typed.operation not in (RuntimeOperation.APPLY, RuntimeOperation.VALIDATE, RuntimeOperation.PREFLIGHT):
-                raise _error('Operation outside bounded S1 caller.', 'OperationUnavailable')
+                raise _error('Operation outside bounded Skeleton caller.', 'OperationUnavailable')
             if canonical_reference(typed.target_asset_path) != typed.target_asset_path:
                 raise _error('Request target must already be canonical.')
             properties, skeleton = interpret(typed.canonical_document)
@@ -272,7 +275,7 @@ class SkeletonS1Dispatch:
                     target_asset_path=typed.target_asset_path, semantic_hash=digest, steps=steps)
                 return self._evidence(typed, typed.canonical_document, projection)
             if phase is not RuntimePhase.APPLY:
-                raise _error('Phase outside S1 fixture.', 'PhaseUnavailable')
+                raise _error('Phase outside Skeleton fixture.', 'PhaseUnavailable')
             changed = self._apply(typed, context, properties, steps, read, mutable)
             return _project_native_result(_success_result(typed, revision, changed_set=changed))
         except AssetDocumentContractError as error:

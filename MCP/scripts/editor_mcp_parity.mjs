@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Parity check of the editor's MCP endpoint against a reference MCP server (e.g. an earlier Node broker that served the
 // same tools over stdio from the editor's HTTP routes): the same tools/list and the same tools/call results, call by

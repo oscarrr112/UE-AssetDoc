@@ -1,9 +1,11 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentFileWatcher.h"
 
 #include "AssetDocumentIngressQueue.h"
 #include "AssetDocumentModule.h"
+#include "AssetDocumentPaths.h"
 #include "AssetDocumentSidecarPathUtils.h"
 
 #include "DirectoryWatcherModule.h"
@@ -86,12 +88,9 @@ bool FAssetDocumentFileWatcher::IsAssetDocumentSidecarPath(const FString& FilePa
 		return false;
 	}
 
-	FString ContentRoot = FAssetDocumentSidecarPathUtils::NormalizeContentDirectory();
-	if (!ContentRoot.EndsWith(TEXT("/")))
-	{
-		ContentRoot += TEXT("/");
-	}
-	return NormalizedPath.StartsWith(ContentRoot, ESearchCase::IgnoreCase);
+	FString RelativePath;
+	return AssetDocumentPaths::MakeRelativeWithin(FAssetDocumentSidecarPathUtils::NormalizeContentDirectory(), NormalizedPath, RelativePath)
+		&& !RelativePath.IsEmpty();
 }
 
 void FAssetDocumentFileWatcher::CollectAssetDocumentSidecarsUnderDirectory(const FString& Directory, TArray<FString>& OutFilePaths)

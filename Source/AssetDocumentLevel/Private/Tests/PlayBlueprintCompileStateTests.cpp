@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // A Blueprint stuck Dirty around PIE, on the production Blueprint route.
 //   (a) A Blueprint apply ends with the Blueprint compiled (compile status UpToDate) and its package saved, also for a
@@ -286,7 +287,7 @@ bool FAssetDocumentPlayBlueprintCompileStateTest::RunTest(const FString& Paramet
 	TestEqual(TEXT("(a) the hero apply compiles it"), CompileStatus(Created), FString(TEXT("UpToDate")));
 	TestFalse(TEXT("(a) the hero apply saves it"), State->Hero().IsDirty());
 
-	// Task 4c: the actions become player-mappable, then the remap graph is added.
+	// The actions become player-mappable, then the remap graph is added.
 	ADD_LATENT_AUTOMATION_COMMAND(FFrames(3, [this, State]()
 	{
 		const FAsset& Jump = State->Jump();

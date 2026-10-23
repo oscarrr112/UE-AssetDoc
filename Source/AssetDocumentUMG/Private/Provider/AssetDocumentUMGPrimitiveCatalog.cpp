@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "Provider/AssetDocumentUMGPrimitiveCatalog.h"
 
@@ -41,7 +42,7 @@ FAssetDocumentPrimitiveAdmissionEvidence MakeEvidence(const FDescriptorSpec& Spe
 	Evidence.CompletionContractId =
 		TEXT("umg.direct-provider-local-readback.v1");
 	Evidence.SaveReloadEvidenceId = FString(Spec.PrimitiveId)
-		+ TEXT(".downstream-a-widget-g3-widget-fresh-reload.required.v1");
+		+ TEXT(".fresh-reload.required.v1");
 	Evidence.FailureInjectionTestIds = {
 		FString(Spec.PrimitiveId) + TEXT(".failure-injection.v1")
 	};
@@ -536,16 +537,16 @@ BuildAssetDocumentUMGDecisionProjection()
 	AddOrdinary(Rows, TEXT("umg.widget_tree.content.set.v1"));
 	AddOrdinary(Rows, TEXT("umg.widget_tree.named_slot.set.v1"));
 	AddBlocker(Rows, TEXT("umg.widget_tree.replace.v1"),
-		TEXT("AD.G1.BLOCK.UMG.WIDGET_REPLACE_HEADLESS_AUTHORITY"));
+		TEXT("AD.BLOCK.UMG.WIDGET_REPLACE_HEADLESS_AUTHORITY"));
 	AddOrdinary(Rows, TEXT("umg.designer_binding.query.v1"));
 	AddBlocker(Rows, TEXT("UMG-DESIGNER-BINDING-APPLY-DELTA-v1"),
-		TEXT("AD.G1.BLOCK.UMG.DESIGNER_BINDING_EVIDENCE"));
+		TEXT("AD.BLOCK.UMG.DESIGNER_BINDING_EVIDENCE"));
 	AddOrdinary(Rows, TEXT("umg.variable.notify_lifecycle.v1"));
 	AddBlocker(Rows, TEXT("UMG.VAR.FORCE_GUID_V1"),
-		TEXT("AD.G1.BLOCK.UMG.CALLER_SELECTED_GUID_UNSUPPORTED"));
+		TEXT("AD.BLOCK.UMG.CALLER_SELECTED_GUID_UNSUPPORTED"));
 	AddOrdinary(Rows, TEXT("umg.animation.query.v1"));
 	AddBlocker(Rows, TEXT("UMG-WIDGET-ANIMATION-DELETE-v1"),
-		TEXT("AD.G1.BLOCK.UMG.ANIMATION_DELETE_EVIDENCE"));
+		TEXT("AD.BLOCK.UMG.ANIMATION_DELETE_EVIDENCE"));
 	AddOrdinary(Rows, TEXT("umg.movie_scene.possessable.add.v1"));
 	AddOrdinary(Rows, TEXT("umg.movie_scene.possessable.remove.v1"));
 	AddOrdinary(Rows, TEXT("umg.animation.sequence.bind.v1"));

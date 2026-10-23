@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Engine and plugin content through the production Service:
 //   - ReadOnlyExtract: engine assets of every main profile extract as documents (read_only,
@@ -497,7 +498,7 @@ bool FAssetDocumentEngineAssetsDuplicateTest::RunTest(const FString& Parameters)
 		TestTrue(*FString::Printf(TEXT("%s: the copy extracts, authorable"), Stage), Extracted.IsSuccess() && !Extracted.bReadOnly);
 	};
 
-	// Trial 2 task 7: an engine Skeleton copied to /Game takes a slot; a montage on the copy plays the
+	// An engine Skeleton copied to /Game takes a slot; a montage on the copy plays the
 	// engine animation.
 	ExpectCopy(Duplicate(*this, EngineSkeleton, Skeleton.PackageName, TEXT("skeleton")), Skeleton, USkeleton::StaticClass(), TEXT("skeleton"));
 	if (USkeleton* Copy = Skeleton.Get<USkeleton>())

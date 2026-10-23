@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Values the editor's pickers cannot produce (AssetDocumentEditorPickerValues.h): a table row
 // handle whose RowName is not a row of its DataTable, and an input key that is not a registered key. Each entry point

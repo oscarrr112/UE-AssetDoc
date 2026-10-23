@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentPrimitiveRegistryRuntime.h"
 #include "AssetDocumentPythonHostTestDoubles.h"
@@ -115,7 +116,7 @@ void TestAuthorityCatalogValidationPrecedesHostProjection(FAutomationTestBase& T
 	FAssetDocumentPrimitiveRegistryBuildInput Input =
 		MakeBuildInput({MakeAssetDocumentHostTestDescriptor()});
 	Input.AuthorityCatalog.SetNum(4097);
-	TestRejected(Test, TEXT("authority catalog reaches the frozen G1 validator"),
+	TestRejected(Test, TEXT("authority catalog reaches the frozen authority validator"),
 		MoveTemp(Input), TEXT("AuthorityCatalog.InvalidIdentity"));
 }
 }

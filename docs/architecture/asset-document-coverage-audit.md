@@ -39,7 +39,7 @@ Property visibility over the 239 classes that were created: 2259 Details-visible
 The first audit run hung for 13+ minutes on a Slate modal "Select a Groom Dataflow Template" that appeared on the user's screen while `GroomAsset` was being created; `-unattended` does not stop it. An MCP tool must never block on, or show, UI. The generic lifecycle now cancels a factory that opens a modal window while creating and refuses the class: in this run GroomAsset reports `FactoryCreate.InteractiveFactory`.
 
 - Call path (Evidence, read from Engine source): `GroomFactory::FactoryCreateNew` -> `UE::Groom::BuildGroomDataflowAsset` (`HairStrandsFactory.cpp`) -> `SMessageDialog::ShowModal()`. The modal is shown from `FactoryCreateNew` itself, which is the call the generic lifecycle makes, so the generic route reaches it with no `ConfigureProperties` involved. The same helper is called from `GroomActions.cpp` for the asset-type action.
-- `-unattended` is already passed by `ue.sh test`. It does **not** suppress this dialog. Engine source: `FMessageDialog::Open` returns its default reply when `FApp::IsUnattended()`; `SMessageDialog::ShowModal` and `FSlateApplication::AddModalWindow` have no such check. Any factory or hook that uses the Slate widgets directly can therefore block the editor game thread forever, even unattended.
+- `-unattended` is passed to the test run. It does **not** suppress this dialog. Engine source: `FMessageDialog::Open` returns its default reply when `FApp::IsUnattended()`; `SMessageDialog::ShowModal` and `FSlateApplication::AddModalWindow` have no such check. Any factory or hook that uses the Slate widgets directly can therefore block the editor game thread forever, even unattended.
 - Why it matters for the product: the MCP path goes through `editor.scratch.create_by_factory` / the factory lifecycle, runs on the game thread, and has no timeout. A single hostile or merely interactive factory freezes the editor and the MCP session.
 - Other classes where modal UI is reachable (Evidence for the call sites; **Judgement** for whether the generic path reaches them, because the run was protected by the skip list and the stall watchdog and `ConfigureProperties` is never called by the generic route):
 
@@ -65,7 +65,7 @@ Modal UI inside `ConfigureProperties` (the interactive configuration step: class
 
 The static scan (`coverage_audit/scan_modal_factories.py`) only sees UI calls written directly inside the factory functions; it does not follow helper calls (it does not even find the Groom case). Other plugins using `SMessageDialog` that are not loaded in the sandbox and therefore were not exercised: `ChaosOutfitAsset/OutfitAssetFactory.cpp`. **Judgement**: expect more in third-party plugins; the reliable defence is not a deny list but refusing or isolating interactive factories on the MCP path (for example a modal-window guard around factory invocation plus a per-call timeout), which is a separate task.
 
-Audit hardening: the test keeps a skip list with reasons (empty now; recheck an entry with `ASSETDOC_COVERAGE_IGNORE_SKIPLIST=1`), and `Scripts/AssetDocument/coverage_audit/run_audit.sh` runs the test under a stall watchdog that kills the editor when `current.txt` / `results.jsonl` stop advancing (240 s; 300 s startup grace) and resumes after the in-flight class has been recorded as hung/crashed (`ASSETDOC_COVERAGE_RESUME=1`).
+Audit hardening: the test keeps a skip list with reasons (empty now; recheck an entry with `ASSETDOC_COVERAGE_IGNORE_SKIPLIST=1`). It writes `current.txt` before each class and appends to `results.jsonl` after it. A class that opens a modal window or crashes the editor stops both files advancing: when neither has changed for several minutes (a cold derived-data cache can legitimately block a class for minutes, so allow at least 240 s, and longer while the editor starts), kill the editor and start it again with `ASSETDOC_COVERAGE_RESUME=1`. The next run records the in-flight class as hung/crashed and continues with the next class.
 
 ### 3.2 Editor crashes and hangs reached through the generic route (Evidence)
 
@@ -478,47 +478,14 @@ Legend: ok = passed, FAIL = failed, partial = some of the edited properties fail
 ## 7. Reproducing
 
 ```
-ue.sh new-sandbox coverage <worktree> <port>; ue.sh build coverage
-Scripts/AssetDocument/coverage_audit/run_audit.sh coverage          # stall watchdog + resume
-python3 Scripts/AssetDocument/coverage_audit/scan_modal_factories.py <sandbox>/Saved/AssetDocumentCoverage/coverage-audit.json > modal-scan.json
-python3 Scripts/AssetDocument/coverage_audit/build_report.py <coverage-audit.json> modal-scan.json docs/architecture/asset-document-coverage-audit.md [<previous coverage-audit.json>]
+# Build the plugin into a project, then run the automation test in an editor process of its own
+# (add ASSETDOC_COVERAGE_RESUME=1 to the environment to continue an interrupted run from results.jsonl):
+<UE_ROOT>/Engine/Binaries/<Platform>/UnrealEditor-Cmd <Project>.uproject -nosplash -NoSound -unattended -NoPause \
+  "-ExecCmds=Automation RunTests UEAssetDoc.Coverage.GenericRouteAudit;Quit" "-TestExit=Automation Test Queue Empty" -log
+
+export ENGINE_DIR=<UE_ROOT>/Engine
+python3 Scripts/AssetDocument/coverage_audit/scan_modal_factories.py <Project>/Saved/AssetDocumentCoverage/coverage-audit.json > modal-scan.json
+python3 Scripts/AssetDocument/coverage_audit/build_report.py <coverage-audit.json> modal-scan.json docs/architecture/asset-document-coverage-audit.md
 ```
 
-The automation test itself (`UEAssetDoc.Coverage.GenericRouteAudit`) asserts only that it ran; it writes `Saved/AssetDocumentCoverage/{coverage-audit.json,results.jsonl,current.txt,extracts/*.json}` in the project. Never run it in the same editor process as the rest of the AssetDocument suite. `ue.sh suite` lists `Coverage` in MANUAL_GROUPS and leaves it out of the default group list; run it explicitly with `ue.sh test <name> "^UEAssetDoc.Coverage."` (or `run_audit.sh`).
-
-## 8. Changes since the previous run (Evidence)
-
-Previous run 2026-10-04T22:29:14.456Z (254 creatable, 29 refused); this run 2026-10-09T10:08:03.990Z (272 creatable, 29 refused).
-
-| Step | pass before | pass now | newly passing | newly failing |
-|---|---|---|---|---|
-| ApplyFile create | 202 | 239 | 19 | MaterialInstanceConstant, TemplateSequence |
-| Edit (~5 properties) | 163 | 182 | 15 | none |
-| Save, unload, reload, Extract equal | 196 | 230 | 18 | GeometryCollection |
-| Unchanged re-apply, diff-only extract | 202 | 239 | 19 | none |
-
-Properties over created classes: emitted 1812 -> 2077, dropped 44 -> 86. Classes only in this run: ChooserTable, ConcertAssetContainer, ConsoleVariablesAsset, ControlRigBlueprint, DMXLibrary, HarmonixMetasoundMusicAsset, HarmonixWaveMusicAsset, MidiStepSequence, MidiStutterSequence, MovieGraphConfig, MoviePipelinePrimaryConfig, MoviePipelineShotConfig, OpenColorIOConfiguration, PoseSearchDatabase, PoseSearchInteractionAsset, PoseSearchNormalizationSet, PoseSearchSchema, ProxyAsset, ProxyTable, ShallowWaterPhysicsAssetOverridesDataAsset, WaterWavesAsset. Classes only in the previous run: ExternalDataLayerAsset, LightWeightInstanceManager, LightWeightInstanceStaticMeshManager.
-
-A newly failing step is usually a class whose create or extract now passes, so the audit reaches a step it skipped before; section 6 has the per-class reason.
-
-### Change in this run's commit (Evidence)
-
-The same audit re-run at the commit this change started from (2026-10-09T08:47:34.940Z), then after it (2026-10-09T10:08:03.990Z); counts over the audited classes without a Profile (the same Profile set for both runs):
-
-| Measure | before | after |
-|---|---|---|
-| audited | 228 | 225 |
-| create pass | 193 | 214 |
-| create fail | 35 | 11 |
-| edit pass | 163 | 182 |
-| edit partial | 7 | 4 |
-| edit fail | 1 | 1 |
-| reload pass | 185 | 205 |
-| reload fail | 8 | 9 |
-| no-op pass | 193 | 214 |
-| properties emitted | 1623 | 1753 |
-| properties dropped | 39 | 39 |
-| refused classes | 28 | 29 |
-
-Create outcome changes (classes without a Profile): ChaosSolver ScratchCreate.InvalidIdentity -> pass; ChooserTable ScratchCreate.InvalidIdentity -> pass; ExternalDataLayerAsset FactoryCreate.SubclassUnsupported -> absent; GeometryCollection ScratchCreate.InvalidIdentity -> pass; GlobalNamingTokens FactoryCreate.SubclassUnsupported -> FactoryCreate.BlueprintClassUnsupported; InterchangeCardsPipeline FactoryCreate.SubclassUnsupported -> pass; InterchangeEditorPipelineBase FactoryCreate.SubclassUnsupported -> pass; InterchangeGLTFPipeline FactoryCreate.SubclassUnsupported -> pass; InterchangeGenericAssetsPipeline FactoryCreate.SubclassUnsupported -> pass; InterchangeGenericAudioPipeline FactoryCreate.SubclassUnsupported -> pass; InterchangeGenericGroomPipeline FactoryCreate.SubclassUnsupported -> pass; InterchangeGenericLevelPipeline FactoryCreate.SubclassUnsupported -> pass; InterchangeGenericMaterialPipeline FactoryCreate.SubclassUnsupported -> pass; InterchangeGenericTexturePipeline FactoryCreate.SubclassUnsupported -> pass; InterchangeGraphInspectorPipeline FactoryCreate.SubclassUnsupported -> pass; InterchangeMaterialXPipeline FactoryCreate.SubclassUnsupported -> pass; InterchangeMegascansPipeline FactoryCreate.SubclassUnsupported -> pass; InterchangeSparseVolumeTexturePipeline FactoryCreate.SubclassUnsupported -> pass; LightWeightInstanceManager FactoryCreate.MissingFactoryContext -> refused FactoryCreate.BlueprintClassUnsupported; LightWeightInstanceStaticMeshManager FactoryCreate.MissingFactoryContext -> absent; MovieGraphConfig ScratchCreate.InvalidIdentity -> pass; PoseSearchSchema FactoryCreate.MissingFactoryContext -> pass; ProxyAsset ScratchCreate.InvalidIdentity -> pass; ProxyTable ScratchCreate.InvalidIdentity -> pass; SlateWidgetStyleAsset FactoryCreate.MissingFactoryContext -> pass; TakeRecorderNamingTokens FactoryCreate.SubclassUnsupported -> FactoryCreate.BlueprintClassUnsupported.
-
+The automation test itself (`UEAssetDoc.Coverage.GenericRouteAudit`) asserts only that it ran; it writes `Saved/AssetDocumentCoverage/{coverage-audit.json,results.jsonl,current.txt,extracts/*.json}` in the project. Never run it in the same editor process as the rest of the AssetDocument suite: leave `Coverage` out of the default test list and run it explicitly with the automation filter `UEAssetDoc.Coverage`.

@@ -1,7 +1,8 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// MetaSound documents, phase M2 (presets, node configuration, Update Node, member widgets, the open editor), through
-// the production Service as the MCP tools send them (design §6.2-6.4, §9.4):
+// MetaSound documents (presets, node configuration, Update Node, member widgets, the open editor), through
+// the production Service as the MCP tools send them (design §6.2-6.4, §8.4):
 //
 // UEAssetDoc.MetaSound.Preset: presets made as the editor makes them (Content Browser Create Preset:
 // a duplicate of the parent, InitAsset, registration; the restricted-mode factory with ReferencedMetaSoundObject; a
@@ -43,7 +44,7 @@
 #endif
 
 #if WITH_DEV_AUTOMATION_TESTS
-namespace AssetDocumentMetaSoundM2Tests
+namespace AssetDocumentMetaSoundPresetNodeTests
 {
 using namespace AssetDocumentMetaSoundApplyTests;
 
@@ -329,14 +330,14 @@ TArray<FName> MembersWithPrefix(const FMetaSoundFrontendDocumentBuilder& Builder
 }
 
 // The engine's errors for a graph that uses HarmonixNodes.MidiNoteTrigger v0 (not registered in 5.7).
-} // namespace AssetDocumentMetaSoundM2Tests
+} // namespace AssetDocumentMetaSoundPresetNodeTests
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentMetaSoundPresetTest, "UEAssetDoc.MetaSound.Preset",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FAssetDocumentMetaSoundPresetTest::RunTest(const FString& Parameters)
 {
-	using namespace AssetDocumentMetaSoundM2Tests;
+	using namespace AssetDocumentMetaSoundPresetNodeTests;
 	const FDemoTemplateContent Demo;
 	UObject* Parent = LoadQuiet(OneShot);
 	if (GEditor == nullptr || GEditor->Trans == nullptr || !TestNotNull(TEXT("MSS_PlayRandom_Oneshot loads"), Parent))
@@ -549,7 +550,7 @@ bool FAssetDocumentMetaSoundPresetTest::RunTest(const FString& Parameters)
 				"Body": {"Preset": {"Parent": "/Game/AssetDocumentMetaSound/NoSuchParent"}}})"));
 			MissingParent->SetStringField(TEXT("Target"), Missing.PackageName);
 			ExpectCreateRefused(*this, Missing, MissingParent, TEXT("MetaSound.InvalidPresetParent"), TEXT("/Body/Preset/Parent"), TEXT("missing parent"));
-			// Trial 7: a parent in the wrong folder; the refusal names the existing MetaSound Source of that name.
+			// A parent in the wrong folder: the refusal names the existing MetaSound Source of that name.
 			const TSharedPtr<FJsonObject> Misplaced = Parse(Serialize(MissingParent));
 			Child(BodyOf(Misplaced), TEXT("Preset"))->SetStringField(TEXT("Parent"), TEXT("/Game/Audio/MSS_PlayRandom_OneShot"));
 			ExpectCreateRefused(*this, Missing, Misplaced, TEXT("MetaSound.InvalidPresetParent"), TEXT("/Body/Preset/Parent"),
@@ -595,7 +596,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentMetaSoundConfigurationTest, "UEAs
 
 bool FAssetDocumentMetaSoundConfigurationTest::RunTest(const FString& Parameters)
 {
-	using namespace AssetDocumentMetaSoundM2Tests;
+	using namespace AssetDocumentMetaSoundPresetNodeTests;
 	FMetasoundFrontendClassName TapeName;
 	FMetasoundFrontendClassName::Parse(TapeSS, TapeName);
 	FMetasoundFrontendClass TapeClass;
@@ -730,7 +731,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentMetaSoundUpdateNodeTest, "UEAsset
 
 bool FAssetDocumentMetaSoundUpdateNodeTest::RunTest(const FString& Parameters)
 {
-	using namespace AssetDocumentMetaSoundM2Tests;
+	using namespace AssetDocumentMetaSoundPresetNodeTests;
 	// MSP_MidiNoteAdsr's node class version is not registered: the engine logs it whenever such a graph registers.
 	IgnoreUnregisteredMidiNoteTrigger(*this);
 	FFixtures Fixtures;
@@ -857,7 +858,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentMetaSoundWidgetTest, "UEAssetDoc.
 
 bool FAssetDocumentMetaSoundWidgetTest::RunTest(const FString& Parameters)
 {
-	using namespace AssetDocumentMetaSoundM2Tests;
+	using namespace AssetDocumentMetaSoundPresetNodeTests;
 	UObject* Source = LoadQuiet(OneShot);
 	if (!TestNotNull(TEXT("MSS_PlayRandom_Oneshot loads"), Source))
 	{
@@ -936,7 +937,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentMetaSoundOpenEditorTest, "UEAsset
 
 bool FAssetDocumentMetaSoundOpenEditorTest::RunTest(const FString& Parameters)
 {
-	using namespace AssetDocumentMetaSoundM2Tests;
+	using namespace AssetDocumentMetaSoundPresetNodeTests;
 	UObject* Source = LoadQuiet(OneShot);
 	UAssetEditorSubsystem* Editors = GEditor != nullptr ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr;
 	if (Editors == nullptr || GEditor->Trans == nullptr || !TestNotNull(TEXT("MSS_PlayRandom_Oneshot loads"), Source))
@@ -1044,15 +1045,15 @@ bool FAssetDocumentMetaSoundOpenEditorTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the asset is still open in its editor"), MetaSoundIsOpen(*Editors, *Asset));
 	return true;
 }
-// Trial 7: opening the MetaSound editor re-initializes every Float input's widget (WidgetType from the editor
-// preference Default Input Widget Type), so a MetaSound made by a document diffed against it once the editor had
-// been opened. The document's widget defaults are the editor's: create, open the editor, diff -> nothing.
+// Opening the MetaSound editor re-initializes every Float input's widget (WidgetType from the editor preference
+// Default Input Widget Type). The document's widget defaults are the editor's, so a MetaSound made by a document
+// still diffs to nothing after its editor is opened: create, open the editor, diff -> nothing.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentMetaSoundOpenEditorWidgetTest, "UEAssetDoc.MetaSound.OpenEditorWidget",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FAssetDocumentMetaSoundOpenEditorWidgetTest::RunTest(const FString& Parameters)
 {
-	using namespace AssetDocumentMetaSoundM2Tests;
+	using namespace AssetDocumentMetaSoundPresetNodeTests;
 	UAssetEditorSubsystem* Editors = GEditor != nullptr ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr;
 	if (Editors == nullptr)
 	{
@@ -1143,7 +1144,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentMetaSoundFormatsTest, "UEAssetDoc
 
 bool FAssetDocumentMetaSoundFormatsTest::RunTest(const FString& Parameters)
 {
-	using namespace AssetDocumentMetaSoundM2Tests;
+	using namespace AssetDocumentMetaSoundPresetNodeTests;
 	FFixtures Fixtures;
 	const TArray<FString> Spatial = {TEXT("UE.Attenuation"), TEXT("UE.Listener.Orientation"), TEXT("UE.Source.Orientation"), TEXT("UE.Spatialization")};
 	const FTarget& Surround = Fixtures.Add(TEXT("MSS_Surround"));

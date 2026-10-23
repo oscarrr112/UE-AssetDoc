@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // data.string_table.read.v1 / data.string_table.edit.v1: namespace, entries and entry metadata
 // of a UStringTable, as the String Table editor edits them (Modify, then FStringTable on

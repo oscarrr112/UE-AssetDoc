@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Widget animation primitives (provider "umg"): what the UMG Animations tab and its
 // Sequencer do when the user adds an animation, sets its display rate / playback range,

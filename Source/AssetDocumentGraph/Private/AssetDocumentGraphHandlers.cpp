@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Handlers of the graph primitives (contract §3). They only perform the edit
 // the stock graph editor would perform; no inverse code: Core rolls back the

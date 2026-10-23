@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 //
 // Editor undo history x AssetDocument apply, the real-user sequence:
 // a human edits an asset in the editor (the undo buffer records its objects),

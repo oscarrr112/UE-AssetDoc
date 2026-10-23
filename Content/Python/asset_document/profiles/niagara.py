@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered Niagara Profiles: NiagaraSystem, NiagaraEmitter, NiagaraScript and NiagaraParameterCollection on
 the ``fx_profile`` route.
 
@@ -6,24 +9,24 @@ AssetDocumentNiagara): systems and emitters through the Niagara editor's own sta
 headlessly, scripts and scratch pads as their graphs, parameter collections as their parameters.  The
 document shapes are in ``niagara_shape``.
 
-Systems apply (N2 system level, ``niagara_apply``; N3 module stacks, ``niagara_stack``): Details ``Properties``
+Systems apply (system level, ``niagara_apply``; module stacks, ``niagara_stack``): Details ``Properties``
 through the generic property admission, then the Body (user and declared parameters, emitters, emitter properties,
 renderers, module stacks and their inputs, event handlers, simulation stages, lightweight emitters) through
 ``fx.niagara.edit.v1``, then one recompile (``fx.niagara.compile.v1``): errors the system did not have before
 fail the apply (``Niagara.CompileFailed``; Core rolls the package back), errors it already had are warnings.
 Writes are covered by Core's package snapshot (existing target) or the factory rollback (created target), so
-preflight returns ``SNAPSHOT_COVERED``.  Scratch pads (N4, ``niagara_script``) are edited before each pass's stack
+preflight returns ``SNAPSHOT_COVERED``.  Scratch pads (``niagara_script``) are edited before each pass's stack
 edits: the Scratch Pad panel's add / rename (system pads), their graphs through the shared graph.* primitives
 (``graphs.schemas.niagara``), their Details and parameters, then the pad's Apply; unlisted system pads are deleted
 after the stacks stop using them.
 
-Script assets (N4): Usage (a new asset is made again by the factory of its usage), Versions (the version menu;
+Script assets: Usage (a new asset is made again by the factory of its usage), Versions (the version menu;
 editing the exposed version of a versioned script needs ``EditExposedVersion``), Settings, the graph, the
 parameters' Details, then the script editor's Compile (new errors fail at the node's path) and Apply (loaded
 dependents refresh and recompile: ``Niagara.DependentsUpdated``; a dependent with unsaved changes refuses the apply
 before any change: ``Niagara.DependentHasUnsavedChanges``).
 
-Emitter assets (N5): the emitter editor without its UI.  The edits run on its working copy (a transient placeholder
+Emitter assets: the emitter editor without its UI.  The edits run on its working copy (a transient placeholder
 system whose one emitter is a copy of the asset's exposed version), which its Apply writes back over the asset; the
 Body is the system planner's emitter entry (Parent, Properties, Renderers, stacks, ScratchPads: the emitter's list is
 complete here, the emitter editor's Scratch Pad panel) plus ``Versions`` / ``EditExposedVersion`` (as scripts) and
@@ -32,7 +35,7 @@ dialog does).  Then the Compile (new errors fail) and the Apply's refresh of the
 inherit from the asset (``Niagara.DependentsUpdated``; a dependent with unsaved changes or open in an editor refuses
 the apply before any change).
 
-Parameter collections (N5, ``niagara_parameter_collection``): Details (Namespace, Source Material Collection), then
+Parameter collections (``niagara_parameter_collection``): Details (Namespace, Source Material Collection), then
 the collection editor's parameter list and values.
 """
 from __future__ import annotations
@@ -472,7 +475,7 @@ def apply_system(document, read_handle, mutable_handle, context):
 
 
 # ---------------------------------------------------------------------------
-# Emitter assets (N5)
+# Emitter assets
 # ---------------------------------------------------------------------------
 def check_emitter_asset_body(body):
     """Structural checks of an emitter asset Body: one emitter entry (without Name / Enabled / Mode) plus From,
@@ -705,7 +708,7 @@ def emitter_diff(authored, extracted):
 
 
 # ---------------------------------------------------------------------------
-# Parameter collections (N5)
+# Parameter collections
 # ---------------------------------------------------------------------------
 class _CollectionProperties(common.PropertiesRegion):
     """The collection's Details (Namespace, Source Material Collection)."""
@@ -995,7 +998,7 @@ class _ApplyingProfile(_NiagaraReadProfile):
 
 
 class NiagaraEmitterProfile(_ApplyingProfile):
-    """Emitter assets (N5): the emitter editor's working copy, its Apply, Compile and Versions."""
+    """Emitter assets: the emitter editor's working copy, its Apply, Compile and Versions."""
 
     profile_id = "profile.niagara_emitter.v1"
     exact_asset_class_path = EMITTER_CLASS
@@ -1096,7 +1099,7 @@ class NiagaraScriptProfile(_NiagaraReadProfile):
 
 
 class NiagaraParameterCollectionProfile(_ApplyingProfile):
-    """Parameter collections (N5): the collection editor's parameter list and values, and its Details."""
+    """Parameter collections: the collection editor's parameter list and values, and its Details."""
 
     profile_id = "profile.niagara_parameter_collection.v1"
     exact_asset_class_path = COLLECTION_CLASS

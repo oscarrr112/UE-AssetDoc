@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """K2 node state the editor sets after placing a node: class picks, Pin Conversions of promotable
 operators, purity, function local variables and collapsed graphs (reconcile / codec / extract level)."""
 from __future__ import annotations

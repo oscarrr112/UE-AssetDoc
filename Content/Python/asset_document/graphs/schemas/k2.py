@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """K2 (Blueprint) schema adapter and Body codec.
 
 Body shape (``UbergraphPages`` / ``FunctionGraphs`` / ``MacroGraphs`` arrays)::

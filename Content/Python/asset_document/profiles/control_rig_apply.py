@@ -1,4 +1,7 @@
-"""Control Rig apply (profile.control_rig.v1, phases CR1 - CR4): the document as the Control Rig editor's edits.
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Control Rig apply (profile.control_rig.v1): the document as the Control Rig editor's edits.
 
 Authorable: Class Settings (Properties; ``PreviewSkeletalMesh`` as the editor's preview mesh picker), the rig type
 (Rig <-> Module: "Turn into Rig Module" / "Turn into Standalone Rig"), Module settings, member Variables, the

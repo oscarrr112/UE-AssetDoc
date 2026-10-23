@@ -1,7 +1,8 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.HttpServer.Mcp.Endpoint: the editor's MCP endpoint (Streamable HTTP) with a stub of the
-//   editor's routes. initialize negotiates the protocol version (2025-11-25 and 2025-06-18 among them) and opens a
+//   editor's routes. initialize negotiates the protocol version ("2025-11-25" and "2025-06-18" among them) and opens a
 //   session named in Mcp-Session-Id; every later message needs a known session (400 without, 404 for an unknown or
 //   ended one); notifications answer 202; ping, tools/list (the manifest's tools, without those the settings switch
 //   off, read at each request) and tools/call answer JSON, or one event-stream event to a client that accepts only that;

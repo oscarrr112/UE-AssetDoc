@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Control Rig discovery (design §3.8) for list_types (kind = rigvm_node / rigvm_type / controlrig_module,
 // AssetDocumentTypeListers.h) and rig.controlrig.catalog.v1 ({kind: node|type|module, name?, path?, offset?,

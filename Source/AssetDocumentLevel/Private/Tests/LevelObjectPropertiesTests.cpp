@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The object property interface AssetDocumentEditor exports for the level tools
 // (AssetDocumentEditorObjectProperties.h): instance admission, Details-equivalent

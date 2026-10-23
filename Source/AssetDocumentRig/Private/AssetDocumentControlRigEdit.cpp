@@ -1,7 +1,8 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // rig.controlrig.edit.v1: edits of a Control Rig as the Control Rig editor makes them (docs/architecture/
-// asset-document-controlrig-design.md §4.1, phase CR1): the hierarchy tab and element Details through
+// asset-document-controlrig-design.md §4.1): the hierarchy tab and element Details through
 // URigHierarchyController / URigHierarchy, My Blueprint member variables through URigVMBlueprint, the asset's
 // commands (Turn into Rig Module / Standalone Rig, preview mesh, module settings) and the Forwards Solve event the
 // editor's first open adds to an empty rig. One transaction; controller undo and Python-print flags off; auto VM
@@ -24,13 +25,13 @@
 //   element.remove {key}  element.rename {key, to}  element.order {keys}
 //   graph.add / graph.remove / graph.rename, node.add / node.remove / node.rename / node.set / node.types /
 //   node.aggregate / node.traits / node.remap, link.add / link.break, pin.default / pin.bind / pin.array
-//                                             graph ops (phases CR2 / CR3, AssetDocumentControlRigGraphEdit.cpp)
+//                                             graph ops (AssetDocumentControlRigGraphEdit.cpp)
 //   function.add / remove / rename / set, function.pin.add / remove / rename / type / index / default,
 //   local.add / remove / rename / type / default, function.dependents
-//                                             function ops (phase CR3, AssetDocumentControlRigFunctionEdit.cpp)
+//                                             function ops (AssetDocumentControlRigFunctionEdit.cpp)
 //   module.add / remove / rename / reparent / reorder / swap / config / bind, connect, disconnect, modular.settings,
-//   hierarchy.import                          modular ops and the mesh import (phase CR4,
-//                                             AssetDocumentControlRigModularEdit.cpp)
+//   hierarchy.import                          modular ops and the mesh import
+//                                             (AssetDocumentControlRigModularEdit.cpp)
 // Result {changed, notes?: [{op, field, code, message}]} (notes: warnings of graph and function ops, e.g. a deprecated
 // unit kept, dependents of a changed public function).
 

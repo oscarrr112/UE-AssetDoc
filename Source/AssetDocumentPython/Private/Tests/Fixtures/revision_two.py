@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 # canonical_bytes below is a fixture-only transport marker. It is not
 # production canonical/semantic evidence and has no asserted DocumentCodec
 # relationship to semantic_hash.

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Shared fixtures of the IK Rig / IK Retargeter automation tests: /Game targets, editor-built fixtures (the
 // Content Browser's "New IK Rig" on a mesh plus the toolbar's Auto Characterize / Auto FBIK), the corpus

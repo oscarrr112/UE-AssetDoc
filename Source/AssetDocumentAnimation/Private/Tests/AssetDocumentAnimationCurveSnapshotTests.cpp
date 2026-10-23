@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -232,7 +233,7 @@ bool FAssetDocumentAnimationCurveSnapshotModelTest::RunTest(const FString&)
     UAnimMontage* Montage = NewObject<UAnimMontage>(GetTransientPackage(), NAME_None, RF_Transient);
     if (!TestNotNull(TEXT("transient montage exists"), Montage)) return false;
     IAnimationDataController& Controller = Montage->GetController();
-    Controller.OpenBracket(FText::FromString(TEXT("C1 snapshot fixture")), false);
+    Controller.OpenBracket(FText::FromString(TEXT("snapshot fixture")), false);
     Controller.InitializeModel();
     Controller.SetFrameRate(FFrameRate(30, 1), false);
     Controller.SetNumberOfFrames(FFrameNumber(60), false);

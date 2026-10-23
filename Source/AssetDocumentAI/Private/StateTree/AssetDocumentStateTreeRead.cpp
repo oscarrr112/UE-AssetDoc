@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // ai.state_tree.read.v1: the editor data of a StateTree as paged records (DTO in
 // AssetDocumentStateTreeCatalog.cpp). Records come in a fixed order: tree, tree parameters,

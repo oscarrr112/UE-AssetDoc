@@ -1,6 +1,6 @@
 # AssetDocument 架构、设计哲学与扩展原则
 
-> **2026-10-03 方向重置：** 本文中的流程、gate、authority exception 与回滚要求凡与 [设计规则](asset-document-design-rules.md) 冲突者，均以设计规则为准。本文其余内容作为背景资料保留。
+> 本文中的流程、authority exception 与回滚要求若与 [设计规则](asset-document-design-rules.md) 冲突，以设计规则为准。
 
 ## 文档定位
 
@@ -80,24 +80,24 @@ Raw construction 只有在 UE 的公开生命周期合同明确把该 API 本身
 
 找不到稳定公开入口时，该能力默认必须形成 blocker 并 failure-closed；“没有找到 helper”“旧代码如此实现”或“功能需要完整支持”都不能直接授权 raw construction、复制 Engine 逻辑或 fallback。
 
-对少量 complex authored domain 的真实公共 surface 缺口，只允许通过版本化 `AUTHORITY_EXCEPTION_CANDIDATE` 进入进一步治理。候选提出前必须穷尽 exact Engine version 的 public/exported API、真实 private authority chain、factory/action/schema/subsystem/editor utility 替代路径和 Epic 官方在线资料，并保存查询、日期、命中与负证据；单次搜索未命中不合格。候选必须一项一 ID、一 physical owner、一 symbol/surface，冻结 typed DTO/opaque handle、phase、transaction、rollback、identity/lifetime、completion、failure injection 和未来 helper replacement/removal condition。
+对少量 complex authored domain 的真实公共 surface 缺口，唯一的例外是登记在代码注册表 `Source/AssetDocument/Public/Runtime/AssetDocumentAuthorityExceptionRegistry.h` 的条目。登记前必须穷尽 exact Engine version 的 public/exported API、真实 private authority chain、factory/action/schema/subsystem/editor utility 替代路径和 Epic 官方在线资料，并保存查询、日期、命中与负证据；单次搜索未命中不合格。一个条目对应一个 ID、一个 physical owner、一个 symbol/surface，并冻结 typed DTO/opaque handle、阶段、事务、回滚、identity/lifetime、完成条件、失败注入，以及未来由公开 helper 替换并删除的条件。
 
-候选必须由没有参与研究、实现或 provider ownership 的独立 reviewer subagent 给出 `PASS`、`REWORK` 或 `REJECT`。`PASS` 只允许它进入 contract/provider 设计，不等于 primitive ABI freeze，也不等于 bridge/raw-call admission。Provider 实现仍然 stock-Engine public-helper first；证明正确 exported helper 不存在时，只能让不修改 Engine、且不复制 private Engine authority 的 exact quarantined repository/plugin bridge 候选进入第二轮独立 authority/code review。候选不得新增、修改或回移 Engine helper；未明确通过时继续 failure-closed。
+条目只允许是不修改 Engine、且不复制 private Engine authority 的 exact quarantined repository/plugin bridge；不得新增、修改或回移 Engine helper。登记本身不扩张到相邻能力，也不构成对其他 surface 的类比授权；未登记的缺口继续 failure-closed。
 
-Authority exception catalog 必须是 typed、frozen、machine-searchable 的治理记录，不得成为 JSON Meta/capability descriptor、动态扩展语言、通用 property/function bridge、Python 配置或跨 domain 白名单。
+注册表必须是 typed、冻结、可机器检索的记录，不得成为 JSON Meta/capability descriptor、动态扩展语言、通用 property/function bridge、Python 配置或跨 domain 白名单。
 
-#### 2.6.1 当前精确 Authority Exception catalog
+#### 2.6.1 AI Blackboard 相关的登记条目
 
-| ID | 状态与 physical owner | 唯一允许 surface | 不允许的外推 | 债务与删除条件 |
+| ID | Physical owner | 唯一允许 surface | 不允许的外推 | 删除条件 |
 | --- | --- | --- | --- | --- |
-| `AD.AI.BLACKBOARD.KEYTYPE-STAGING-v1` | 用户已批准设计；实现仍 `NO-GO`，直到 G1 contract amendment、path-exact plan、TDD、same-SHA Authority/code review 与 task-close；owner 仅为 `AssetDocumentAI` 的 Blackboard Provider 私有隔离区 | 一个 `NewObject<UBlackboardKeyType>` staging/物化调用点，只可由 `ai.blackboard.entry.add.v2` 与 `entry.replace_class.v2` 使用 | Engine 源码/私有 API、复制私有 flow、第二调用点、remove/reorder/v1/其他 consumer、通用 factory、Python raw mutation | 共同债务 `TD-AI-BB-STRUCTURAL-001`；stock helper 覆盖 materialization 后迁移并删除该 ID |
-| `AD.AI.BLACKBOARD.LOCAL-KEYS-PUBLICATION-v1` | 用户已批准设计；实现仍 `NO-GO`，gate/owner 同上 | 一个完整 `UBlackboardData::Keys` 快照 forward-publication 调用点，只可由四个 named v2 行调用；现有 immutable `ai.blackboard.local_keys.replace.v1` 仅可兼容调用同一发布点以消除旧 forward 赋值，不获得新 authority | Engine 源码/私有 API、复制 `SBehaviorTreeBlackboardEditor`、第二 forward 发布点、未列出的 forward consumer、通用 array bridge、Python raw mutation、公共 transport/ABI | 共同债务 `TD-AI-BB-STRUCTURAL-001`；stock helper 覆盖 publication 后迁移并删除该 ID |
-| `AD.AI.BLACKBOARD.LOADED-BT-CONSUMER-COMPLETION-v1` | 用户批准的 Plugin-only cache-completion prerequisite；文档双审、集成及 future TDD/source review 前实现 `NO-GO`；owner 仅为同一 Plugin 私有隔离区的独立 loaded-consumer 文件 | `CaptureLoadedBehaviorTreeConsumerReceipt` 在 publication 前冻结 receipt，`CompleteLoadedBehaviorTreeConsumerReceipt` 在 forward 或 restored rollback 后完成同一 receipt；discovery 仅用 referencer closure + 一次 logical exact-class BT metadata audit（同一 query callsite 的 snapshot A/B、前后 `IsSearchAllAssets && !IsGathering`、相同 sorted identity digest）+ non-loading live resolve；caller 仅四个 v2 structural rows + 已有 immutable v1 publication compatibility caller | 全局 UObject scan、隐式加载、未注册 transient consumer、asset path/GUID/typed path 以外 identity、未冻结的 locator codec、persistent tracker、公共 ABI/Python/其他 provider 调用；v1 不获得新 DTO/语义/authority | 债务 `TD-AI-BB-BT-CACHE-COMPLETION-002`；stock public loaded-consumer completion 覆盖后迁移并删除该 ID |
-| `AD.AI.BLACKBOARD.VALUE-OR-KEY-CACHE-INVALIDATION-v1` | 同一 prerequisite 的第二个独立 trust surface；physical owner 是独立 typed invalidation 文件，且只能由上一 ID 的 exact receipt edge 调用 | `InvalidateExactValueOrBlackboardKeyCache` 对 UE 5.7 冻结的 Bool/Class/Enum/Float/Int32/Name/String/Object/Rotator/Struct/Vector exact family 建 fresh typed value，保留公开 authored state 并按当前 Name→ID 重新解析 | protected cache 访问、旧 numeric ID 回写、generic reflection/string lookup、whole-struct destroy/init/copy/serialize、派生 family 默许、旧 Materializer repair、其他 cache/domain | 同上设计与债务；stock public ValueOr invalidator 覆盖全部 eleven-family 语义后迁移并删除该 ID |
+| `AD.AI.BLACKBOARD.KEYTYPE-STAGING-v1` | 仅 `AssetDocumentAI` 的 Blackboard Provider 私有隔离区 | 一个 `NewObject<UBlackboardKeyType>` staging/物化调用点，只可由 `ai.blackboard.entry.add.v2` 与 `entry.replace_class.v2` 使用 | Engine 源码/私有 API、复制私有 flow、第二调用点、remove/reorder/v1/其他 consumer、通用 factory、Python raw mutation | stock helper 覆盖 materialization 后迁移并删除该 ID |
+| `AD.AI.BLACKBOARD.LOCAL-KEYS-PUBLICATION-v1` | 同上 | 一个完整 `UBlackboardData::Keys` 快照 forward-publication 调用点，只可由四个 named v2 行调用；现有 immutable `ai.blackboard.local_keys.replace.v1` 仅可兼容调用同一发布点以消除旧 forward 赋值，不获得新 authority | Engine 源码/私有 API、复制 `SBehaviorTreeBlackboardEditor`、第二 forward 发布点、未列出的 forward consumer、通用 array bridge、Python raw mutation、公共 transport/ABI | stock helper 覆盖 publication 后迁移并删除该 ID |
+| `AD.AI.BLACKBOARD.LOADED-BT-CONSUMER-COMPLETION-v1` | Plugin-only 的缓存补全前置条件；仅同一 Plugin 私有隔离区内独立的 loaded-consumer 文件 | `CaptureLoadedBehaviorTreeConsumerReceipt` 在 publication 前冻结 receipt，`CompleteLoadedBehaviorTreeConsumerReceipt` 在 forward 或 restored rollback 后完成同一 receipt；discovery 仅用 referencer closure + 一次 logical exact-class BT metadata audit（同一 query callsite 的 snapshot A/B、前后 `IsSearchAllAssets && !IsGathering`、相同 sorted identity digest）+ non-loading live resolve；caller 仅四个 v2 structural rows + 已有 immutable v1 publication compatibility caller | 全局 UObject scan、隐式加载、未注册 transient consumer、asset path/GUID/typed path 以外 identity、未冻结的 locator codec、persistent tracker、公共 ABI/Python/其他 provider 调用；v1 不获得新 DTO/语义/authority | stock public loaded-consumer completion 覆盖后迁移并删除该 ID |
+| `AD.AI.BLACKBOARD.VALUE-OR-KEY-CACHE-INVALIDATION-v1` | 同一前置条件的第二个独立 trust surface；physical owner 是独立 typed invalidation 文件，且只能由上一 ID 的 exact receipt edge 调用 | `InvalidateExactValueOrBlackboardKeyCache` 对 UE 5.7 冻结的 Bool/Class/Enum/Float/Int32/Name/String/Object/Rotator/Struct/Vector exact family 建 fresh typed value，保留公开 authored state 并按当前 Name→ID 重新解析 | protected cache 访问、旧 numeric ID 回写、generic reflection/string lookup、whole-struct destroy/init/copy/serialize、派生 family 默许、旧 Materializer repair、其他 cache/domain | stock public ValueOr invalidator 覆盖全部 eleven-family 语义后迁移并删除该 ID |
 
-本表是一项一 ID 的窄 catalog，不改变前文的默认禁令。任何新增例外都必须作为新的 Authority 决策独立审查，不能引用本行作类比授权。
+本表只列出 AI Blackboard 相关的登记条目，完整列表以注册表为准。每个条目都是一项一 ID 的窄例外，不改变前文的默认禁令；新增例外必须独立登记，不能引用本表某一行作类比授权。
 
-`FLocalKeysRollbackState::RestoreOnce` 的既有 typed-preimage `Keys` 恢复赋值是独立 rollback-only surface：它只由现有 Atomic rollback action 触发，不是 catalog 中的 forward publication，不计入 four-v2-plus-one-v1 forward call graph，也不得由 provider handler 直接调用、复制或迁入 quarantine。
+`FLocalKeysRollbackState::RestoreOnce` 的既有 typed-preimage `Keys` 恢复赋值是独立 rollback-only surface：它只由现有 Atomic rollback action 触发，不是注册表中的 forward publication，不计入 forward call graph（四个 v2 结构化操作加一个 v1 兼容调用点），也不得由 provider handler 直接调用、复制或迁入 quarantine。
 
 ## 3. 范围与非目标
 
@@ -433,7 +433,7 @@ system identity，必须遵守下面的对称持久化合同：
 
 一次成功 apply 必须是完整事务，不是“某个 setter 返回成功”。
 
-### 11.0 唯一公共 mutation 入口（2026-07-28）
+### 11.0 唯一公共 mutation 入口
 
 唯一公共 mutation entry 是 sidecar-backed `ApplyFile`。它读取并验证 canonical
 sidecar，验证 `Target` 与路径绑定，传入非空 `SourceDocumentPath`，并只在 package
@@ -467,7 +467,7 @@ Transaction、persistence 和 sync-state terminal authority 始终属于 C++；P
 ### 11.2 失败不变量
 
 - 新资产失败后不得残留 package、sidecar、asset registry ghost 或游离 owned UObject；
-- 已有资产失败后必须按功能等价恢复：canonical extract 与 apply 前相等、编译与派生结构正常、外部引用不悬空、原有磁盘 bytes 不变、无残留（2026-10-03 方向重置 §3；不要求原生对象身份逐项一致）；
+- 已有资产失败后必须按功能等价恢复：canonical extract 与 apply 前相等、编译与派生结构正常、外部引用不悬空、原有磁盘 bytes 不变、无残留（设计规则 §3；不要求原生对象身份逐项一致）；
 - sidecar 写入使用同目录临时文件和原子替换；
 - 无法为 dirty existing asset 提供可靠 rollback 时必须 fail closed；
 - `SavePackage` 成功不是完成证据，fresh reload + canonical verification 才是持久化成功门槛；
@@ -613,11 +613,11 @@ sidecar 写入责任下放为 package-only 或 transport-owned path synthesis。
 
 某个资产类型或 region 只有在其经确认的 managed authored surface 全部完成文档生命周期并有真实持久化证据时，才能标记 complete。
 
-排除项必须有 UE ownership/derived/transient 依据；managed authored deferred 必须有用户批准的 blocker 或仍标记 partial。不能用旧 benchmark、测试数量、成功 merge 或“代码路径存在”替代当前实现证据。
+排除项必须有 UE ownership/derived/transient 依据；managed authored deferred 必须有记录在案的 blocker 或仍标记 partial。不能用旧 benchmark、测试数量、成功 merge 或“代码路径存在”替代当前实现证据。
 
-### 16.3 Goal 验收边界
+### 16.3 变更验收边界
 
-每个开发 Goal 的验收范围由最新用户指令、该 Goal 的 spec/plan 和明确依赖决定。默认验证应包含与变更风险相称的：
+每次变更的验收范围由该变更的 spec/plan 和明确依赖决定。默认验证应包含与变更风险相称的：
 
 - 默认 Unity Build；
 - focused automation；
@@ -626,7 +626,7 @@ sidecar 写入责任下放为 package-only 或 transport-owned path synthesis。
 - 适用时的真实 Editor save/reload/restart；
 - `git diff --check` 和文档一致性。
 
-全仓聚合套件不是所有 Goal 的无条件完成门槛。范围外的已知失败必须单独记录和归因，不能自动扩张当前 Goal；同样，focused tests 通过也不能掩盖本 Goal 确实修改到的公共 runtime 回归。
+全仓聚合套件不是每次变更的无条件完成门槛。范围外的已知失败必须单独记录和归因，不能自动扩张当前变更的范围；同样，focused tests 通过也不能掩盖本次变更确实修改到的公共 runtime 回归。
 
 环境、OS、toolchain、共享 Engine 与产品代码故障必须分开归因。证据指向环境层时，应停止把它当作产品回归，并且不得未经授权扩展到范围外功能、共享 Engine 或系统策略。
 
@@ -655,15 +655,6 @@ AssetDocument 文档分为四层：
 - module 和 transport 边界是否仍然可独立替换；
 - 文档、schema、实现和验证证据是否一致。
 
-### 17.1 Bounded G1 contract-owner decision registry
-
-本表只提供导航与当前 review gate，不复制 decision 正文，也不改变顶层
-Protocol、DAG、lease 或既有 G1 normalization 状态。
-
-| Decision | Status | Authority |
-| --- | --- | --- |
-| `G1-BP-ACTION-HANDLE-CAPABILITY-v1` / `G1-BP-AUTHORED-CORRELATION-v1` / `G1-BP-ACTION-SELECTOR-BOUND-v1` | Frozen candidate; independent same-SHA Decision Review required before integration and P-BP plan revision | Blueprint action capability and authored-correlation decision (design record kept internally) |
-
 ## 18. 当前代码锚点
 
 以下文件是本文原则在当前代码中的主要落点。它们是导航入口，不代表所有实现已经达到本文的目标状态：
@@ -674,14 +665,15 @@ Protocol、DAG、lease 或既有 G1 normalization 状态。
 - `Source/AssetDocument/Public/AssetDocumentRegion.h`
 - `Source/AssetDocument/Public/AssetDocumentFragment.h`
 - `Source/AssetDocument/Private/AssetDocumentService.cpp`
-- `Source/AssetDocument/Private/AssetDocumentBodyRegionDispatcher.cpp`
 - `Source/AssetDocument/Private/AssetDocumentRegionRuntime.cpp`
-- `Source/AssetDocument/Private/AssetDocumentManagedPropertyPartition.cpp`
-- `Source/AssetDocument/Private/AssetDocumentRegionCanonicalizer.cpp`
-- `Source/AssetDocument/Private/AssetDocumentApplyTransaction.cpp`
-- `Source/AssetDocument/Private/AssetDocumentPersistenceTransaction.cpp`
+- `Source/AssetDocument/Private/AssetDocumentPolicyRegistry.cpp`
+- `Source/AssetDocument/Private/AssetDocumentCanonicalJson.cpp`
+- `Source/AssetDocument/Private/AssetDocumentSidecar.cpp`
 - `Source/AssetDocument/Private/AssetDocumentAtomicFile.cpp`
-- `Source/AssetDocument/Private/AssetDocumentSidecarSyncEngine.cpp`
+- `Source/AssetDocument/Private/Runtime/AssetDocumentAtomicTransactionRuntime.cpp`
+- `Source/AssetDocument/Private/Runtime/AssetDocumentPersistenceRuntime.cpp`
+- `Source/AssetDocument/Private/Runtime/AssetDocumentTypedSyncRuntime.cpp`
+- `Content/Python/asset_document/registry.py`、`runtime.py`、`profile_runtime.py`，以及 `regions/`、`canonical/`、`diff/`
 - `MCP/schemas/AssetDocument.md`
 
-历史 spec、guide、plan 和 report 可以解释某项原则的形成过程或提供实现证据，但本文应保持为不依赖单个资产、分支或 Goal 的稳定入口。
+历史 spec、guide、plan 和 report 可以解释某项原则的形成过程或提供实现证据，但本文应保持为不依赖单个资产或分支的稳定入口。

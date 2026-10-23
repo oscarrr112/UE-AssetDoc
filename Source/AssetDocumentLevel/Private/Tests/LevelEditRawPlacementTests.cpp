@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Raw path B1 (design §5.3, risk R4): Raw/LevelPlacement places like the editor's
 // official scripting path UEditorActorSubsystem::SpawnActorFromObject (the drag path

@@ -1,4 +1,7 @@
-"""Task6 binding-policy regressions with explicit evidence; no native UE claims."""
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Behavior Tree blackboard-key binding policy: validation against declared class schemas and defaults (a stand-in catalog, not the editor)."""
 from copy import deepcopy
 import unittest
 
@@ -150,7 +153,7 @@ class BehaviorTreeBindingPolicyTests(unittest.TestCase):
                                       target=TARGET, read_handle=context.read_handle, retained=retained)
 
     def test_authored_omitted_required_none_rejected_but_retained_none_is_preserved(self):
-        # Task6.Selectors.OmittedRequiredKeyParity and sparse Blackboard overlay.
+        # Omitted required selector keys and the sparse Blackboard overlay.
         catalog = EvidenceCatalog({"DirectSelector": {"Key": "None"}}, {"DirectSelector": SELECTOR})
         current = projection({}, catalog)
         before = deepcopy(current)
@@ -175,7 +178,7 @@ class BehaviorTreeBindingPolicyTests(unittest.TestCase):
             self.assertEqual([(item.name, item.handle) for item in handles], [("asset", context.ai_handle)])
         self.assertEqual(current, before)
 
-    def test_selector_missing_blackboard_unknown_key_and_wrong_type_keep_task6_paths(self):
+    def test_selector_missing_blackboard_unknown_key_and_wrong_type_keep_their_document_paths(self):
         catalog = EvidenceCatalog({"DirectSelector": {"Key": "None"}}, {"DirectSelector": SELECTOR})
         for label, blackboard, observed, code, path in (
             ("missing-blackboard", None, selector_observation(), "MissingBehaviorTreeBlackboard", "/Body/BlackboardAsset"),

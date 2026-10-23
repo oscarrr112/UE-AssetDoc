@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Fidelity oracle over the Niagara corpus (design §6.1), one test per tier:
 //   UEAssetDoc.Niagara.Corpus.{Systems, Stateless, Stress, Emitters, EmitterStress, Scripts, Collections}
@@ -6,11 +7,11 @@
 // then Extract twice, after unload + reload from disk, and from a second Duplicate of the copy; all four
 // documents must be identical (the second duplicate compared with its own package path mapped back). Inspect
 // must succeed. Extract and Inspect never dirty a package (copy or plugin source). Durations are logged as
-// "NiagaraTiming" lines (stress tier: recorded, not gated). Systems, Stateless and Stress tiers also round trip
-// (N3): the copy's extract written as a Create document of a new system (emitters added from their Parent, or empty,
-// every region authored) gives the same document, and re-applying it is a no-op; system scratch pads are authored
-// (N4), emitter scratch pads come with emitter assets (round tripped on duplicates by Niagara.ScratchPad.Systems).
-// The Emitters and EmitterStress tiers round trip as emitter assets (N5, RoundTripEmitter); the Emitters tier gates
+// "NiagaraTiming" lines (stress tier: recorded, not gated). Systems, Stateless and Stress tiers also round trip:
+// the copy's extract written as a Create document of a new system (emitters added from their Parent, or empty,
+// every region authored) gives the same document, and re-applying it is a no-op; system scratch pads are authored,
+// emitter scratch pads come with emitter assets (round tripped on duplicates by Niagara.ScratchPad.Systems).
+// The Emitters and EmitterStress tiers round trip as emitter assets (RoundTripEmitter); the Emitters tier gates
 // its refusals (known legacy content, or an emitter that does not compile on its own), EmitterStress records them.
 //   UEAssetDoc.Niagara.Corpus.Smoke reads every NiagaraSystem and NiagaraEmitter asset of
 // every mount straight through fx.niagara.read.v1 (no duplicate): no failure, every page within the runtime
@@ -166,7 +167,7 @@ bool CheckFidelity(FAutomationTestBase& Test, const FString& Label, const FTarge
 	return true;
 }
 
-// An emitter asset's extract written as a Create document of a new emitter asset (N5): the New Niagara Emitter
+// An emitter asset's extract written as a Create document of a new emitter asset: the New Niagara Emitter
 // factory's empty emitter (or, with a Parent, a child of it), every region authored through the emitter editor's
 // working copy (stacks, inputs, handlers, stages, renderers, properties, scratch pads). The new asset's document
 // equals the source's and re-applying it is a no-op. Content the editor can no longer make is refused (OutNote).

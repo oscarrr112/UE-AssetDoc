@@ -1,18 +1,34 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.HttpServer.Security.Checks: the checks every request to the editor's HTTP server passes
 //   before its route runs. A request from another machine, one whose Host header names another host (a web page whose
 //   domain resolves to 127.0.0.1), one whose Origin is a non-local page, one without the bearer token when a token is
 //   required, and a POST/PUT/PATCH body not declared as application/json are refused with 403, 401 or 415. Allowing
 //   remote connections accepts other peers and hosts but keeps the Origin and token checks.
+// UEAssetDoc.HttpServer.Security.UserOnlyFile: the file that can hold the bearer token is created, and an existing
+//   file readable by others is replaced, so that only the current user can read it (Mac/Linux: mode 0600; Windows: a
+//   protected DACL that allows only the current user and SYSTEM). On the Mac, an extended ACL entry inherited from the
+//   folder or set on the existing file is removed too. Saving again writes a new file: a reader that opened the old
+//   one does not see the new text, and no temporary file or folder is left.
 
 #include "AssetDocumentHttpSecurity.h"
+#include "AssetDocumentUserOnlyFile.h"
+#include "AssetDocumentUserOnlyFileTestSupport.h"
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Guid.h"
 #include "HttpServerRequest.h"
 #include "IPAddress.h"
 #include "Misc/AutomationTest.h"
 #include "SocketSubsystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
+
+#if PLATFORM_MAC || PLATFORM_LINUX
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace AssetDocumentHttpSecurityTestsLocal
 {
@@ -160,6 +176,100 @@ bool FAssetDocumentHttpSecurityChecksTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("a token is hexadecimal"), bHex);
 	TestNotEqual(TEXT("each token is new"), Token.Token, Another);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentHttpSecurityUserOnlyFileTest,
+	"UEAssetDoc.HttpServer.Security.UserOnlyFile",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAssetDocumentHttpSecurityUserOnlyFileTest::RunTest(const FString& Parameters)
+{
+	const FString Directory = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("UEAssetDocTests"),
+		FString::Printf(TEXT("UserOnly-%s"), *FGuid::NewGuid().ToString(EGuidFormats::Digits))));
+	IFileManager::Get().MakeDirectory(*Directory, true);
+
+	// A new file.
+	const FString Created = FPaths::Combine(Directory, TEXT("created.json"));
+	FString Error;
+	TestTrue(TEXT("a new file is written"), AssetDocumentUserOnlyFile::Save(TEXT("{\"authToken\": \"a\"}"), Created, Error));
+	AddInfo(FString::Printf(TEXT("new file: %s"), Error.IsEmpty() ? TEXT("ok") : *Error));
+	FString Why;
+	TestTrue(TEXT("the new file is readable by the current user only"), AssetDocumentUserOnlyFileTests::IsReadableByCurrentUserOnly(Created, Why));
+	AddInfo(FString::Printf(TEXT("new file access: %s"), Why.IsEmpty() ? TEXT("user only") : *Why));
+	FString Text;
+	TestTrue(TEXT("the new file holds the text"), FFileHelper::LoadFileToString(Text, *Created) && Text == TEXT("{\"authToken\": \"a\"}"));
+
+	// An existing file written the ordinary way (others may read it) is replaced with a restricted one.
+	const FString Replaced = FPaths::Combine(Directory, TEXT("replaced.json"));
+	TestTrue(TEXT("an ordinary file is written first"), FFileHelper::SaveStringToFile(TEXT("{\"authToken\": \"old token, longer text\"}"), *Replaced));
+	TestTrue(TEXT("the existing file is replaced"), AssetDocumentUserOnlyFile::Save(TEXT("{\"authToken\": \"b\"}"), Replaced, Error));
+	Why.Reset();
+	TestTrue(TEXT("the replaced file is readable by the current user only"), AssetDocumentUserOnlyFileTests::IsReadableByCurrentUserOnly(Replaced, Why));
+	AddInfo(FString::Printf(TEXT("replaced file access: %s"), Why.IsEmpty() ? TEXT("user only") : *Why));
+	TestTrue(TEXT("the replaced file holds only the new text"), FFileHelper::LoadFileToString(Text, *Replaced) && Text == TEXT("{\"authToken\": \"b\"}"));
+	TArray<FString> Left;
+	IFileManager::Get().FindFiles(Left, *FPaths::Combine(Directory, TEXT("*")), true, false);
+	TestEqual(TEXT("no temporary file is left"), Left.Num(), 2);
+	Left.Reset();
+	IFileManager::Get().FindFiles(Left, *FPaths::Combine(Directory, TEXT("*")), false, true);
+	TestEqual(TEXT("no temporary folder is left"), Left.Num(), 0);
+
+#if PLATFORM_MAC || PLATFORM_LINUX
+	// A reader that opened the file before it is saved again keeps the old text: the new text is a new file.
+	const FString Reopened = FPaths::Combine(Directory, TEXT("reopened.json"));
+	TestTrue(TEXT("the first text is saved"), AssetDocumentUserOnlyFile::Save(TEXT("{\"authToken\": \"first\"}"), Reopened, Error));
+	const int Reader = open(TCHAR_TO_UTF8(*Reopened), O_RDONLY);
+	if (TestTrue(TEXT("a reader opens the file"), Reader >= 0))
+	{
+		TestTrue(TEXT("the second text is saved"), AssetDocumentUserOnlyFile::Save(TEXT("{\"authToken\": \"second\"}"), Reopened, Error));
+		char Buffer[128] = {};
+		const ssize_t Read = pread(Reader, Buffer, sizeof(Buffer) - 1, 0);
+		close(Reader);
+		const FString Seen = Read > 0 ? FString(UTF8_TO_TCHAR(Buffer)) : FString();
+		TestFalse(*FString::Printf(TEXT("the open reader does not see the second text (it reads '%s')"), *Seen), Seen.Contains(TEXT("second")));
+		TestTrue(TEXT("the file holds the second text"), FFileHelper::LoadFileToString(Text, *Reopened) && Text == TEXT("{\"authToken\": \"second\"}"));
+		Why.Reset();
+		TestTrue(TEXT("the saved-again file is readable by the current user only"), AssetDocumentUserOnlyFileTests::IsReadableByCurrentUserOnly(Reopened, Why));
+	}
+#endif
+
+#if PLATFORM_MAC
+	// A folder whose ACL lets everyone read the files created in it, and an existing file with such an entry of its own.
+	const FString AclDirectory = FPaths::Combine(Directory, TEXT("acl"));
+	IFileManager::Get().MakeDirectory(*AclDirectory, true);
+	TestTrue(TEXT("the folder gets an entry its new files inherit"), AssetDocumentUserOnlyFileTests::AllowEveryoneToRead(AclDirectory, true, Why));
+	AddInfo(FString::Printf(TEXT("folder ACL: %s"), Why.IsEmpty() ? TEXT("set") : *Why));
+	const FString Inheriting = FPaths::Combine(AclDirectory, TEXT("ordinary.json"));
+	TestTrue(TEXT("an ordinary file is written in that folder"), FFileHelper::SaveStringToFile(TEXT("{}"), *Inheriting));
+	TestTrue(TEXT("an ordinary file there inherits the entry"), AssetDocumentUserOnlyFileTests::HasExtendedAcl(Inheriting));
+
+	const FString CreatedInAclFolder = FPaths::Combine(AclDirectory, TEXT("created.json"));
+	TestTrue(TEXT("a new file in that folder is written"), AssetDocumentUserOnlyFile::Save(TEXT("{\"authToken\": \"c\"}"), CreatedInAclFolder, Error));
+	AddInfo(FString::Printf(TEXT("new file in the ACL folder: %s"), Error.IsEmpty() ? TEXT("ok") : *Error));
+	TestFalse(TEXT("the new file keeps no inherited entry"), AssetDocumentUserOnlyFileTests::HasExtendedAcl(CreatedInAclFolder));
+	Why.Reset();
+	TestTrue(TEXT("the new file in that folder is readable by the current user only"),
+		AssetDocumentUserOnlyFileTests::IsReadableByCurrentUserOnly(CreatedInAclFolder, Why));
+	AddInfo(FString::Printf(TEXT("new file in the ACL folder access: %s"), Why.IsEmpty() ? TEXT("user only") : *Why));
+
+	const FString WithOwnEntry = FPaths::Combine(Directory, TEXT("own-entry.json"));
+	TestTrue(TEXT("a file with an entry of its own is written first"), FFileHelper::SaveStringToFile(TEXT("{\"authToken\": \"old\"}"), *WithOwnEntry));
+	Why.Reset();
+	TestTrue(TEXT("the file gets its own entry"), AssetDocumentUserOnlyFileTests::AllowEveryoneToRead(WithOwnEntry, false, Why));
+	TestTrue(TEXT("the entry is there"), AssetDocumentUserOnlyFileTests::HasExtendedAcl(WithOwnEntry));
+	TestTrue(TEXT("the file with its own entry is replaced"), AssetDocumentUserOnlyFile::Save(TEXT("{\"authToken\": \"d\"}"), WithOwnEntry, Error));
+	TestFalse(TEXT("the replaced file keeps no entry"), AssetDocumentUserOnlyFileTests::HasExtendedAcl(WithOwnEntry));
+	TestTrue(TEXT("the replaced file holds the new text"), FFileHelper::LoadFileToString(Text, *WithOwnEntry) && Text == TEXT("{\"authToken\": \"d\"}"));
+#endif
+
+	// A file that cannot be written (its folder is missing) is reported, not left behind.
+	const FString Missing = FPaths::Combine(Directory, TEXT("missing"), TEXT("service.json"));
+	TestFalse(TEXT("a file in a missing folder is not written"), AssetDocumentUserOnlyFile::Save(TEXT("{}"), Missing, Error));
+	TestFalse(TEXT("the failure says why"), Error.IsEmpty());
+	TestFalse(TEXT("and nothing is there"), FPaths::FileExists(Missing));
+
+	IFileManager::Get().DeleteDirectory(*Directory, false, true);
 	return true;
 }
 

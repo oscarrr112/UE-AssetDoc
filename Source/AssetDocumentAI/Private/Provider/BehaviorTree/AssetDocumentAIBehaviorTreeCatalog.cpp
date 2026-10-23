@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "Provider/BehaviorTree/AssetDocumentAIBehaviorTreePrimitives.h"
 
@@ -130,7 +131,7 @@ FAuthorityIdentity GetAuthorityIdentity(FStringView PrimitiveId)
 		return {
 			TEXT("Engine+BehaviorTreeEditor"),
 			TEXT("EdGraphSchema_BehaviorTree.h+EdGraph/EdGraphSchema.h"),
-			TEXT("P-AI-SCRATCH-BUNDLE-v1>UEdGraphSchema::TryCreateConnection"),
+			TEXT("AI-SCRATCH-BUNDLE-v1>UEdGraphSchema::TryCreateConnection"),
 		};
 	}
 	if (PrimitiveId == TEXTVIEW("ai.behavior_tree.runtime_mirror.rebuild.v1"))
@@ -333,7 +334,7 @@ FAssetDocumentPrimitiveAdmissionEvidence MakeAdmission(const FString& PrimitiveI
 	{
 		Evidence.FailureInjectionTestIds = {TEXT("UEAssetDoc.AIProvider.BehaviorTree.DecoratorRefresh")};
 		Evidence.VerificationTestIds = {TEXT("UEAssetDoc.AIProvider.BehaviorTree.DecoratorRefresh"),
-			TEXT("UEAssetDoc.AIProvider.BehaviorTree.DerivedCompletionSourceGate")};
+			TEXT("UEAssetDoc.AIProvider.BehaviorTree.DerivedCompletionSourceCheck")};
 	}
 	if ((PrimitiveId == TEXT("ai.behavior_tree.selector.resolve_batch.v1") || PrimitiveId == TEXT("ai.behavior_tree.selector.resolve_batch.v2")))
 	{
@@ -357,7 +358,7 @@ FAssetDocumentPrimitiveAdmissionEvidence MakeAdmission(const FString& PrimitiveI
 		Evidence.CompletionContractId = PrimitiveId + TEXT(".current_graph.single-terminal-finalizer.v1");
 		Evidence.FailureInjectionTestIds = {TEXT("UEAssetDoc.AIProvider.BehaviorTree.ValueOrKeyRefresh")};
 		Evidence.VerificationTestIds = {TEXT("UEAssetDoc.AIProvider.BehaviorTree.ValueOrKeyRefresh"),
-			TEXT("UEAssetDoc.AIProvider.BehaviorTree.DerivedCompletionSourceGate")};
+			TEXT("UEAssetDoc.AIProvider.BehaviorTree.DerivedCompletionSourceCheck")};
 	}
 	if (PrimitiveId == TEXT("ai.behavior_tree.graph.install.v1"))
 	{
@@ -374,7 +375,7 @@ FAssetDocumentPrimitiveAdmissionEvidence MakeAdmission(const FString& PrimitiveI
 		Evidence.CompletionContractId = TEXT("ai.behavior_tree.graph.install.v1.installed_replacement.single-finalizer.v1");
 		Evidence.FailureInjectionTestIds = {TEXT("UEAssetDoc.AIProvider.BehaviorTree.GraphInstall")};
 		Evidence.VerificationTestIds = {TEXT("UEAssetDoc.AIProvider.BehaviorTree.GraphInstall"),
-			TEXT("UEAssetDoc.AIProvider.BehaviorTree.DerivedCompletionSourceGate")};
+			TEXT("UEAssetDoc.AIProvider.BehaviorTree.DerivedCompletionSourceCheck")};
 	}
 	Evidence.AuthorityFingerprint =
 		TEXT("ue-5.7.4-launcher-cl-51494982|ai|") + PrimitiveId

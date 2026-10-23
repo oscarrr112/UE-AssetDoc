@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Float precision normalisation of authored Properties, as the Details panel does: a
 // number for a float property becomes the shortest decimal of the float it is

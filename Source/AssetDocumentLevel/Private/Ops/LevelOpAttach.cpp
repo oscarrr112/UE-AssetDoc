@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // attach / detach: the Outliner's drag onto a parent actor (UEditorEngine::ParentActors,
 // after CanParentActors) and Detach (Raw/LevelDetach). Both keep the world transform

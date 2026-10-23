@@ -1,9 +1,12 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "Play/PlayActions.h"
+#include "Play/PlayCommandGuard.h"
 
 #include "AssetDocumentEditorPropertyValueCodec.h"
 #include "AssetDocumentNameSuggestions.h"
+#include "AssetDocumentSettings.h"
 #include "Components/ActorComponent.h"
 #include "Components/SceneComponent.h"
 #include "EdGraphSchema_K2.h"
@@ -32,6 +35,26 @@ FString JsonText(const TSharedPtr<FJsonValue>& Value)
 	FString Text;
 	FJsonSerializer::Serialize(Value, FString(), TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Text));
 	return Text.Left(300);
+}
+
+// A Play.ProtectedSettings refusal when a request value names a protected settings class (the plugin's own server and
+// security settings, or engine settings that make the editor run code): a function argument (a console command for
+// ServerExec) or a value to set (an object path to it).
+bool RefuseProtectedSettingsValue(const TSharedPtr<FJsonValue>& Value, const FString& Path, TArray<FAssetDocumentDiagnostic>& Diagnostics)
+{
+	if (!Value.IsValid())
+	{
+		return false;
+	}
+	FString Text;
+	FJsonSerializer::Serialize(Value, FString(), TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Text));
+	const FString Why = UAssetDocumentSettings::WhyNamesProtectedSettings(Text);
+	if (Why.IsEmpty())
+	{
+		return false;
+	}
+	Diagnostics.Add(MakePlayDiagnostic(Path, TEXT("Play.ProtectedSettings"), Why));
+	return true;
 }
 
 bool CheckActionFields(const FJsonObject& Json, std::initializer_list<const TCHAR*> Known, const TCHAR* What, TArray<FAssetDocumentDiagnostic>& Diagnostics)
@@ -175,6 +198,14 @@ bool DecodeInto(UWorld& World, FProperty& Property, const TSharedPtr<FJsonValue>
 			Code.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" (%s)"), *Code));
 		return false;
 	}
+	if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(&Property))
+	{
+		if (const FString Why = UAssetDocumentSettings::WhyWriteProtected(ObjectProperty->GetObjectPropertyValue(ValuePtr)); !Why.IsEmpty())
+		{
+			OutError = FString::Printf(TEXT("%s cannot hold a protected settings object. %s"), *Property.GetAuthoredName(), *Why);
+			return false;
+		}
+	}
 	return true;
 }
 
@@ -252,8 +283,11 @@ struct FWritableValue
 	void* Staged = nullptr;
 };
 
-bool ResolveWritable(AActor& Actor, const FString& Path, FWritableValue& Out, FString& OutError)
+// A value of Actor by path; false with OutError and OutCode (Play.PropertyNotFound, Play.ProtectedSettings, or
+// Play.TargetOutsidePlay for a path through an object reference that leaves the play session).
+bool ResolveWritable(AActor& Actor, const FString& Path, FWritableValue& Out, FString& OutError, FString& OutCode)
 {
+	OutCode = TEXT("Play.PropertyNotFound");
 	TArray<FString> Segments;
 	Path.ParseIntoArray(Segments, TEXT("."));
 	if (Segments.IsEmpty())
@@ -306,6 +340,21 @@ bool ResolveWritable(AActor& Actor, const FString& Path, FWritableValue& Out, FS
 			if (Next == nullptr)
 			{
 				OutError = FString::Printf(TEXT("'%s' is None; '%s' cannot be set inside it"), *Segments[Index], *Segments[Index + 1]);
+				return false;
+			}
+			if (const FString Why = UAssetDocumentSettings::WhyWriteProtected(Next); !Why.IsEmpty())
+			{
+				OutError = FString::Printf(TEXT("'%s' holds a protected settings object, whose values cannot be set. %s"), *Segments[Index], *Why);
+				OutCode = TEXT("Play.ProtectedSettings");
+				return false;
+			}
+			// Play changes the play session only: an object reference to an asset, a class default or an editor object
+			// is not followed.
+			if (!IsPlaySessionObject(*Next, Actor.GetWorld()))
+			{
+				OutError = FString::Printf(TEXT("'%s' holds %s, which is outside the play session; play sets values of play-world objects "
+					"only"), *Segments[Index], *Next->GetPathName());
+				OutCode = TEXT("Play.TargetOutsidePlay");
 				return false;
 			}
 			Struct = Next->GetClass();
@@ -426,6 +475,15 @@ FLevelToolResult RunPlayCall(UWorld& World, const FJsonObject& Request)
 			*Function->GetName(), *Why)));
 		return FLevelToolResult::Failure(MoveTemp(Diagnostics));
 	}
+	// Functions that run console commands or Python are not called, whatever their arguments; arguments naming the
+	// plugin's settings are reported as well.
+	if (const FString Refused = RefusedFunction(*Function); !Refused.IsEmpty())
+	{
+		Diagnostics.Add(MakePlayDiagnostic(TEXT("/function"), TEXT("Play.FunctionNotCallable"), FString::Printf(TEXT("%s cannot be called here: %s."),
+			*Function->GetName(), *Refused)));
+		RefuseProtectedSettingsValue(Request.TryGetField(TEXT("args")), TEXT("/args"), Diagnostics);
+		return FLevelToolResult::Failure(MoveTemp(Diagnostics));
+	}
 
 	// Parameters: inputs (by value or by reference), outputs, the return value.
 	TArray<FProperty*> Inputs;
@@ -466,6 +524,10 @@ FLevelToolResult RunPlayCall(UWorld& World, const FJsonObject& Request)
 	const FString Signature = FString::Printf(TEXT("%s(%s)"), *Function->GetName(), *FString::Join(InputNames, TEXT(", ")));
 
 	TMap<FProperty*, TSharedPtr<FJsonValue>> Given;
+	if (const TSharedPtr<FJsonValue> Args = Request.TryGetField(TEXT("args")); RefuseProtectedSettingsValue(Args, TEXT("/args"), Diagnostics))
+	{
+		return FLevelToolResult::Failure(MoveTemp(Diagnostics));
+	}
 	if (const TSharedPtr<FJsonValue> Args = Request.TryGetField(TEXT("args")))
 	{
 		if (Args->Type == EJson::Object)
@@ -625,11 +687,16 @@ FLevelToolResult RunPlaySet(UWorld& World, const FJsonObject& Request)
 		for (const auto& Entry : (*Values)->Values)
 		{
 			const FString Path = TEXT("/values/") + FString(*Entry.Key);
+			if (RefuseProtectedSettingsValue(Entry.Value, Path, Diagnostics))
+			{
+				continue;
+			}
 			FWritableValue Write;
 			FString Error;
-			if (!ResolveWritable(*Actor, FString(*Entry.Key), Write, Error))
+			FString Code;
+			if (!ResolveWritable(*Actor, FString(*Entry.Key), Write, Error, Code))
 			{
-				Diagnostics.Add(MakePlayDiagnostic(Path, TEXT("Play.PropertyNotFound"), Error + TEXT(".")));
+				Diagnostics.Add(MakePlayDiagnostic(Path, Code, Error.EndsWith(TEXT(".")) ? Error : Error + TEXT(".")));
 				continue;
 			}
 			Write.Staged = FMemory::Malloc(Write.Property->GetSize(), Write.Property->GetMinAlignment());

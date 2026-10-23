@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Every validate of a Camera Animation Sequence Create failed with
 // PreflightIsolation.PackageNotRestored naming the open map ("objects were created in it

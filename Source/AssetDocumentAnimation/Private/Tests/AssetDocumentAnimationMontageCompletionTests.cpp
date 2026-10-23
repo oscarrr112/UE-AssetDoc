@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -17,27 +18,27 @@ struct FExpectedBlocker
 	const TCHAR* PrimitiveId;
 	EAssetDocumentAnimationDecisionDisposition Disposition;
 	const TCHAR* ConsumerId;
-	const TCHAR* AuthorityGateId;
+	const TCHAR* AuthorityGroupId;
 	const TCHAR* Diagnostic;
 };
 
 constexpr FExpectedBlocker ExpectedBlockers[] = {
 	{TEXT("animation.montage.section_metadata.replace.v1"),
-		EAssetDocumentAnimationDecisionDisposition::FrozenG1StableBlocker,
-		TEXT("animation_provider_design"), TEXT("G1"),
-		TEXT("AD.G1.BLOCK.ANIMATION.SECTION_METADATA_AUTHORITY")},
+		EAssetDocumentAnimationDecisionDisposition::FrozenStableBlocker,
+		TEXT("animation_provider_design"), TEXT("FROZEN-AUTHORITY"),
+		TEXT("AD.BLOCK.ANIMATION.SECTION_METADATA_AUTHORITY")},
 	{TEXT("animation.sequence.complete_edit.v1"),
 		EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker,
-		TEXT("animation_profile"), TEXT("T0-SEQUENCE"),
-		TEXT("AD.PANIM.BLOCK.SEQUENCE_COMPLETION_AUTHORITY")},
+		TEXT("animation_profile"), TEXT("ANIMATION-SEQUENCE"),
+		TEXT("AD.ANIMATION.BLOCK.SEQUENCE_COMPLETION_AUTHORITY")},
 	{TEXT("animation.montage.sync_cache.complete.v1"),
-		EAssetDocumentAnimationDecisionDisposition::FrozenG1StableBlocker,
-		TEXT("animation_provider_design"), TEXT("G1"),
-		TEXT("AD.G1.BLOCK.ANIMATION.SYNC_CACHE_AUTHORITY")},
+		EAssetDocumentAnimationDecisionDisposition::FrozenStableBlocker,
+		TEXT("animation_provider_design"), TEXT("FROZEN-AUTHORITY"),
+		TEXT("AD.BLOCK.ANIMATION.SYNC_CACHE_AUTHORITY")},
 	{TEXT("animation.montage.time_stretch.configure_bake.v1"),
-		EAssetDocumentAnimationDecisionDisposition::FrozenG1StableBlocker,
-		TEXT("animation_provider_design"), TEXT("G1"),
-		TEXT("AD.G1.BLOCK.ANIMATION.TIME_STRETCH_CONFIG_AUTHORITY")},
+		EAssetDocumentAnimationDecisionDisposition::FrozenStableBlocker,
+		TEXT("animation_provider_design"), TEXT("FROZEN-AUTHORITY"),
+		TEXT("AD.BLOCK.ANIMATION.TIME_STRETCH_CONFIG_AUTHORITY")},
 };
 
 const FAssetDocumentAnimationDecision* FindDecision(FStringView PrimitiveId)
@@ -169,9 +170,9 @@ bool FAssetDocumentAnimationMontageCompletionTest::RunTest(const FString&)
 			Expected.PrimitiveId), Decision->Disposition, Expected.Disposition);
 		TestEqual(FString::Printf(TEXT("%s retains its exact consumer"),
 			Expected.PrimitiveId), Decision->ConsumerId, FString(Expected.ConsumerId));
-		TestEqual(FString::Printf(TEXT("%s retains its exact authority gate"),
-			Expected.PrimitiveId), Decision->AuthorityGateId,
-			FString(Expected.AuthorityGateId));
+		TestEqual(FString::Printf(TEXT("%s retains its exact authority group"),
+			Expected.PrimitiveId), Decision->AuthorityGroupId,
+			FString(Expected.AuthorityGroupId));
 		TestEqual(FString::Printf(TEXT("%s retains its exact blocker diagnostic"),
 			Expected.PrimitiveId), Decision->StableBlockerDiagnostic,
 			FString(Expected.Diagnostic));
@@ -196,7 +197,7 @@ bool FAssetDocumentAnimationMontageCompletionTest::RunTest(const FString&)
 		if (!TestNotNull(TEXT("structural decision remains in catalog"), Decision)) continue;
 		TestEqual(TEXT("structural row is admitted"), Decision->Disposition, EAssetDocumentAnimationDecisionDisposition::Admitted);
 		TestEqual(TEXT("structural consumer is animation profile"), Decision->ConsumerId, FString(TEXT("animation_profile")));
-		TestEqual(TEXT("structural gate is the approved typed publication"), Decision->AuthorityGateId, FString(TEXT("MONTAGE-STRUCTURAL")));
+		TestEqual(TEXT("structural authority group is the approved typed publication"), Decision->AuthorityGroupId, FString(TEXT("MONTAGE-STRUCTURAL")));
 		TestTrue(TEXT("structural row has no legacy blocker diagnostic"), Decision->StableBlockerDiagnostic.IsEmpty());
 		TestTrue(TEXT("structural descriptor has exact authority shape"), IsMontageStructuralAdmissionShape(Descriptor));
 		TestEqual(TEXT("structural row has one descriptor"), CountDescriptors(Descriptor.PrimitiveId), 1);
@@ -207,7 +208,7 @@ bool FAssetDocumentAnimationMontageCompletionTest::RunTest(const FString&)
 		TestEqual(TEXT("admitted structural row still rejects missing transaction"), Outcome.Status, EAssetDocumentPrimitiveOutcomeStatus::Failed);
 		TestEqual(TEXT("transaction rejection has one diagnostic"), Outcome.Diagnostics.Num(), 1);
 		if (Outcome.Diagnostics.Num() == 1)
-			TestEqual(TEXT("structural rejection is transaction requirement, not retired G1 blocker"), Outcome.Diagnostics[0].Code, FString(TEXT("AnimationProvider.TransactionUnavailable")));
+			TestEqual(TEXT("structural rejection is transaction requirement, not a frozen blocker"), Outcome.Diagnostics[0].Code, FString(TEXT("AnimationProvider.TransactionUnavailable")));
 		TestTrue(TEXT("transaction rejection has no changed set or handles"), Outcome.ChangedSet.IsEmpty() && Outcome.HandleResults.IsEmpty());
 	}
 

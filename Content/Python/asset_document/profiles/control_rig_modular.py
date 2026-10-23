@@ -1,4 +1,7 @@
-"""Modular rigs of profile.control_rig.v1 (phase CR4, design §3.7, §4.4 step 9): Modules, Connections and
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Modular rigs of profile.control_rig.v1 (design §3.7, §4.4 step 9): Modules, Connections and
 ModularSettings as the Module Assembly panel edits them (UModularRigController through rig.controlrig.edit.v1).
 
 - ``Modules`` is the module tree: entries by ``Name`` (``RenamedFrom`` renames), ``Class`` (a changed class is "Swap

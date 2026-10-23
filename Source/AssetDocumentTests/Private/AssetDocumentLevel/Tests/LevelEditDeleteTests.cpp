@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // edit_level delete (decision D5): referenced actors are refused with
 // Level.DeleteReferenced listing what the Delete key's dialog would list (actor

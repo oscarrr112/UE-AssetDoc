@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """IK Retargeter Profile: Body from the read records, Diff, validation and the apply planner (phases, op stack order,
 poses, error paths). The editor side (edit primitive, suggestions, fidelity on the corpus) is covered by
 UEAssetDoc.IKRig.*."""

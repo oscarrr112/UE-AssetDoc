@@ -1,25 +1,25 @@
 # AssetDocument Niagara profile: design
 
-Status: design only (2026-10-06). No product code. Governing
+Governing
 rules: [design rules](asset-document-design-rules.md) §3 (rollback = functional equivalence),
 §3.1 (Undo history), §3.2 (dependent assets), §4 (editor-equivalent raw code + behaviour test, no private headers,
 no unexported symbols) and §5 (support matrix). Reference editor: the Niagara System / Emitter editor (stack view
 models, `FNiagaraSystemViewModel`), the Niagara Script editor and the Scratch Pad. The legacy generators are not a
-reference. Engine source read: `/Users/Shared/Epic Games/UE_5.7/Engine/Plugins/FX/Niagara/Source` (paths below are
+reference. Engine source read: `<UE_ROOT>/Engine/Plugins/FX/Niagara/Source` (paths below are
 relative to it unless they start with `/`).
 
 ## 1. Classes in scope
 
-| Class | Decision | Profile | Phase | Reason |
-|---|---|---|---|---|
-| `/Script/Niagara.NiagaraSystem` | exact profile | `profile.niagara_system.v1` | N1–N4 | The main VFX asset. Its content (emitter handles, module stacks, renderers, user parameters, scratch pads) lives in sub-object graphs that generic property admission cannot see (coverage audit §3, row 4). |
-| `/Script/Niagara.NiagaraEmitter` | exact profile, same emitter body | `profile.niagara_emitter.v1` | N2 | Reusable emitters / parents of system emitters. The body of one emitter is the same component as a system's emitter entry. |
-| `/Script/Niagara.NiagaraScript` with usage Module / Function / DynamicInput | exact profile (script graph) | `profile.niagara_script.v1` | N4 | Modules, functions and dynamic inputs are node graphs (Script editor). The same graph component authors scratch pad scripts inside systems and emitters, which real systems use (fidelity needs it). Generic create fails today (`ScratchCreate.InvalidIdentity`). |
-| `/Script/Niagara.NiagaraParameterCollection` (+ `...Instance`) | small exact profile | `profile.niagara_parameter_collection.v1` | N5 | The parameter list is generic-visible, but the values live in an `FNiagaraParameterStore` byte buffer that the generic codec cannot read or write. Systems link inputs to `NPC.<Collection>.<Name>`, so an AI building a system from scratch needs it. Uses the same Niagara value codec; cheap. |
-| `NiagaraEffectType`, `NiagaraValidationRuleSet`, `NiagaraSystemCollection`, `NiagaraSimCache` (read) | generic route | — | — | Pure Details-panel assets; the coverage audit creates and edits them generically. Nothing graph-shaped. |
-| `NiagaraParameterDefinitions` | generic route, Unsupported for structure | — | — | Rare (shared parameter libraries). Its script variables are the same component as script parameters; can be added after N4 if asked. |
-| `NiagaraStatelessEmitterTemplate`, `NiagaraDataChannel*` assets | out of scope | — | — | Template authoring for lightweight emitters is engine-internal (`Niagara/Internal/Stateless`, `NiagaraEditor/Internal/ViewModels/NiagaraStatelessEmitterTemplateViewModel.h`); data channel layouts are rare. Stable `Unsupported` diagnostics; generic route stays for their reflected properties. |
-| Lightweight (stateless) emitters inside a system | in scope, later | emitter entry `Mode: "Stateless"` | N3 | Plain reflected objects (`UNiagaraStatelessEmitter`: spawn infos, `UNiagaraStatelessModule` list, renderers); read via reflection without the Internal header. |
+| Class | Decision | Profile | Reason |
+|---|---|---|---|
+| `/Script/Niagara.NiagaraSystem` | exact profile | `profile.niagara_system.v1` | The main VFX asset. Its content (emitter handles, module stacks, renderers, user parameters, scratch pads) lives in sub-object graphs that generic property admission cannot see (coverage audit §3, row 4). |
+| `/Script/Niagara.NiagaraEmitter` | exact profile, same emitter body | `profile.niagara_emitter.v1` | Reusable emitters / parents of system emitters. The body of one emitter is the same component as a system's emitter entry. |
+| `/Script/Niagara.NiagaraScript` with usage Module / Function / DynamicInput | exact profile (script graph) | `profile.niagara_script.v1` | Modules, functions and dynamic inputs are node graphs (Script editor). The same graph component authors scratch pad scripts inside systems and emitters, which real systems use (fidelity needs it). Generic create fails (`ScratchCreate.InvalidIdentity`). |
+| `/Script/Niagara.NiagaraParameterCollection` (+ `...Instance`) | small exact profile | `profile.niagara_parameter_collection.v1` | The parameter list is generic-visible, but the values live in an `FNiagaraParameterStore` byte buffer that the generic codec cannot read or write. Systems link inputs to `NPC.<Collection>.<Name>`, so an AI building a system from scratch needs it. Uses the same Niagara value codec; cheap. |
+| `NiagaraEffectType`, `NiagaraValidationRuleSet`, `NiagaraSystemCollection`, `NiagaraSimCache` (read) | generic route | — | Pure Details-panel assets; the coverage audit creates and edits them generically. Nothing graph-shaped. |
+| `NiagaraParameterDefinitions` | generic route, Unsupported for structure | — | Rare (shared parameter libraries). Its script variables are the same component as script parameters; can be added if asked. |
+| `NiagaraStatelessEmitterTemplate`, `NiagaraDataChannel*` assets | out of scope | — | Template authoring for lightweight emitters is engine-internal (`Niagara/Internal/Stateless`, `NiagaraEditor/Internal/ViewModels/NiagaraStatelessEmitterTemplateViewModel.h`); data channel layouts are rare. Stable `Unsupported` diagnostics; generic route stays for their reflected properties. |
+| Lightweight (stateless) emitters inside a system | in scope | emitter entry `Mode: "Stateless"` | Plain reflected objects (`UNiagaraStatelessEmitter`: spawn infos, `UNiagaraStatelessModule` list, renderers); read via reflection without the Internal header. |
 
 Not authored anywhere (editor state, not content): the System Overview graph layout and folders, viewport/preview
 settings, playback range, thumbnails, stack expansion and summary-view layout (`SummaryViewRoot`), dismissed issues,
@@ -175,7 +175,7 @@ System `Body`:
 | `ScratchPads` | scratch pad scripts `{Name, Usage, Script-graph body}` (§3.5) | complete |
 
 Emitter asset `Body`: exactly the keys of one emitter entry except `Name`, `Enabled` and `Mode` (an emitter asset
-has no handle). Its `Parent` is the asset's inheritance parent; `Versions` (N2+) lists the versions of a versioned
+has no handle). Its `Parent` is the asset's inheritance parent; `Versions` lists the versions of a versioned
 emitter (`{Version, Exposed?, ChangeDescription?}`); the body describes the exposed version.
 
 Emitter entry:
@@ -401,13 +401,12 @@ compile.
   collection editor stays open (its view model rebuilds on `OnCollectionChangedDelegate`). Dependents open in editors
   follow the emitter as after the emitter editor's Apply (`UpdateExistingEmitters`: working copies merge, system
   editors `RefreshAll`). Tests: `UEAssetDoc.Niagara.OpenEditorApply.*`.
-- Non-interactive: everything runs inside `FAssetDocumentEditorNonInteractiveScope`; the slow-task false
-  positive (`Material.InteractiveEditRefused`) must be fixed in that scope first (or the Niagara compile must stay
-  dialog-free as above), otherwise Niagara applies inherit the same bug.
+- Non-interactive: everything runs inside `FAssetDocumentEditorNonInteractiveScope`. The Niagara compile never shows
+  a slow-task dialog (`bShowProgress = false`, as above), so the scope's modal guard does not trip.
 
 ## 6. Fidelity acceptance
 
-The corpus is real content from the UE 5.7 install. An inventory on 2026-10-06 found 112 systems, 91 emitters, about 1,190 scripts and one parameter collection. They all sit under plugin mounts. The `/Game/...` ones live in `Templates/` and have to be copied into the sandbox. Each asset is read from its plugin mount and duplicated to `/Game/AssetDocumentTests/Niagara/...`. Plugin content is never modified.
+The corpus is real content from the UE 5.7 install. The install holds 112 systems, 91 emitters, about 1,190 scripts and one parameter collection. They all sit under plugin mounts. The `/Game/...` ones live in `Templates/` and have to be copied into the sandbox. Each asset is read from its plugin mount and duplicated to `/Game/AssetDocumentTests/Niagara/...`. Plugin content is never modified.
 
 ### 6.1 Corpus
 
@@ -415,11 +414,11 @@ The corpus is real content from the UE 5.7 install. An inventory on 2026-10-06 f
 |---|---|---|
 | Systems, small | `/Niagara/DefaultAssets/DefaultSystem`, `/Niagara/DefaultAssets/Templates/Systems/DirectionalBurst`, `RadialBurst`, `SimpleExplosion`, `AttributeReaderTrails` | The New System dialog's own templates. Covers multi-emitter systems, sprite / ribbon / mesh renderers, dynamic inputs, links and GPU sim. |
 | Systems, features | `/Niagara/DefaultAssets/Templates/BehaviorExamples/RenderTargetTexturePainter` (custom HLSL, sim stages, Grid2D / RenderTarget DIs), `/Water/Effects/Niagara/Shoreline/NiagaraShore_System` (sim stages), `/ExampleCustomDataInterface/FollowCursorSystem` (custom DI), `/Niagara/VectorFields/VectorFieldVisualizationSystem`, `/WaterAdvanced/Niagara/Systems/NDCCollision_FountainDemo` (data channels), `/ClonerEffector/Systems/NS_ClonerBase`, `/VirtualCamera/Modifiers/TeleportModifier/Dependencies/NS_TeleportUX` | Sim stages, DI values, custom HLSL expressions, data channel DIs, and scratch pads in plugin content. |
-| Systems, stateless | `/Niagara/DefaultAssets/Templates/Systems/MinimalLightweight`, `DirectionalBurstLightweight`, `FountainLightweight` | `Mode: Stateless` (N3). |
-| Systems, stress | `/NiagaraFluids/Templates/Gas/2D/Systems/Grid2D_Gas_Explosion` (~135 scratch pads), `/WaterAdvanced/Niagara/Systems/Grid2D_SW_River` (13.6 MB, 106 scratch pads), `/NiagaraFluids/Templates/Gas/3D/Systems/Grid3D_Gas_Fire` | Performance budget and scratch pads (N4). |
+| Systems, stateless | `/Niagara/DefaultAssets/Templates/Systems/MinimalLightweight`, `DirectionalBurstLightweight`, `FountainLightweight` | `Mode: Stateless`. |
+| Systems, stress | `/NiagaraFluids/Templates/Gas/2D/Systems/Grid2D_Gas_Explosion` (~135 scratch pads), `/WaterAdvanced/Niagara/Systems/Grid2D_SW_River` (13.6 MB, 106 scratch pads), `/NiagaraFluids/Templates/Gas/3D/Systems/Grid3D_Gas_Fire` | Performance budget and scratch pads. |
 | Emitters | The 14 `/Niagara/DefaultAssets/Templates/Emitters/*` (Minimal ... UpwardMeshBurst), `/Niagara/DefaultAssets/Templates/BehaviorExamples/{SubUVAnimation, RibbonID, KillParticles, WorkingWithAttributes, SpawnGroupsFromMultipleBones, RendererBindingOverrides}`, `/Niagara/DefaultAssets/Templates/CascadeConversion/CompletelyEmpty`, `/HairStrands/Emitters/GroomRodsEmitter` | Emitter body, renderer bindings, and a scratch pad (`WorkingWithAttributes`). |
-| Scripts | **Small:** `/Niagara/DefaultAssets/{DefaultModule, DefaultFunction, DefaultDynamicInputs}`, `/Niagara/Modules/Update/Camera/CameraOffset`, `/Niagara/DynamicInputs/Math/Abs_Float`, `/Niagara/Functions/Rotation/MatrixToQuaternion`. **Static switches:** `/Niagara/DynamicInputs/Helpers/SimulationPosition`, `/Niagara/DynamicInputs/Rotation/MakeQuaternion`, `/Niagara/Modules/Spawn/Location/V2/ShapeLocation`. **Custom HLSL:** `/Niagara/Functions/MakeScaleMatrix`, `/Niagara/Modules/Update/Forces/AerodynamicDrag`. **Large:** `/Niagara/Modules/Spawn/Location/V2/SkeletalMeshLocation`, `/Niagara/Modules/Collision/Collision`. | Script graph profile (N4). |
-| Parameter collections | `/Game/VFX/NPC_VRTemplate` (copied from `Templates/TemplateResources/Standard/XRFramework`), plus the DMX instance `/DMXFixtures/Fireworks/FWGlobals` (read only) | N5. |
+| Scripts | **Small:** `/Niagara/DefaultAssets/{DefaultModule, DefaultFunction, DefaultDynamicInputs}`, `/Niagara/Modules/Update/Camera/CameraOffset`, `/Niagara/DynamicInputs/Math/Abs_Float`, `/Niagara/Functions/Rotation/MatrixToQuaternion`. **Static switches:** `/Niagara/DynamicInputs/Helpers/SimulationPosition`, `/Niagara/DynamicInputs/Rotation/MakeQuaternion`, `/Niagara/Modules/Spawn/Location/V2/ShapeLocation`. **Custom HLSL:** `/Niagara/Functions/MakeScaleMatrix`, `/Niagara/Modules/Update/Forces/AerodynamicDrag`. **Large:** `/Niagara/Modules/Spawn/Location/V2/SkeletalMeshLocation`, `/Niagara/Modules/Collision/Collision`. | Script graph profile. |
+| Parameter collections | `/Game/VFX/NPC_VRTemplate` (copied from `Templates/TemplateResources/Standard/XRFramework`), plus the DMX instance `/DMXFixtures/Fireworks/FWGlobals` (read only) | Parameter collection profile. |
 
 Three things have no corpus asset, so built scenarios cover them (6.3):
 
@@ -453,7 +452,7 @@ Then compare:
    There is no bytecode or shader comparison, because the hashes include GUIDs and change ids.
 4. **Editor-only state** (layout, thumbnails, note positions) is not compared.
 
-Pass bar for each phase: 100 % of its tier, or a listed reason for each asset that fails. A listed reason is an `Unsupported` diagnostic code, never a silent loss.
+Pass bar: 100 % of each tier, or a listed reason for each asset that fails. A listed reason is an `Unsupported` diagnostic code, never a silent loss.
 
 There is also a smoke run: Extract on the full corpus of 112 systems and 91 emitters, headless with no editor UI. It must not crash or produce an unknown diagnostic, and its time is recorded.
 
@@ -519,17 +518,15 @@ It applies the document, fixes its own diagnostics and compiles clean. Then it h
 
 The session is recorded with calls, failed calls, diagnostics and wall time, plus a human look at the result in the Niagara editor.
 
-A second scenario runs in N4: the AI writes a module script "OrbitAroundPoint" from scratch and uses it in the campfire.
+A second scenario: the AI writes a module script "OrbitAroundPoint" from scratch and uses it in the campfire.
 
-## 7. Risks, unknowns, phases
-
-### 7.1 Risks and unknowns
+## 7. Risks and unknowns
 
 **Many node classes are private, and key stack utilities are not exported.**
 - The private node classes include `UNiagaraNodeParameterMapGet/Set`, static switch, if, select, convert, reroute and usage selector.
 - The unexported utilities include `RemoveModuleFromStack`, `MoveModule`, `SetCustomExpressionForFunctionInput`, `ResetGraphForOutput` and the rapid iteration helpers.
 - Consequence: under the §4 rule they can't be called or even included.
-- Answer:
+- Handling:
   - Go through the exported stack view model objects. Their methods call the unexported utilities internally.
   - Edit script graphs through the schema actions (`FNiagaraAction_NewNode::PerformAction`) and virtuals.
   - Read node data through reflection and `UEdGraphPin`.
@@ -537,12 +534,12 @@ A second scenario runs in N4: the AI writes a module script "OrbitAroundPoint" f
 
 **Headless stack view models.**
 - Consequence: the engine uses them headlessly only for merge and upgrade. Untested paths (add utilities, Drop, renderer add) may assume a toolkit or Slate.
-- Answer: an N1 spike drives each operation in an automation test on a duplicate of DefaultSystem, before the edit primitive is written. Anything that needs Slate gets the raw fallback.
+- Handling: an automation test drives each operation headlessly on a duplicate of DefaultSystem. Anything that needs Slate gets the raw fallback.
 
 **One input value has two possible storages.**
 - It can sit in rapid iteration parameters or on override pins. There are also copies in the system and GPU scripts, and entries the compile adds.
 - Consequence: a raw comparison is noisy, and raw writes are wrong.
-- Answer:
+- Handling:
   - Always write through `SetLocalValue`.
   - Extract and fidelity read values from the stack view model.
   - Only own-usage, non-default values count.
@@ -550,7 +547,7 @@ A second scenario runs in N4: the AI writes a module script "OrbitAroundPoint" f
 **Inheritance.**
 - This covers the versioned parent, the 3-way merge on load, and `UpdateFromMergedCopy` replacing graph objects.
 - Consequence: object pointers go stale, and inherited items can't be edited.
-- Answer:
+- Handling:
   - Resolve everything by name or GUID in each call, and never cache objects across ops.
   - Refuse edits to inherited modules and renderers, as the stack does.
   - Limit a `Parent` change to remove or version.
@@ -558,16 +555,15 @@ A second scenario runs in N4: the AI writes a module script "OrbitAroundPoint" f
 **Emitter asset editing.**
 - It is copy-and-write-back, with a modal warning and recompiles of dependents.
 - Consequence: this is the biggest editor-only path, and it affects other assets.
-- Answer:
-  - Give it its own phase (N5).
+- Handling:
   - Use an isolated raw file that reproduces `UpdateOriginalEmitter` without UI.
   - Apply the dependents rule (§3.2).
-  - For versioned emitters, edit only the exposed version. Refuse when it is the exposed version of a library emitter (`Niagara.ExposedVersionEdit`), unless the user decides otherwise (open question).
+  - For versioned emitters, edit only the exposed version. Refuse when it is the exposed version of a library emitter (`Niagara.ExposedVersionEdit`), unless the document opts in (§8.3).
 
 **Async compile.**
 - Shader and VM jobs run through the compiling manager. Under `GIsAutomationTesting`, the wait loop breaks early after `fx.Niagara.CompileWaitLoggingCap` logs.
 - Consequence: flaky tests and a false "Dirty" status.
-- Answer:
+- Handling:
   - The primitive owns the wait loop: it polls `WaitForCompilationComplete` within a time budget.
   - On timeout it reports `Dirty` plus `Niagara.CompileTimeout` instead of failing.
   - Tests raise the cap.
@@ -575,23 +571,23 @@ A second scenario runs in N4: the AI writes a module script "OrbitAroundPoint" f
 **Compile performance on large systems.**
 - Some NiagaraFluids systems are 10+ MB, and GPU shaders are slow to compile.
 - Consequence: applies can take minutes.
-- Answer:
+- Handling:
   - One compile per apply, with a warm DDC.
   - The stress tier records time only.
   - A `"Compile": false` request option leaves the status Dirty, as Material's deferred compile does.
 
 **On-demand compile on load, and auto-compile in open editors.**
 - Consequence: an open editor or a load can change derived state during Extract.
-- Answer: refuse open editors. Extract never compiles; it only reads the status.
+- Handling: an open editor is closed for the apply and reopened (§5). Extract never compiles; it only reads the status.
 
 **Stateless emitters are engine-internal** (`Niagara/Internal/Stateless`).
 - Consequence: there is no typed API.
-- Answer: use reflection only, on the UPROPERTYs of `UNiagaraStatelessEmitter` and its modules. This is N3, and it may stay read-only if creation needs internal code.
+- Handling: use reflection only, on the UPROPERTYs of `UNiagaraStatelessEmitter` and its modules. Creation goes through `FNiagaraSystemViewModel::AddStatelessEmitter` (§8.2).
 
 **Version-specific APIs.**
 - 5.7 adds versioned emitters, the summary view, hierarchy-based user parameter categories, stateless emitters and `UNiagaraStackEntry::Drop`.
 - Consequence: the code may break on 5.8.
-- Answer:
+- Handling:
   - Keep all Niagara C++ in one module.
   - Gate on `ENGINE_MINOR_VERSION` where signatures differ.
   - The corpus test catches regressions.
@@ -599,97 +595,25 @@ A second scenario runs in N4: the AI writes a module script "OrbitAroundPoint" f
 **Python upgrade scripts.**
 - They run when a module version changes (`SwitchParentEmitterVersion`, `ChangeScriptVersion`).
 - Consequence: arbitrary Python runs inside an apply.
-- Answer: allow it, because it is what the editor does. Record it in the results; the rollback covers it.
+- Handling: allow it, because it is what the editor does. Record it in the results; the rollback covers it.
 
 **Slow-task modal false positive in the non-interactive scope.**
 - Consequence: Niagara compile or add-emitter may show progress and trip the scope.
-- Answer: fix it in the core scope before N2. Niagara never passes `bShowProgress`.
+- Handling: Niagara never passes `bShowProgress`, so the scope's modal guard does not trip.
 
 **Config oddities.**
 - `DefaultEmitter` points to an asset that does not exist.
 - `PackageBlockList` contains `/Niagara/Modules/Update/Color/ScaleColor` (this affects EditorDomain only).
 - Some NiagaraFluids packages still carry `/NiagaraSimulationStages/` names.
 - Consequence: surprising references in Extract.
-- Answer: Extract writes the redirected path, and fidelity ignores redirector differences.
+- Handling: Extract writes the redirected path, and fidelity ignores redirector differences.
 
-### 7.2 Phases (each one mergeable alone)
+## 8. Decisions
 
-**N1: read.**
-- Scope:
-  - the module `AssetDocumentNiagara`, owner `FX`, and `fx.niagara.read.v1`;
-  - the System and Emitter profiles, registered read-only (Apply returns `Niagara.ReadOnlyPhase`);
-  - Extract and Inspect (module inputs, available modules, compile status), and module discovery facts;
-  - the headless view model spike.
-- Acceptance:
-  - Extract every asset in the small, feature and emitter tiers with no `Unknown` diagnostics.
-  - Extract all 203 systems and emitters without a crash, with timings recorded.
-  - Inspect shows the same module inputs as the stack.
-  - The read part of the profile doc `Niagara.md` is written.
-
-**N2: system level.**
-- Scope:
-  - `fx.niagara.edit.v1` and `fx.niagara.compile.v1`;
-  - system `Properties`, `UserParameters` and `Parameters`;
-  - emitters: add (empty, minimal, or `From`), delete, rename, enable, `Parent` remove / version, and emitter `Properties`;
-  - `Renderers`: add, delete, order, Details;
-  - compile, rollback and the rebuilder;
-  - apply with the asset open in its editor (close / apply / reopen).
-- Acceptance:
-  - The small-system tier round-trips with modules untouched (stack body keys omitted).
-  - The emitter, renderer and user parameter free-edit scenarios pass.
-  - A compile failure rolls back.
-  - A new system can be built from scratch with emitters copied from templates.
-
-**N3: stacks.**
-- Scope:
-  - module lists: add, delete, move, enable, version, display name, note;
-  - every input value mode, including nested dynamic inputs and data interfaces;
-  - Set Parameters modules, event handlers and simulation stages;
-  - stateless emitters: read, and create if the reflection path holds.
-- Acceptance:
-  - Full round trip of the small and feature tiers. Scratch-pad modules are excluded and reported as `Niagara.ScratchPadPhase`.
-  - All module and input free-edit scenarios pass.
-  - The AI-from-scratch campfire (6.4) passes.
-
-**N4: scripts and scratch pads.**
-- Scope:
-  - Niagara schema and host adapters for `graph.*`;
-  - `profile.niagara_script.v1` for Module, Function and DynamicInput assets: settings, parameters with metadata, the graph, and versions (read-only at first);
-  - the same graph component for system and emitter `ScratchPads`.
-- Acceptance:
-  - The script tier round-trips, including static switches and custom HLSL.
-  - The stress systems Extract and round-trip within a recorded time budget.
-  - The AI writes "OrbitAroundPoint".
-
-**N5: emitter assets and parameter collections.**
-- Scope:
-  - emitter asset Apply: placeholder system, write-back, dependents rule, `Versions`;
-  - `profile.niagara_parameter_collection.v1`: the parameter list, values through the Niagara value codec, and the material collection link.
-- Acceptance:
-  - The emitter tier round-trips as assets.
-  - The inheritance and dependents scenarios pass.
-  - `NPC_VRTemplate` round-trips, and a system links an `NPC.*` parameter.
-
-Each of N2 to N5 adds its section to `Niagara.md`. Each also adds its corpus results to a matrix document, `asset-document-niagara-matrix.md`, as Material and StateTree have.
-
-### 7.3 Open questions for the user
-
-1. **Parameter collections and script assets.** Should `NiagaraParameterCollection` and the `NiagaraScript` assets (N4/N5) be part of batch 2, or follow later?
-2. **Stateless (lightweight) emitters.** Is reading them enough, or must they also be creatable?
-3. **Exposed versions of library emitters.** May an emitter-asset apply edit the exposed version of a versioned library emitter? This would skip the editor's warning dialog.
-4. **Infrastructure additions.** Do you accept a new owner enum value (`FX`), a new module `AssetDocumentNiagara`, and a `Niagara` plugin dependency in `UEAssetDoc.uplugin`?
-5. **Module move fallback.** If headless `Drop` fails, may module move fall back to an isolated raw path with the result of `MoveModule`?
-6. **Stress-tier gate.** Should the large NiagaraFluids / WaterAdvanced systems be a pass gate, or only timed?
-
-## 8. Decisions (2026-10-06)
-
-User:
-1. NiagaraScript assets (module / function / dynamic input, scratch pads) and NiagaraParameterCollection are in batch 2: N1–N5 all planned.
-2. Stateless (lightweight) emitters: creatable and editable in N3 (`FNiagaraSystemViewModel::AddStatelessEmitter`, reflected `UNiagaraStatelessEmitter` / module objects). If a step can only be done through engine-internal headers, report it with evidence instead of working around it.
+1. NiagaraScript assets (module / function / dynamic input, scratch pads) and NiagaraParameterCollection are in scope (§1).
+2. Stateless (lightweight) emitters are creatable and editable (`FNiagaraSystemViewModel::AddStatelessEmitter`, reflected `UNiagaraStatelessEmitter` / module objects). If a step can only be done through engine-internal headers, report it with evidence instead of working around it.
 3. Exposed versions of library emitters: refused by default (coded diagnostic that names the downstream systems and suggests a new version); allowed only when the document explicitly opts in (the document-level equivalent of the editor's confirmation dialog).
-
-Root:
-4. New owner `FX`, module `AssetDocumentNiagara` and the `Niagara` plugin dependency in `UEAssetDoc.uplugin`: accepted.
+4. New owner `FX`, module `AssetDocumentNiagara` and the `Niagara` plugin dependency in `UEAssetDoc.uplugin`.
 5. Module move: headless `UNiagaraStackEntry::Drop` first; an isolated raw path with the result of `MoveModule` is allowed only with behaviour tests proving the same result as the editor path.
 6. NiagaraFluids / WaterAdvanced stress systems: fidelity is a pass gate; durations are recorded, not gated.
-7. N2 starts only after the slow-task / modal-guard fix is merged.
+7. The non-interactive scope must not trip its slow-task / modal guard on a Niagara compile or add-emitter (see §7).

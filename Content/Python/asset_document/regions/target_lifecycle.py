@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Reusable target lifecycle components for runtime Profile registrations.
 
 A lifecycle names the four Editor primitives that preview and create a new

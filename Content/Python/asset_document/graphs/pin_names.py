@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Pin-name spellings an author may use for a live pin (pure).
 
 A pin is named by its exact name (case-insensitive) first.  These spellings are

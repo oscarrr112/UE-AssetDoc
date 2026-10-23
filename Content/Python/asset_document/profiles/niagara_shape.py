@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Niagara document shapes (docs/architecture/asset-document-niagara-design.md §3), built from the rows of
 ``fx.niagara.read.v1``.  Pure functions: rows in, document Body / Inspect facts out.
 

@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Pure Profile orchestration tests; fake outcomes are not native acceptance evidence."""
 from copy import deepcopy
 from dataclasses import dataclass

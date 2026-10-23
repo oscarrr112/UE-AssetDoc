@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // animation_asset.blend_space.read.v1 / edit.v1: the Blend Space editor (SBlendSpaceEditor sample
 // add / remove / replace, FBlendSpaceDetails axis settings, FBlendSampleDetails sample settings) for

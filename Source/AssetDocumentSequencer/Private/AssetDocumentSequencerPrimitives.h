@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -28,7 +29,7 @@ struct FOptionalMovieSceneBlendType;
 
 // Sequencer primitives (canonical provider "seq", owner Cinematics) of the Level Sequence profile
 // (docs/architecture/asset-document-sequencer-design.md §4.4). Same conventions as the rig and physics providers:
-// one "asset" handle, value DTOs with schema_version 1, errors as Graph.* / Sequencer.* codes. Phase S2: read, status
+// one "asset" handle, value DTOs with schema_version 1, errors as Graph.* / Sequencer.* codes. Read, status
 // and the core authoring edits (seq.edit.v1).
 namespace UE::AssetDocument::Graph::Sequencer
 {
@@ -312,7 +313,7 @@ bool IsSupportedChannelType(FName TypeName);
 
 // A section's parameter sets: every stored array of structs that hold channels (material, MPC, custom primitive data
 // and particle parameter curves, DMX fixture patch channels), except Control Rig sections (read through the channel
-// proxy, S4). Their channels are written in Parameters, not Channels:
+// proxy). Their channels are written in Parameters, not Channels:
 //   "Parameters": [{Type?, Name?, Properties?, Channels?, Parameters?}]
 // Type: the set (the array's name without "ParameterNamesAndCurves" / "ParameterInfosAndCurves": Bool, Scalar,
 // Vector2D, Vector, Color, Transform; the array's name otherwise), omitted where the owner has a single set; Name: the

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Generic-route coverage audit. This is a MEASUREMENT, not a regression test: it enumerates every
 // asset class the editor can create through the generic factory lifecycle (factory_generic.v1) and
@@ -68,9 +69,9 @@ struct FSkipEntry
 	const TCHAR* ClassPath;
 	const TCHAR* Reason;
 };
-// Empty since P4 round 2: every class once listed here (GroomAsset modal factory, LightWeightInstance /
+// Empty: classes whose creation cannot run unattended (GroomAsset modal factory, LightWeightInstance /
 // Skeleton / SlateWidgetStyle factories missing dialog context, SoundEffectSourcePresetChain without audio,
-// MetaSoundSource/Patch scratch clone) is now refused by the provider with a stable diagnostic
+// MetaSoundSource/Patch scratch clone) are refused by the provider with a stable diagnostic
 // (FactoryCreate.InteractiveFactory, FactoryCreate.MissingFactoryContext,
 // PropertyWrite.EditorServiceUnavailable, Scratch.UnsupportedSource). Recheck an entry with
 // ASSETDOC_COVERAGE_IGNORE_SKIPLIST=1 before adding it.

@@ -1,5 +1,8 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Niagara Profiles: document shaping from synthetic fx.niagara.read.v1 rows, paging, Diff and the Apply planners
-(N2 system level, N3 module stacks, N5 emitter assets and parameter collections).  The editor side
+(system level, module stacks, emitter assets and parameter collections).  The editor side
 (headless stack view models, edits against the editor's own paths, extract stability across save / reload /
 duplicate) is covered by UEAssetDoc.Niagara.* in the editor."""
 from __future__ import annotations
@@ -309,7 +312,7 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(seen, [False, True])
 
     def test_verify_reads_every_property(self) -> None:
-        # Gate w27: Verify / Diff read through extract_with_defaults; an authored value equal to its default
+        # Verify / Diff read through extract_with_defaults; an authored value equal to its default
         # (an emitter's bIsInheritable true) must read back present, not be left out as diff_only does.
         seen = []
         niagara.system_properties = lambda: _Recording(seen)

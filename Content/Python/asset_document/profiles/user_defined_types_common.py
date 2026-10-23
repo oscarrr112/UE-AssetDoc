@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared pieces of the UserDefinedStruct / UserDefinedEnum Profiles.
 
 Transport over ``data.user_struct.*`` / ``data.user_enum.*`` (provider "data", AssetDocumentData),

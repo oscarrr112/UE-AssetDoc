@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentModule.h"
 #include "AssetDocumentService.h"
@@ -81,14 +82,14 @@ void ReportFailure(
 	if (Result.Diagnostics.IsEmpty())
 	{
 		Test.AddInfo(FString::Printf(
-			TEXT("%s RED result: %s [<none>] <none>"),
+			TEXT("%s result: %s [<none>] <none>"),
 			Stage,
 			*Result.Message));
 	}
 	for (const FAssetDocumentDiagnostic& Diagnostic : Result.Diagnostics)
 	{
 		Test.AddInfo(FString::Printf(
-			TEXT("%s RED result: %s [%s] %s"),
+			TEXT("%s result: %s [%s] %s"),
 			Stage,
 			*Result.Message,
 			*Diagnostic.Code,

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // rig.controlrig.compile.v1 and the Control Rig rollback rebuilder (docs/architecture/asset-document-controlrig-design.md
 // §5.1, §5.3). Compile is the editor's Compile button: auto VM recompile back on, the editor graphs of a rig made

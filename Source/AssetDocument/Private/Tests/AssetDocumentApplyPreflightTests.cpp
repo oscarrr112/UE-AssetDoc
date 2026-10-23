@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentModule.h"
 #include "AssetDocumentService.h"
@@ -74,7 +75,7 @@ const FBlueprintCreationCase BlueprintCreationCases[] = {
 FString MakeUniqueTarget(const TCHAR* AssetStem)
 {
 	return FString::Printf(
-		TEXT("/Game/AssetDocumentTests/Task7b1/%s_%s"),
+		TEXT("/Game/AssetDocumentTests/ApplyPreflight/%s_%s"),
 		AssetStem,
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 }
@@ -675,7 +676,7 @@ bool RunDiskExistingCreateCase(FAutomationTestBase& Test)
 	const FString Target = MakeUniqueTarget(TEXT("DiskExisting"));
 	const FString ObjectPath = ToObjectPath(Target);
 	const FString PackageFileName = ToPackageFileName(Target);
-	const FString SentinelContents(TEXT("Task7b1 disk-existing sentinel"));
+	const FString SentinelContents(TEXT("disk-existing sentinel"));
 	CleanupAsset(Target);
 	FScopedCanonicalSidecarFixture SidecarFixture(Target);
 

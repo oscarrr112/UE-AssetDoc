@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Control Rig phase CR4 (docs/architecture/asset-document-controlrig-design.md §7.2: modular rigs).
+// Control Rig modular rigs (docs/architecture/asset-document-controlrig-design.md §7.2: modular rigs).
 // UEAssetDoc.ControlRig.ModularFidelity: §6.2 on CR_Modular_Biped and CR_Modular_Car (built with the
 //   editor's calls: the factory with ModularRig, AddModule, the primary connector connected with auto-resolve as a
 //   drop does, a config override, a variable binding): Create from the extract; equal document, module model,

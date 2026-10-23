@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // StateTree property bindings: what the binding menu of a property offers and writes. A source is
 // accepted only when the editor would list it for the target (UStateTreeEditorData::GetBindableStructs,

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Raw construction kept in its own file: AssetTools creates its New/Import
 // factories with NewObject<UFactory>(GetTransientPackage(), FactoryClass) so a

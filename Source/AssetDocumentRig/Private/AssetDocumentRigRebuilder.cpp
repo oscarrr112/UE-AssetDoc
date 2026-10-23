@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Rollback of IK Rigs and IK Retargeters (design §5.3). The Core package snapshot restores the authored state
 // (the asset, its goal subobjects) and runs PostEditUndo; what remains is what the editors do after an Undo: the

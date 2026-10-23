@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.Sequencer.Read: a Level Sequence built with the editor's calls (spawnable camera with a
 //   component binding, level possessable, folder, every key interpolation, a sub-frame key, a dense channel, camera

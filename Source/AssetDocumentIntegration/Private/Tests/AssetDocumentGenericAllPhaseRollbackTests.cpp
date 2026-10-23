@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentGenericRuntimeRoute.h"
 #include "AssetDocumentTestDirectoryBlock.h"
@@ -39,20 +40,20 @@ namespace
 {
 constexpr uint64 TestRuntimeRevision = 1;
 
-struct FT6FileTreeSnapshot
+struct FRollbackFileTreeSnapshot
 {
 	TArray<FString> Paths;
 	TArray<TArray<uint8>> Contents;
 
-	bool operator==(const FT6FileTreeSnapshot& Other) const
+	bool operator==(const FRollbackFileTreeSnapshot& Other) const
 	{
 		return Paths == Other.Paths && Contents == Other.Contents;
 	}
 };
 
-FT6FileTreeSnapshot SnapshotT6Files(const FString& Root)
+FRollbackFileTreeSnapshot SnapshotRollbackFiles(const FString& Root)
 {
-	FT6FileTreeSnapshot Snapshot;
+	FRollbackFileTreeSnapshot Snapshot;
 	if (IFileManager::Get().FileExists(*Root))
 	{
 		Snapshot.Paths.Add(Root);
@@ -96,7 +97,7 @@ FAssetDocumentRuntimeResultDto MakeInjectedPhaseFailure(
 
 // Test-owned value producer after the actual Python scratch preflight succeeds.
 // It carries the exact TestString intent already validated by that preflight.
-FAssetDocumentRuntimeValueDto MakeT6MutationProjection(
+FAssetDocumentRuntimeValueDto MakeRollbackMutationProjection(
  const FAssetDocumentRuntimeRequestDto& Request, const FString& Hash, bool bOmitTerminalStep)
 {
  using FValue = FAssetDocumentRuntimeValueDto;
@@ -165,7 +166,7 @@ public:
     Result.SemanticHash = ValidatedSemanticHash;
     Result.CanonicalBytes = ValidatedCanonicalBytes;
     Result.CodecVersion = ValidatedCodecVersion;
-    Result.CanonicalValue = MakeT6MutationProjection(Request, ValidatedSemanticHash, bOmitTerminalStep);
+    Result.CanonicalValue = MakeRollbackMutationProjection(Request, ValidatedSemanticHash, bOmitTerminalStep);
     if (bMalformedProjection)
     {
      FAssetDocumentRuntimeValueDto EmptyObject;
@@ -177,7 +178,7 @@ public:
    {
     UObject* Target = FSoftObjectPath(Request.TargetAssetPath).ResolveObject();
     FStrProperty* Property = Target ? FindFProperty<FStrProperty>(Target->GetClass(), TEXT("TestString")) : nullptr;
-    bObservedChangedProperty = Property && Property->GetPropertyValue_InContainer(Target) == TEXT("T6 mutation desired");
+    bObservedChangedProperty = Property && Property->GetPropertyValue_InContainer(Target) == TEXT("rollback mutation desired");
     ObservedApplyChangedSet = Result.ChangedSet;
    }
    if (Phase == EAssetDocumentRuntimeRequestPhase::Repair && bOmitTerminalStep)
@@ -317,10 +318,10 @@ private:
 	TArray<FAssetDocumentHandleInvalidation> Invalidations;
 };
 
-class FT6FrozenRegistryView final : public IAssetDocumentPrimitiveRegistry
+class FRollbackFrozenRegistryView final : public IAssetDocumentPrimitiveRegistry
 {
 public:
-	explicit FT6FrozenRegistryView(
+	explicit FRollbackFrozenRegistryView(
 		const IAssetDocumentPrimitiveRegistry& InRegistry)
 		: Registry(InRegistry)
 	{
@@ -341,7 +342,7 @@ private:
 	const IAssetDocumentPrimitiveRegistry& Registry;
 };
 
-class FT6NoCancellation final : public IAssetDocumentCancellationView
+class FRollbackNoCancellation final : public IAssetDocumentCancellationView
 {
 public:
 	bool IsCancellationRequested() const override
@@ -369,10 +370,10 @@ public:
 	TArray<EAssetDocumentRuntimeRequestPhase> Phases;
 };
 
-class FT6StagingRootBlocker final
+class FRollbackStagingRootBlocker final
 {
 public:
-	~FT6StagingRootBlocker()
+	~FRollbackStagingRootBlocker()
 	{
 		Restore();
 	}
@@ -447,7 +448,7 @@ private:
 	bool bBlocked = false;
 };
 
-FAssetDocumentPythonRuntimeConfiguration MakeT6RuntimeConfiguration()
+FAssetDocumentPythonRuntimeConfiguration MakeRollbackRuntimeConfiguration()
 {
 	FAssetDocumentPythonRuntimeConfiguration Configuration;
 	Configuration.RepositoryRoot =
@@ -456,7 +457,7 @@ FAssetDocumentPythonRuntimeConfiguration MakeT6RuntimeConfiguration()
 	return Configuration;
 }
 
-FAssetDocumentPythonRevisionCandidate MakeT6RevisionCandidate(
+FAssetDocumentPythonRevisionCandidate MakeRollbackRevisionCandidate(
  const FAssetDocumentRequiredPrimitiveProjection& Projection)
 {
  FAssetDocumentPythonRevisionCandidate Candidate;
@@ -464,7 +465,7 @@ FAssetDocumentPythonRevisionCandidate MakeT6RevisionCandidate(
  Candidate.EntryModuleRelativePath = TEXT("asset_document/bootstrap.py");
  Candidate.RequiredPrimitives = Projection.Requirements;
  Candidate.Providers = Projection.Providers;
- Candidate.AuthorityCatalog.Append(GetG1FrozenAuthorityExceptionRecords());
+ Candidate.AuthorityCatalog.Append(GetFrozenAuthorityExceptionRecords());
  return Candidate;
 }
 
@@ -472,7 +473,7 @@ class FNormalRouteHarness final
 {
 public:
 	FNormalRouteHarness()
-		: Runtime(MakeT6RuntimeConfiguration())
+		: Runtime(MakeRollbackRuntimeConfiguration())
 	{
 	}
 
@@ -503,7 +504,7 @@ public:
 			Runtime.InitializePythonBinding();
 		bBindingInitialized = Binding.bValid;
 		if (!Test.TestTrue(
-			TEXT("T6 runtime binding initializes"),
+			TEXT("runtime binding initializes"),
 			Binding.bValid))
 		{
 			return false;
@@ -531,15 +532,15 @@ public:
   // Editor + AI only: the generic route and Blackboard rows of the declared set.
   auto Requirements = GetAssetDocumentLegacyGenericRequirementsForTests();
   const auto Projected = BuildAssetDocumentRequiredPrimitiveProjection(RawProviders,
-   Requirements, GetG1FrozenAuthorityExceptionRecords(), Bindings, MoveTemp(PreparedInvoke));
+   Requirements, GetFrozenAuthorityExceptionRecords(), Bindings, MoveTemp(PreparedInvoke));
   for (const auto& Diagnostic : Projected.Diagnostics)
    Test.AddInfo(Diagnostic.Code + TEXT(": ") + Diagnostic.Message);
-  if (!Test.TestTrue(TEXT("T6 exact selected provider projection freezes"), Projected.Projection.IsValid())) return false;
+  if (!Test.TestTrue(TEXT("exact selected provider projection freezes"), Projected.Projection.IsValid())) return false;
   PreparationProjection = Projected.Projection;
   const FAssetDocumentPythonRevisionActivationResult Activation =
-   Runtime.TryActivateRevision(MakeT6RevisionCandidate(*PreparationProjection));
+   Runtime.TryActivateRevision(MakeRollbackRevisionCandidate(*PreparationProjection));
 		if (!Test.TestTrue(
-			TEXT("T6 production generic revision activates"),
+			TEXT("production generic revision activates"),
 			Activation.bActivated))
 		{
 			return false;
@@ -547,12 +548,12 @@ public:
 		const IAssetDocumentPrimitiveRegistry* ActiveRegistry =
 			Runtime.GetActivePrimitiveRegistry();
 		if (!Test.TestNotNull(
-			TEXT("T6 active primitive registry exists"),
+			TEXT("active primitive registry exists"),
 			ActiveRegistry))
 		{
 			return false;
 		}
-		Registry = MakeUnique<FT6FrozenRegistryView>(*ActiveRegistry);
+		Registry = MakeUnique<FRollbackFrozenRegistryView>(*ActiveRegistry);
   if (bPreparationMode) Route->BindMutationPreparationProjection(PreparationProjection);
 		FAssetDocumentCoreRuntimeDependencies Dependencies{
 			*Route,
@@ -586,7 +587,7 @@ public:
 			MakeUnique<FAssetDocumentCoreRuntimeComposition>(
 				MoveTemp(Dependencies));
 		if (!Test.TestTrue(
-			TEXT("T6 Core composition is valid"),
+			TEXT("Core composition is valid"),
 			Composition->IsValid()))
 		{
 			return false;
@@ -613,9 +614,9 @@ private:
 	TArray<TSharedPtr<IAssetDocumentPrimitiveProvider>> Providers;
  TSharedPtr<const FAssetDocumentRequiredPrimitiveProjection> PreparationProjection;
 	TSharedPtr<FAssetDocumentGenericRuntimeRoute> Route;
-	TUniquePtr<FT6FrozenRegistryView> Registry;
+	TUniquePtr<FRollbackFrozenRegistryView> Registry;
 	TUniquePtr<FAssetDocumentCoreRuntimeComposition> Composition;
-	FT6NoCancellation Cancellation;
+	FRollbackNoCancellation Cancellation;
 	FPhaseObserver Observer;
 	bool bBindingInitialized = false;
 };
@@ -783,7 +784,7 @@ void RunNormalRouteFailureRow(
 	{
 		return;
 	}
-	const FString TestStringBaseline = TEXT("T6 rollback baseline");
+	const FString TestStringBaseline = TEXT("rollback baseline");
 	TestStringProperty->SetPropertyValue_InContainer(
 		FixtureAsset,
 		TestStringBaseline);
@@ -809,24 +810,24 @@ void RunNormalRouteFailureRow(
 		TEXT("{\"SchemaVersion\":1,\"AssetType\":\"GenericAsset\",\"Target\":\"%s\",\"Class\":\"%s\",\"Action\":\"Update\",\"Properties\":{\"TestString\":\"%s\"}}"),
 		*Target,
 		*FixtureClassPath,
-		*(Row.bMutationProjection ? FString(TEXT("T6 mutation desired")) : TestStringBaseline));
+		*(Row.bMutationProjection ? FString(TEXT("rollback mutation desired")) : TestStringBaseline));
 	if (!Test.TestTrue(
 		*FString::Printf(TEXT("%s writes input sidecar"), Row.Name),
 		FFileHelper::SaveStringToFile(SidecarJson, *SidecarPath)))
 	{
 		return;
 	}
-	const FT6FileTreeSnapshot SidecarBefore = SnapshotT6Files(SidecarPath);
-	const FT6FileTreeSnapshot RuntimeBefore = SnapshotT6Files(RuntimeRoot);
+	const FRollbackFileTreeSnapshot SidecarBefore = SnapshotRollbackFiles(SidecarPath);
+	const FRollbackFileTreeSnapshot RuntimeBefore = SnapshotRollbackFiles(RuntimeRoot);
 
 	Harness.Reset(Row.FailPhase);
  Harness.Runtime.Host.bMutationProjection = Row.bMutationProjection;
  Harness.Runtime.Host.bOmitTerminalStep = Row.bOmitTerminalStep;
  Harness.Runtime.Host.bMalformedProjection = Row.bMalformedProjection;
-	TUniquePtr<FT6StagingRootBlocker> StagingBlocker;
+	TUniquePtr<FRollbackStagingRootBlocker> StagingBlocker;
 	if (Row.bFailStaging)
 	{
-		StagingBlocker = MakeUnique<FT6StagingRootBlocker>();
+		StagingBlocker = MakeUnique<FRollbackStagingRootBlocker>();
 		if (!Test.TestTrue(
 			TEXT("Stage blocks the production staging root"),
 			StagingBlocker->Block()))
@@ -912,10 +913,10 @@ void RunNormalRouteFailureRow(
 		Package->IsDirty() == bPackageWasDirty);
 	Test.TestTrue(
 		*FString::Printf(TEXT("%s restores input sidecar bytes"), Row.Name),
-		SidecarBefore == SnapshotT6Files(SidecarPath));
+		SidecarBefore == SnapshotRollbackFiles(SidecarPath));
 	Test.TestTrue(
 		*FString::Printf(TEXT("%s leaves no runtime file residue"), Row.Name),
-		RuntimeBefore == SnapshotT6Files(RuntimeRoot));
+		RuntimeBefore == SnapshotRollbackFiles(RuntimeRoot));
 }
 } // namespace
 

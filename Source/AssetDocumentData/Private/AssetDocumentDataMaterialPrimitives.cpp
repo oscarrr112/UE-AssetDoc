@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // data.material.read.v1 / data.material.edit.v1 / data.material.compile.v1: the expression graph of a
 // UMaterial or UMaterialFunction (incl. Material Layer / Layer Blend functions), edited as the Material

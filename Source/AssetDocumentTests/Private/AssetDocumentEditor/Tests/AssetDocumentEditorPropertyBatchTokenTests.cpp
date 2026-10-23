@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentEditorPrimitiveProvider.h"
 
@@ -529,12 +530,12 @@ bool FAssetDocumentGenericProviderPropertyBatchTokenTest::RunTest(
 	const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(
 		MakeInvocation(*Descriptor, Context, AssetHandle.GetValue()), Handles, nullptr);
 
-	// RED anchor: every later assertion below is the frozen success contract.
+	// Every later assertion below is the frozen success contract.
 	if (!TestEqual(TEXT("real asset returns successful immutable batch snapshot"),
 		Outcome.Status, EAssetDocumentPrimitiveOutcomeStatus::Succeeded))
 	{
-		AddInfo(TEXT("expected RED diagnostic: PropertyBatchToken.NotImplemented"));
-		TestTrue(TEXT("RED scaffold reports the required missing behavior"),
+		AddInfo(TEXT("unimplemented batch diagnostic: PropertyBatchToken.NotImplemented"));
+		TestTrue(TEXT("unimplemented batch reports the required missing behavior"),
 			HasDiagnostic(Outcome, TEXT("PropertyBatchToken.NotImplemented")));
 		TestNoPublication(*this, Outcome, TEXT("NotImplemented batch scaffold"));
 		return false;

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Provider/Sequence/AssetDocumentAnimationSequenceCompression.h"
 #include "Provider/Sequence/AssetDocumentAnimationSequenceCompressionDefaultInputs.h"
@@ -195,7 +196,7 @@ bool FAssetDocumentSequenceCompressionContractTest::RunTest(const FString&)
   int32 Count = 0; for (const auto& R : Decisions) if (R.PrimitiveId == Blocked && R.Version == 1)
   { ++Count; TestEqual(TEXT("predecessor blocker remains stable"), R.Disposition, EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker);
     TestEqual(TEXT("predecessor blocker diagnostic is unchanged"), R.StableBlockerDiagnostic,
-     FString(FString(Blocked).Contains(TEXT("retarget_source_asset")) ? TEXT("AD.PANIM.BLOCK.RETARGET_SOURCE_AUTHORITY") : TEXT("AD.PANIM.BLOCK.SEQUENCE_COMPLETION_AUTHORITY"))); }
+     FString(FString(Blocked).Contains(TEXT("retarget_source_asset")) ? TEXT("AD.ANIMATION.BLOCK.RETARGET_SOURCE_AUTHORITY") : TEXT("AD.ANIMATION.BLOCK.SEQUENCE_COMPLETION_AUTHORITY"))); }
   TestEqual(TEXT("one predecessor blocker"), Count, 1);
   for (const auto& R : Descriptors) TestFalse(TEXT("no predecessor descriptor widening"), R.PrimitiveId == Blocked && R.Version == 1);
   for (const auto& R : Bindings) TestFalse(TEXT("no predecessor binding widening"), R.PrimitiveId == Blocked && R.Version == 1);

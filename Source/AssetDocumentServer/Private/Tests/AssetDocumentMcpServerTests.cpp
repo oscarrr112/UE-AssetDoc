@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.HttpServer.Mcp.Server: a second HTTP server of this editor, over real HTTP requests.
 //   Its port is taken, so after the bind retries it falls back to the next free port and says so. With Require Auth
@@ -12,6 +13,7 @@
 #include "AssetDocumentMcpJson.h"
 #include "AssetDocumentServerModule.h"
 #include "AssetDocumentSettings.h"
+#include "AssetDocumentUserOnlyFileTestSupport.h"
 #include "Dom/JsonObject.h"
 #include "HAL/PlatformProcess.h"
 #include "HttpModule.h"
@@ -24,10 +26,6 @@
 #include "SocketSubsystem.h"
 #include "Sockets.h"
 #include "Tests/AutomationCommon.h"
-
-#if PLATFORM_MAC || PLATFORM_LINUX
-#include <sys/stat.h>
-#endif
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -177,12 +175,10 @@ bool FAssetDocumentMcpServerTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("discovery: the process"), static_cast<uint32>(Info->GetNumberField(TEXT("pid"))), FPlatformProcess::GetCurrentProcessId());
 			TestEqual(TEXT("discovery: the token only when one is required"), Info->HasField(TEXT("authToken")), !EditorServer->GetAuthToken().IsEmpty());
 		}
-#if PLATFORM_MAC || PLATFORM_LINUX
-		struct stat Status;
-		if (TestEqual(TEXT("the discovery file can be examined"), stat(TCHAR_TO_UTF8(*DiscoveryPath), &Status), 0))
-		{
-			TestEqual(TEXT("the discovery file is readable by its user only"), static_cast<int32>(Status.st_mode & 077), 0);
-		}
+#if PLATFORM_MAC || PLATFORM_LINUX || PLATFORM_WINDOWS
+		FString Why;
+		TestTrue(TEXT("the discovery file is readable by its user only"), AssetDocumentUserOnlyFileTests::IsReadableByCurrentUserOnly(DiscoveryPath, Why));
+		AddInfo(FString::Printf(TEXT("discovery file access: %s"), Why.IsEmpty() ? TEXT("user only") : *Why));
 #endif
 	}
 	else

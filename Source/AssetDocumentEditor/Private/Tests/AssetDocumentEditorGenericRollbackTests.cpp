@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Production-Service rollback regressions for the generic route found by the
 // coverage audit (PaperSprite, Paper2D):

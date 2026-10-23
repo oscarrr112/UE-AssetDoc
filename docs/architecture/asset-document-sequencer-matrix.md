@@ -1,19 +1,19 @@
-# Sequencer support matrix and corpus results (S3 remaining tracks, S4 Template Sequences, S5 Director, events, groups)
+# Sequencer support matrix and corpus results
 
-Status: 2026-10-09. Design:
-[asset-document-sequencer-design.md](asset-document-sequencer-design.md) (decisions in §8, S1 notes in §8.1, S2 notes in
-§8.2, S3 notes in §8.3, S4 notes in §8.4, S5 notes in §8.5). Rules: [design rules](asset-document-design-rules.md) §4 (editor-equivalent code + behaviour
+Design:
+[asset-document-sequencer-design.md](asset-document-sequencer-design.md) (decisions in §8, implementation notes in
+§8.1–§8.5). Rules: [design rules](asset-document-design-rules.md) §4 (editor-equivalent code + behaviour
 test), §5 (support matrix). Reference editor: Sequencer (`Engine/Source/Editor/Sequencer`, track editors in
 `MovieSceneTools`). The agent-facing description is `MCP/schemas/assetdocument/Sequencer.md`.
 
-| Class | Profile | Phase | State |
-|---|---|---|---|
-| `LevelSequence` | `profile.level_sequence.v1` (`seq_profile`, provider `seq`, owner `Cinematics` = 12) | S5 | Extract / Inspect / Diff / Create / Update: settings, bindings, tracks (every track kind of §7.2 S1–S3, plugin tracks by reflection), sections, channels, parameter sections, conditions, time warps, folders, markers, metadata, sequence Details, the Director Blueprint, event keys, director bindings, section / node groups, binding references into sub / shot sequences |
-| `TemplateSequence` | `profile.template_sequence.v1` (`seq_profile`, provider `seq`) | S4 | Extract / Inspect / Diff / Create / Update: `Settings`, `Root` (root spawnable: bound actor class, template, spawnable Details, tracks, component bindings), `Tracks`, `Folders`, `Markers`, `Groups` (S5); change bound class. Create needs `Root.Class` (the factory's class picker) |
-| `CameraAnimationSequence` | `profile.camera_animation_sequence.v1` (`seq_profile`, provider `seq`) | S4 | as `TemplateSequence`; created with a Cine Camera Actor root (its factory); camera actor classes only (`Sequencer.CameraClassRequired`) |
+| Class | Profile | State |
+|---|---|---|
+| `LevelSequence` | `profile.level_sequence.v1` (`seq_profile`, provider `seq`, owner `Cinematics` = 12) | Extract / Inspect / Diff / Create / Update: settings, bindings, tracks (every track kind of §3.5.1, plugin tracks by reflection), sections, channels, parameter sections, conditions, time warps, folders, markers, metadata, sequence Details, the Director Blueprint, event keys, director bindings, section / node groups, binding references into sub / shot sequences |
+| `TemplateSequence` | `profile.template_sequence.v1` (`seq_profile`, provider `seq`) | Extract / Inspect / Diff / Create / Update: `Settings`, `Root` (root spawnable: bound actor class, template, spawnable Details, tracks, component bindings), `Tracks`, `Folders`, `Markers`, `Groups`; change bound class. Create needs `Root.Class` (the factory's class picker) |
+| `CameraAnimationSequence` | `profile.camera_animation_sequence.v1` (`seq_profile`, provider `seq`) | as `TemplateSequence`; created with a Cine Camera Actor root (its factory); camera actor classes only (`Sequencer.CameraClassRequired`) |
 
 Classification: **Authored** (extracted exactly and written through the editor's mechanism), **Read** (extracted,
-authoring in the phase named), **Kept** (listed as found, preserved untouched on update), **Later** (phase named).
+not authored by this profile), **Kept** (listed as found, preserved untouched on update), **Warn** (apply warning).
 
 ## Editor surfaces
 
@@ -27,31 +27,31 @@ authoring in the phase named), **Kept** (listed as found, preserved untouched on
 | Conversion possessable ↔ spawnable | binding kind change | Authored | the binding's GUID, tracks and children kept (`binding.set`) |
 | Binding tags | `Tags` | Authored | `FMovieScenePossessable::Tags` (`binding.set`) |
 | Mixed locator + custom binding on one binding | raw `References` | Kept (`Sequencer.UnsupportedBindingShape`) | — |
-| Tracks: property tracks of every type, transform, spawn, visibility, attach, path, actor reference, skeletal animation, material, camera shake, event, audio, camera cut, shot, subsequence, fade, slomo, level visibility, data layer, CVar, MPC, time warp | `Tracks[]` (global / per binding) | Authored (common kinds of §7.2; others by class path) | `AddTrack` / `RemoveTrack`, property binding (`SetPropertyNameAndPath`), track Details, rows, mute, order (`track.add / remove / set / order`) |
+| Tracks: property tracks of every type, transform, spawn, visibility, attach, path, actor reference, skeletal animation, material, camera shake, event, audio, camera cut, shot, subsequence, fade, slomo, level visibility, data layer, CVar, MPC, time warp | `Tracks[]` (global / per binding) | Authored (common kinds of §3.5.1; others by class path) | `AddTrack` / `RemoveTrack`, property binding (`SetPropertyNameAndPath`), track Details, rows, mute, order (`track.add / remove / set / order`) |
 | Sections: range, row, priority, active / locked, blend, easing, pre / post roll, when finished, section Details (camera cut binding, sub-sequence + parameters) | `Sections[]` | Authored | `CreateNewSection` / `AddSection` / `RemoveSection`, `UMovieSceneSection` setters, section Details; cycle check before sub-section writes (`section.add / set / remove`) |
 | Channels: float / double curves (every interpolation, user / break tangents, weights, stated tangents, infinity), bool, byte, enum, integer, string, text, object path, camera shake trigger | `Channels.<name>` | Authored | channel data `Set` in time order, `AutoSetTangents` (stated tangents kept), `SetDefault`, extrapolation; > 64 keys in columns, chunks via `channel.append` that name the earlier keys whose stated tangents are kept (`stated` runs) |
-| Event keys: endpoint picker, "Create Quick Binding" / "Create Event Endpoint", bound object pin, payload; trigger and repeater sections | `Channels.Value.Keys[].Event`, repeater `Event` `{Endpoint, BoundObjectPin?, Payload?}`; section `Class` `Trigger` / `Repeater` | Authored (S5) | `FMovieSceneEventUtils::SetEndpoint` to the Director node found by name, payload variables by pin (`section.add / set`, channel writes); a missing endpoint is `Sequencer.UnknownEventEndpoint` |
+| Event keys: endpoint picker, "Create Quick Binding" / "Create Event Endpoint", bound object pin, payload; trigger and repeater sections | `Channels.Value.Keys[].Event`, repeater `Event` `{Endpoint, BoundObjectPin?, Payload?}`; section `Class` `Trigger` / `Repeater` | Authored | `FMovieSceneEventUtils::SetEndpoint` to the Director node found by name, payload variables by pin (`section.add / set`, channel writes); a missing endpoint is `Sequencer.UnknownEventEndpoint` |
 | Parameter sections: material, MPC, component / primitive material, custom primitive data, particle parameters, Niagara parameters, DMX fixture patches (any stored array of channel-holding structs) | section `Parameters[]` `{Type?, Name?, Properties?, Channels?, Parameters?}` | Authored | the "+ Parameter" menus: parameter arrays rebuilt from the list, then the channel proxy (`PostEditImport`, as a paste); custom primitive data names checked against the proxy's index rule; lists over one op continue with `parameters.append`; channel chunks address an entry by index path |
 | Time warp (track and sub / shot `TimeWarp` variants) | section `Properties.TimeWarp`: number (play rate), `{FixedFrame}`, `{FrameRate}`, `{Loop}`, `{Clamp}`, `{LoopFloat}`, `{ClampFloat}`, `{Custom: {Class, Properties}}` | Authored | `FMovieSceneTimeWarpVariant` setters; a custom getter is a new instanced object (class edited in place when unchanged), then the proxy rebuilt |
 | Conditions (track, section, track row; group / platform / scalability / plugin classes) | `Properties.ConditionContainer.Condition`, track `RowConditions {"<row>": condition}` | Authored | the Details condition picker: instanced `{Class, Properties}` objects (nested groups), row metadata by reflection |
 | Plugin channel types without reflected key arrays | `{"Unsupported": "<type>"}` | Kept (`Sequencer.UnsupportedChannel`) | — |
 | Channel overrides (procedural channels) | section `"Unsupported": "ChannelOverrides"` | Kept (`Sequencer.UnsupportedChannelOverride`) | registry untouched when the section is rewritten (`Apply.Preserved`) |
-| Section groups (section context menu Group / Ungroup) | section `Group` (number shared by a group's sections) | Authored (S5) | ungroup all, then `UMovieScene::GroupSections` per group (`section_groups.set`); compared as a partition |
-| Node groups (Group Manager: new group, add / remove selected, rename, delete) | `Groups[{Name, Members}]`, members `{Folder}` / `{Binding}` / `{Track, Node?}` / `{Raw}` | Authored (S5) | `UMovieSceneNodeGroupCollection` / `UMovieSceneNodeGroup` edited in place by position (`groups.set`); a `Raw` path stays unresolved (a new track that would match it is named otherwise) |
-| Binding reference into a sub / shot sequence (camera cut into a shot, the binding picker's sub-sequence entries) | `{"Binding": <path in that sequence>, "Sequence": <section path> \| [paths]}` | Authored (S5) | the picker's sequence ID stack (`FSequenceBindingTree`), depth ≤ 4; tracks holding such references written last; IDs no section reaches stay raw (`Sequencer.UnsupportedRemoteBinding`, kept) |
+| Section groups (section context menu Group / Ungroup) | section `Group` (number shared by a group's sections) | Authored | ungroup all, then `UMovieScene::GroupSections` per group (`section_groups.set`); compared as a partition |
+| Node groups (Group Manager: new group, add / remove selected, rename, delete) | `Groups[{Name, Members}]`, members `{Folder}` / `{Binding}` / `{Track, Node?}` / `{Raw}` | Authored | `UMovieSceneNodeGroupCollection` / `UMovieSceneNodeGroup` edited in place by position (`groups.set`); a `Raw` path stays unresolved (a new track that would match it is named otherwise) |
+| Binding reference into a sub / shot sequence (camera cut into a shot, the binding picker's sub-sequence entries) | `{"Binding": <path in that sequence>, "Sequence": <section path> \| [paths]}` | Authored | the picker's sequence ID stack (`FSequenceBindingTree`), depth ≤ 4; tracks holding such references written last; IDs no section reaches stay raw (`Sequencer.UnsupportedRemoteBinding`, kept) |
 | Control Rig sections | generic channels | Read (`Sequencer.ControlRigTrack`) | Control Rig profile owns authoring |
 | Folders (name, colour, nesting, contents) | `Folders[]`, binding / track `Folder` | Authored | `UMovieSceneFolder` tree rebuilt as a whole (`folders.set`) |
 | Marked frames (label, colour, comment, determinism fence) | `Markers[]` | Authored | `UMovieScene::MarkedFrames` written as listed (`AddMarkedFrame` would invent labels) (`markers.set`) |
 | Sequence metadata (author, notes) | `MetaData` | Authored | `ULevelSequenceMetaData` (`metadata.set`) |
-| Director Blueprint ("Open Director Blueprint", then the Blueprint editor: variables, functions, custom events, macros, dispatchers, interfaces, class defaults) | `Director` (Blueprint profile keys) | Authored (S5) | hosted Blueprint: `blueprint.member.*` and the K2 graph executor on the sequence's handle; `director.create` (`GetOrCreateDirectorBlueprint`) / `director.remove` (refused while called: `Sequencer.DirectorInUse`); compiled after the apply (errors roll back) |
-| Director bindings ("Replaceable from Director Blueprint" and other dynamic bindings) | `CustomBinding.Properties.DynamicBinding` `{Endpoint, ResolveParamsPin?, Payload?}` | Authored (S5) | `FMovieSceneDynamicBindingUtils::SetEndpoint` (`binding.set`) |
+| Director Blueprint ("Open Director Blueprint", then the Blueprint editor: variables, functions, custom events, macros, dispatchers, interfaces, class defaults) | `Director` (Blueprint profile keys) | Authored | hosted Blueprint: `blueprint.member.*` and the K2 graph executor on the sequence's handle; `director.create` (`GetOrCreateDirectorBlueprint`) / `director.remove` (refused while called: `Sequencer.DirectorInUse`); compiled after the apply (errors roll back) |
+| Director bindings ("Replaceable from Director Blueprint" and other dynamic bindings) | `CustomBinding.Properties.DynamicBinding` `{Endpoint, ResolveParamsPin?, Payload?}` | Authored | `FMovieSceneDynamicBindingUtils::SetEndpoint` (`binding.set`) |
 | Other sequence Details | `Properties` | Authored | generic Details write |
 | Sequence Validator rules + profile checks | Inspect `Status` | Read | `seq.status.v1` before / after: new errors fail the apply (`Sequencer.ValidationFailed`) |
 | Dependents (parent sequences, Blueprints, level sequence actors) of deleted / renamed bindings | apply warnings | Warn | `Sequencer.DependentsAffected` (asset registry referencers; a parent sequence and a Blueprint "Get Sequence Binding" node tested) |
-| Sequence or a parent open in the Sequencer | — | Supported (S6): in place, the open Sequencers refresh | test `Sequencer.OpenEditorApply` |
+| Sequence or a parent open in the Sequencer | — | Supported: in place, the open Sequencers refresh | test `Sequencer.OpenEditorApply` |
 | Undo | — | Core rule | the edit is one transaction; Core clears undo history that references the package |
 
-## Template Sequences (S4)
+## Template Sequences
 
 | Editor surface | Document | State | Mechanism |
 |---|---|---|---|
@@ -63,11 +63,12 @@ authoring in the phase named), **Kept** (listed as found, preserved untouched on
 | Status | `Sequencer.RootClassInvalid` (error at `/Body/Root/Class`), no root / root-template class mismatch, component not found on the root (`UnassignedBindingsAndAssets`) | Authored | `seq.status.v1` |
 | Thumbnail | — | not authored | asset thumbnail |
 
+## Corpus results
 
-PC (Windows, Development editor, 2026-10-08, `Sequencer.Apply.CorpusRoundTrip`). For each asset: extract, Create a new
+PC (Windows, Development editor, `Sequencer.Apply.CorpusRoundTrip`). For each asset: extract, Create a new
 sequence from the document, extract equal (`MetaData.Author` left out, §6.2 (4)), every curve evaluates equal at
 keys, midpoints and ±1 tick (§6.2 (3)), status equal, the unchanged document re-applies as a no-op, equal after unload +
-reload. 20 of 20 in 10.0 s (S2: 18 of 18, #12 skipped; S5 run 2026-10-09: 20 of 20 in 10.7 s, node groups included). Reading alone (`Sequencer.Corpus`): 19 of 19 in 4.8 s.
+reload. 20 of 20 in 10.7 s, node groups included. Reading alone (`Sequencer.Corpus`): 19 of 19 in 4.8 s.
 
 | Asset | Extract ms | Create ms | No-op re-apply ms | Doc chars | Curves equal |
 |---|---|---|---|---|---|
@@ -83,16 +84,16 @@ reload. 20 of 20 in 10.0 s (S2: 18 of 18, #12 skipped; S5 run 2026-10-09: 20 of 
 | #9 `TimeofDaySeq` | 23 | 164 | 57 | 737 | 1 |
 | #10 `LS_Shot_01_626` / `02_773` / `03_316` | 30 / 19 / 27 | 201 / 141 / 190 | 54 / 61 / 46 | 863 / 828 / 828 | 1 each |
 | #11 `LS_StillBlank` (legacy spawnable) | 28 | 210 | 56 | 2069 | 13 |
-| #12 `LS_FixtureDemo` (DMX library track, 34 fixture patches, node group) | 158 (S5: 170) | 994 (S5: 1156) | 438 (S5: 467) | 131476 (S5: 131563, with `Groups`) | 354 |
+| #12 `LS_FixtureDemo` (DMX library track, 34 fixture patches, node group) | 170 | 1156 | 467 | 131563 (with `Groups`) | 354 |
 | #12 `LS_WaterFountain` (DMX) | 33 | 302 | 104 | 26404 | 40 |
 
-#12: the node group of `LS_FixtureDemo` is reproduced by Create since S5; its one member is a stale outliner path
+#12: the node group of `LS_FixtureDemo` is reproduced by Create; its one member is a stale outliner path
 (`{"Raw": "MovieSceneDMXLibraryTrack_0"}`, naming no track of the source) and stays stale in the copy (the copy's DMX
 track would get that object name, so it is named `MovieSceneDMXLibraryTrack_1`). Both DMX sections end inclusively one frame before a
 whole frame, so their document `End` is one tick past it and the `WholeSectionRanges` warning names it on the source
-and on the copy alike (the validator checks the document's bounds since S3).
+and on the copy alike (the validator checks the document's bounds).
 
-Fixes the round trip drove: the `Fade` track is a property track without a property; `-0.0` reads as `0`; a new
+Round-trip rules: the `Fade` track is a property track without a property; `-0.0` reads as `0`; a new
 sequence's factory author is not compared; stored tangents the write rule would not reproduce are read as stated
 tangents (`Seq_CineCameraActor02`: an Auto key saved with a tangent twice the computed one), and a curve channel is not
 given `PostEditChange` after the write (it would recompute them).
@@ -111,9 +112,9 @@ given `PostEditChange` after the write (it would recompute them).
 | `Apply.FreeEdits` | §6.3 free edits, each either as a twin (the same edit through the engine API on copy B, the document of B applied to copy A, equal extract, no-op re-apply, equal after reload, evaluation compared) or as a document edit (Diff empty, no-op re-apply): rename a binding (GUID kept, camera cut follows), add a possessable, second locator, delete a possessable, spawnable template Details (`CurrentAperture`), Float track on `FocusSettings.ManualFocusDistance`, split a section (row 1, additive), ease in, mute, reorder tracks, three sections then delete the middle one, key edits (1321 samples equal per channel), display rate 30 → 24, tick resolution 24000 → 60000, playback range move + lock, sub-section retime (offset, time scale, bias), add a sub section, nested folders with a moved binding / track and colour, markers add / move / delete with a determinism fence |
 | `Apply.Rollback` | after a binding add and a marker change in the same document: unknown property (`ValidationFailed`), camera cut to a missing binding (`UnknownBinding`), sub-sequence cycle (`CircularSubsequence`), malformed locator (`InvalidLocator`), unknown track type (`UnknownTrackType`), folder not listed (`InvalidFolder`): error at the path, package clean |
 | `Apply.Dependents` | a parent sequence: rename gives no warning, delete gives `Sequencer.DependentsAffected` naming the parent and the binding |
-| `OpenEditorApply` | S6: with the sequence open in Sequencer and not saved, an apply (marker label, Fade track deleted) lands in place and the same Sequencer's outliner drops the track; a failed apply (unknown track type) rolls back and Sequencer shows the rolled-back sequence; a human edit is saved, undone and redone; with the parent open, an apply to the sequence lands and the parent's Sequencer, focused on the sub section, shows it |
+| `OpenEditorApply` | with the sequence open in Sequencer and not saved, an apply (marker label, Fade track deleted) lands in place and the same Sequencer's outliner drops the track; a failed apply (unknown track type) rolls back and Sequencer shows the rolled-back sequence; a human edit is saved, undone and redone; with the parent open, an apply to the sequence lands and the parent's Sequencer, focused on the sub section, shows it |
 | `Apply.Undo` | human edit, then AI edit: undo history for the package cleared, the human edit kept; a failed apply rolls back and leaves no history |
-| `Apply.TrackKinds` | S3 kinds built as the editor's menus do (CVar with platform / group conditions, level visibility with a row condition, data layer, slomo with 1000 keys and stated / User tangents, time warp play-rate curve, MPC with a 400-key stated-tangent parameter, custom primitive data, component material, particle parameter, primitive material, particle, camera shake, shake source trigger): the twin applies, equal extract and evaluation, no-op re-apply, equal after reload; document edits of parameters (rename, add), conditions (group → platform, row condition removed), a fixed-frame time warp; custom primitive data `"35x"` refused at its path |
+| `Apply.TrackKinds` | track kinds built as the editor's menus do (CVar with platform / group conditions, level visibility with a row condition, data layer, slomo with 1000 keys and stated / User tangents, time warp play-rate curve, MPC with a 400-key stated-tangent parameter, custom primitive data, component material, particle parameter, primitive material, particle, camera shake, shake source trigger): the twin applies, equal extract and evaluation, no-op re-apply, equal after reload; document edits of parameters (rename, add), conditions (group → platform, row condition removed), a fixed-frame time warp; custom primitive data `"35x"` refused at its path |
 | `Apply.Preserved` | section group, node group (listed as extracted), a camera cut bound to a sequence ID no sub section has (kept raw) and a Perlin-noise channel override on a section the update rewrites are kept by an unrelated update |
 | `Apply.DependentsBlueprint` | deleting the binding a Blueprint's "Get Sequence Binding" node names warns `Sequencer.DependentsAffected` naming the Blueprint |
 | `Template.RoundTrip` | a Template Sequence (Cine Camera Actor root) and a Camera Animation Sequence made by their factories with a component binding, transform / focal-length keys, a template Details edit, folder and marker: Create from the extract, equal extract and status, `BoundActorComponents` and child possessables equal, no-op re-apply, equal after reload |
@@ -129,7 +130,7 @@ given `PostEditChange` after the write (it would recompute them).
 | `RemoteBinding` | camera cut to a shot's camera as an editor twin (the binding picker's ID); a shot section and a camera cut into it created in one document |
 | `FromScratch` | §6.4 scripted: `LS_Outro`, `LS_Intro` (24 fps, two spawned cine cameras, dolly + focus pull, camera cuts, fade, markers, a possessed sun, a last-frame event calling Director `IntroDone` that prints) and `LS_IntroMaster` (two shots, a camera cut into the intro's dolly camera, listed after the shot track), then "ease out the dolly", "camera shake on the reverse shot", "outro two seconds later": 6 applies, 0 failed, Diff empty after each, 1.7 s in all |
 
-## Not in S5
+## Not authored
 
 Channel overrides (kept untouched), Control Rig sections (Control Rig profile), plugin channel types without reflected
 key arrays (kept), binding references no sub / shot section of the sequence reaches (kept raw), Level Instance

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -22,7 +23,7 @@ namespace UE::AssetDocument::Graph::Audio::MetaSound
 const IMetaSoundDocumentInterface* AsMetaSound(const UObject& Object);
 
 // ID the read gives an input template node it injected for the hidden input node InputNodeID
-// (FInputNodeTemplate::InitTemplateNode creates them with FGuid::NewGuid). M1's apply creates the
+// (FInputNodeTemplate::InitTemplateNode creates them with FGuid::NewGuid). The apply creates the
 // same IDs when its first step injects them on the real asset, so an extract re-applies as a no-op.
 FGuid MakeInputTemplateNodeId(const FGuid& InputNodeID);
 

@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """SoundCue Profile (profile.sound_cue.v1): Body checks, Extract / Diff, and the Apply call sequence against a fake
 cue served through graph.* and audio.soundcue.read.v1 (positional inputs, breaks before connects, pin counts, node
 and comment Details, finalize classification, refusals).  The editor side is covered by

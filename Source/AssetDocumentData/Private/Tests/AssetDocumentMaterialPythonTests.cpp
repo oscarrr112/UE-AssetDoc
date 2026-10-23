@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // End-to-end Material / Material Function documents through the production Service and the Python Profiles
 // (profile.material.v1, profile.material_function.v1).

@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Environment Query document model: shape checks, the live query (ai.env_query.read.v1), Extract and Diff.
 
 Document Body (profile.env_query.v1, docs/architecture/asset-document-eqs-design.md)::

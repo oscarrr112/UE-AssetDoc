@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // EnvQuery profile (docs/architecture/asset-document-eqs-design.md):
 // UEAssetDoc.EnvQuery.ListTypes: list_types kinds env_query_generator / env_query_test (the palette and

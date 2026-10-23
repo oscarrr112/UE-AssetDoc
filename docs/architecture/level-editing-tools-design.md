@@ -1,10 +1,9 @@
 # Structured level and actor editing tools for the MCP: design
 
-Status: design 2026-10-07; all decisions in §8
-accepted by the user on 2026-10-07. Phases L0, L1, L2 and L3 implemented (independent review of L3 pending). L4 (optional) is open.
+Status: implemented. Decisions in §8.
 
-The user decided on 2026-10-07 that World/Level is **not** an asset document. They approved a separate, thin,
-structured tool set for level and actor editing, so the MCP covers what a person does in the Level Editor. Today the
+World/Level is **not** an asset document. The MCP has a separate, thin,
+structured tool set for level and actor editing, so the MCP covers what a person does in the Level Editor. Otherwise the
 only way an AI can do this is `execute_python` (EditorActorSubsystem and similar). That path has no preflight, no
 atomic rollback, no change list, no read-back and no stable diagnostic codes.
 
@@ -23,7 +22,7 @@ From the [core guide](../../MCP/schemas/AssetDocument.md), these principles carr
 - diagnostics `{path, code, message, severity, details}` with the root cause first;
 - `path` is a JSON Pointer into what the AI wrote.
 
-Engine paths below are relative to `/Users/Shared/Epic Games/UE_5.7/Engine/Source/` unless they say otherwise.
+Engine paths below are relative to `<UE_ROOT>/Engine/Source/` unless they say otherwise.
 
 ## 1. Scope
 
@@ -63,10 +62,10 @@ Engine paths below are relative to `/Users/Shared/Epic Games/UE_5.7/Engine/Sourc
 | Item | Why |
 |---|---|
 | Landscape sculpt/paint, foliage painting, mesh/geometry modeling, BSP brush editing | These are tool modes with their own data models (heightmaps, instance buffers, brush CSG), not actor property edits. An AI can still *place* and *configure* such actors through properties. |
-| Creating levels, adding/removing sublevels, streaming settings, level visibility | This is world-structure management, and opening or creating a map discards or prompts for unsaved work. Opening and creating maps are a later helper (§7, D10). |
+| Creating levels, adding/removing sublevels, streaming settings, level visibility | This is world-structure management, and opening or creating a map discards or prompts for unsaved work. Opening and creating maps are the separate `open_level` / `new_level` helpers, which refuse to lose unsaved work (D10). |
 | Lighting / navigation / HLOD / texture streaming builds | These are long jobs, not edits. |
 | Level Blueprint (`ALevelScriptActor` graph) | It is a Blueprint graph. The Blueprint profile could cover it later through `ULevelScriptBlueprint`; the coverage audit lists it as Blueprint-family. |
-| Level Sequences | p28: asset documents that *bind* to level actors (§6). |
+| Level Sequences | The Sequencer profile ([asset-document-sequencer-design.md](asset-document-sequencer-design.md)): asset documents that *bind* to level actors (§6). |
 | Construction-script (UCS) components | They are rebuilt on every construction pass, and the editor does not let you keep edits to them. Writes are refused with `Level.ComponentNotEditable`. |
 | Editing actors inside a Level Instance from the outer world | Their actors belong to another world package, and the editor requires "Edit" mode on the instance. v1 shows them read-only in query (`container` field) and refuses edits (`Level.ActorInLevelInstance`). |
 | PCG graphs, Water / Spline point editing beyond reflected properties | They have specialised data models. Reflected properties work through the generic path; spline points are `FInterpCurve` structs and may already round-trip through the codec, but this is unverified (§8). |
@@ -83,8 +82,7 @@ The design adds two editor tools and one static guide tool. The MCP keeps `get_e
 | `get_level_editing_guide` | none (MCP-side markdown `MCP/schemas/LevelEditing.md`) | static docs (decision D8) |
 
 Responses use the AssetDocument result shape `{success, message, diagnostics[], payload}` with HTTP 200 / 207 / 400.
-Because of this, `interpretAssetDocumentResponse` (`MCP/src/broker/assetDocumentResponse.ts`) formats failures
-as it does for asset documents, with no new broker code. Field names in requests are snake_case, like other MCP
+Because of this, failures are formatted as they are for asset documents, with no level-specific response handling. Field names in requests are snake_case, like other MCP
 arguments. Reflected property names and values are exactly the AssetDocument forms, for example
 `{"X":..,"Y":..,"Z":..}` and `"/Game/A.A"`.
 
@@ -367,7 +365,7 @@ means spawning; and rollback here is cheap and exact (an editor Undo), whereas a
 
 ### 3.3 One transaction per batch, and why it differs from AssetDocument
 
-Direction reset §3 rejects `FScopedTransaction` as the rollback mechanism *for asset apply*, for three reasons: it
+The [design rules](asset-document-design-rules.md) (§3) reject `FScopedTransaction` as the rollback mechanism *for asset apply*, for three reasons: it
 records only objects that call `Modify()`; it would have to stay open across save/install; and it pollutes the
 user's Undo stack.
 
@@ -375,7 +373,7 @@ None of these apply here:
 - every editor operation used is itself transactional (`RF_Transactional` spawn, `Modify()` in every editor path
   listed in §5.2);
 - the batch never saves inside the transaction;
-- the user approved that AI level edits are **undoable like their own** (Ctrl+Z undoes the whole batch; Ctrl+Y
+- AI level edits are **undoable like the user's own** (Ctrl+Z undoes the whole batch; Ctrl+Y
   redoes it). The editor's own multi-step commands work this way, for example `ParentActors` and `DestroyActors`.
 
 What the transaction does not cover, and how each is handled:
@@ -385,18 +383,18 @@ What the transaction does not cover, and how each is handled:
 | Assets loaded to resolve references | Stay loaded. They are not modified, so this is functionally equivalent. |
 | World Partition actor descriptors, external package objects of spawned-then-undone actors | Undo deletes the actor; the editor updates descriptors on undo. The new external package was never saved. Risk R3 checks that "Save All" afterwards writes nothing for it. |
 | Selection, pins, viewport camera | Changed only by post-commit helpers. Placement runs with selection off; `DestroyActors` deselects what it deletes, and Undo restores that. |
-| Package dirty flags | Undo leaves packages dirty. Direction reset §3 item 5 accepts this. |
+| Package dirty flags | Undo leaves packages dirty. Design rules §3 item 5 accepts this. |
 | Editor operations that reset the transaction buffer mid-batch (map change, `ReloadPackages`) | None of the §5.2 paths do this. If it happens: `Level.TransactionLost`, no rollback possible, reported. |
 
-Related bug found while reading the current `execute_python` route (`AssetDocumentHttpServer.cpp`
-`HandleExecute`). It calls `GEditor->BeginTransaction`, and on a Python error calls `GEditor->UndoTransaction()`
-**while the transaction is still active**. `UTransBuffer::CanUndo` returns false while `ActiveCount > 0`, so
-nothing is undone and the transaction is **never ended**:
+The `execute_python` route (`AssetDocumentHttpServer.cpp` `HandleExecute`) uses the same sequence. A naive failure
+path would call `GEditor->UndoTransaction()` **while the transaction is still active**. `UTransBuffer::CanUndo`
+returns false while `ActiveCount > 0`, so nothing would be undone and the transaction would never end:
 - partial changes stay;
 - every later editor edit merges into that open transaction;
 - Undo stays disabled ("Can't undo while ... is in progress").
 
-The fix is the step-8 sequence: End, then Undo only if the newest transaction is ours. It is listed as phase L0.
+The route therefore ends the transaction first and undoes only if the newest transaction is ours (the step-8
+sequence), so a failing script leaves no change and no open transaction.
 
 ### 3.4 Dirty packages and saving
 
@@ -490,8 +488,9 @@ properties exactly as it writes asset `Properties`:
 - **Instanced subobjects** on components (for example instanced settings objects) use `{"Class", "Properties"}` with
   the owning component as outer, the same as for assets.
 
-**API change needed.** These functions are `Private` to `AssetDocumentEditor` today. The public
-`EditorPropertyValueCodec` has no owner and no instanced subobjects. Phase L0 exports a small public object-level API:
+**Object-level API.** The asset-side admission functions are `Private` to `AssetDocumentEditor`, and the public
+`EditorPropertyValueCodec` has no owner and no instanced subobjects. `AssetDocumentEditor` therefore exports a small
+public object-level API:
 
 ```cpp
 // Source/AssetDocumentEditor/Public/AssetDocumentEditorObjectProperties.h  (sketch)
@@ -544,7 +543,7 @@ Private/
 Each op is a handler `{Parse, Preflight(plan), Apply(world), Verify}` registered in one table. A new op means a new
 file and no changes elsewhere.
 
-**C++ / Python split: C++ only for v1.** The direction reset gives Python the business semantics of *asset
+**C++ / Python split: C++ only for v1.** The design rules give Python the business semantics of *asset
 profiles*: Meta model, regions, canonicalization of documents and sidecar bytes. None of these exist here:
 - there are no per-class profiles;
 - there is no document to canonicalize or persist;
@@ -580,7 +579,7 @@ components over the same op handlers. Decision D6.
 | focus (helper) | `GEditor->MoveViewportCamerasToActor(Actors, /*bActiveViewportOnly*/true)` | |
 | pin / unpin (helper) | `UWorldPartition::PinActors` / `UnpinActors` | |
 
-Everything runs inside `FAssetDocumentEditorNonInteractiveScope` (direction reset §4.1), so a factory or delete path
+Everything runs inside `FAssetDocumentEditorNonInteractiveScope` (design rules §4.1), so a factory or delete path
 that tries a dialog is cancelled and reported, never blocking.
 
 ### 5.3 Raw paths (B1): each in its own file with one behaviour test
@@ -611,9 +610,9 @@ No other raw paths are needed. Every other op is a public `UNREALED_API` / `UE_A
 
 ### 5.4 MCP side
 
-- `MCP/src/index.ts`: two handlers that call `callAssetDocumentApi("/level/query" | "/level/edit", "POST", args)`,
-  plus `get_level_editing_guide`, which reads `MCP/schemas/LevelEditing.md`.
-- `MCP/src/broker/toolCatalog.ts`: add them to `EDITOR_TOOL_NAMES`.
+- `MCP/tools.json`: `query_level` and `edit_level` are listed with their input schemas and map to the
+  `/assetdoc/level/query` and `/assetdoc/level/edit` routes. The editor serves the list, and the stdio bridge
+  (`MCP/src/bridge/`) forwards it unchanged. `get_level_editing_guide` returns `MCP/schemas/LevelEditing.md`.
 - The `execute_python` description gains "for level/actor edits use `edit_level`".
 - `MCP/schemas/LevelEditing.md` covers:
   - workflow: `query_level` (world), `query_level` (actors), `edit_level` with `dry_run`, `edit_level`, then
@@ -632,7 +631,7 @@ No other raw paths are needed. Every other op is a public `UNREALED_API` / `UE_A
 
 ### 5.5 Test plan
 
-Automation tests `UEAssetDoc.Level.*` (Editor, real RHI, as in direction reset §6; under the
+Automation tests `UEAssetDoc.Level.*` (Editor, real RHI, as for the other AssetDocument tests; under the
 `UEAssetDoc` prefix so the suite tooling, which groups by the third name segment, runs them as the
 `Level` group). Each test creates its own map
 under `/Game/__AssetDocumentTests__/Level/` with `ULevelEditorSubsystem::NewLevel(path, bIsPartitionedWorld)`, and
@@ -657,10 +656,10 @@ Blueprint created through AssetDocument.
 | `OFPA.DirtyAndSave` | WP map: `dirty_packages` = external actor packages; `save:true` writes exactly those; delete+save removes the actor package; spawn+undo+Save All writes nothing new (R3) |
 | `UndoHistory.AssetApplyClearsLevelUndo` | Spawn BP actor, apply an AssetDocument change to the BP → history cleared (documents §3.6); an apply to an unrelated asset keeps it |
 | `Raw.Placement`, `Raw.Detach` | §5.3 behaviour tests |
-| `ExecutePython.FailureRollsBack` | L0 fix: failing script leaves no change and no open transaction |
+| `ExecutePython.FailureRollsBack` | failing script leaves no change and no open transaction |
 
-**AI scenario.** A fresh agent using only MCP tools (as in `asset-document-ai-trial-*.md`) gets the task: *"In
-/Game/Maps/Trial_Room build a small lit room: floor, four walls, a ceiling light, a door Blueprint
+**AI scenario.** A fresh agent using only MCP tools gets the task: *"In
+/Game/Maps/Test_Room build a small lit room: floor, four walls, a ceiling light, a door Blueprint
 (create it: a frame mesh and a door mesh that can swing), and a camera looking at the door."*
 
 Measured:
@@ -671,7 +670,7 @@ Measured:
 
 Run it in both a non-partitioned map and a WP map.
 
-## 6. Relation to Level Sequence (p28)
+## 6. Relation to Level Sequence
 
 A Level Sequence is an asset document; the actors it binds are level content. To keep the two tools apart while
 letting them refer to the same actors, use one reference format:
@@ -682,13 +681,13 @@ letting them refer to the same actors, use one reference format:
 - **The shared ActorRef canonical form is exactly that `path` string.** `query_level` returns it; `edit_level`
   returns it for spawned actors (under their batch id); a LevelSequence document writes it as the binding target.
   `guid` and `label` are lookup helpers for the level tools only. A sequence document must store `path`, because
-  that is what the engine persists. p28 should accept the same ActorRef *input* forms (`path`, `{"guid"}`,
+  that is what the engine persists. The Sequencer profile should accept the same ActorRef *input* forms (`path`, `{"guid"}`,
   `{"label"}`) and canonicalize to `path` at apply, so an AI can paste `query_level` output into a binding.
 - **Division of labour.**
   - The sequence document never creates, moves or deletes level actors. A missing target is a sequence diagnostic
     ("actor not found in the editor world"); the AI creates it with `edit_level` first.
   - `edit_level` never edits sequence bindings.
-  - Spawnables are owned by the sequence (p28) and are not level actors.
+  - Spawnables are owned by the sequence and are not level actors.
 - **Cross-effects that must be reported, not handled.**
   - Deleting a bound actor: soft-referencer warning or error (§3.2), because the editor's delete dialog finds
     sequence bindings through `FindSoftReferencesToObjects`. This is unverified; risk R5.
@@ -696,9 +695,7 @@ letting them refer to the same actors, use one reference format:
   - Renaming a label does not change `path`, so bindings survive.
 - **Level-instance actors**: path inside the instance's level plus container id. Out of scope v1 on both sides.
 
-## 7. Risks and phased plan
-
-### 7.1 Risks / unknowns
+## 7. Risks and unknowns
 
 | # | Risk | Mitigation |
 |---|---|---|
@@ -712,19 +709,7 @@ letting them refer to the same actors, use one reference format:
 | R8 | `AddNewSubobject` naming / `RenameSubobject` refuses a name already used by an SCS variable | Preflight checks names against the plan; `ComponentNameTaken` |
 | R9 | Users expect labels to be unique and use them as ids | Ambiguity diagnostic lists candidates with paths; the guide says use `path` |
 
-### 7.2 Phases (each mergeable on its own, with acceptance)
-
-| Phase | Content | Acceptance |
-|---|---|---|
-| **L0** | Fix the `execute_python` failure path (§3.3). Export the object-property API from `AssetDocumentEditor` (§4) with the level reference policy. | `ExecutePython.FailureRollsBack`; existing AssetDocument suites green; new API unit tests (instance admission, actor references, `@id` resolver) |
-| **L1** | `AssetDocumentLevel` module, routes, `query_level` (world + actors, filters, paging, detail, WP descriptors), ActorRef, `get_level_editing_guide`, MCP catalog | `Query.*` tests on a normal and a WP map; MCP smoke; guide reviewed |
-| **L2** | `edit_level` framework (parse, plan, preflight, transaction, verify, rollback guard, digest, change list, `dry_run`, `description`, `after` helpers) + ops `spawn`, `delete`, `duplicate`, `set` (transform, label, folder, tags, properties, component properties) | `Edit.Spawn*`, `Edit.Properties`, `Edit.ActorReferences`, `Edit.Delete`, all `Transaction.*`, `Raw.Placement`, `UndoHistory.AssetApplyClearsLevelUndo`; AI scenario minus door hinge/components |
-| **L3** | Components (`add/remove/reparent_component`), `attach`/`detach`, folder ops, layers, data layers, sublevel targeting, `save`, `pin`/`unpin` | `Edit.Components`, `Edit.Hierarchy`, `Edit.Organisation`, `OFPA.DirtyAndSave`, `Query.WorldPartitionUnloaded`, `Raw.Detach`; **full AI scenario on both map kinds** with one independent review (direction reset §6) |
-| **L4** (optional) | `open_level` / `new_level` helpers (refuse when the current world has unsaved changes: `Level.UnsavedChangesWouldBeLost`); read-only Level Instance contents; align the ActorRef helper with p28's binding resolver | Tests per helper; p28 binding round-trip with a `query_level` path |
-
 ## 8. Decisions
-
-The user accepted all recommendations below on 2026-10-07; they are the decisions for L0–L4.
 
 | # | Question | Decision |
 |---|---|---|
@@ -737,7 +722,7 @@ The user accepted all recommendations below on 2026-10-07; they are the decision
 | D7 | Module and naming | New editor module **`AssetDocumentLevel`**, plus a small public object-property API exported from `AssetDocumentEditor`. |
 | D8 | Number of tools | **`query_level`, `edit_level`, and a static `get_level_editing_guide`**. The guide is not folded into `get_asset_document_schema`, because levels are not asset documents. |
 | D9 | Unloaded World Partition actors | **No implicit loading.** `ActorNotLoaded`, plus an explicit `pin` helper (the Outliner's Pin). |
-| D10 | Opening and creating maps | **Later (L4)**, refusing when unsaved changes would be lost. |
-| D11 | Fix the `execute_python` open-transaction bug now? | **Yes, in L0.** Small; it currently leaves the editor's Undo broken after any failing script. |
+| D10 | Opening and creating maps | Separate helpers `open_level` / `new_level`, refusing when unsaved changes would be lost (`Level.UnsavedChangesWouldBeLost`; `save_first` saves them first). |
+| D11 | Fix the `execute_python` open-transaction bug now? | **Yes.** Small; a failing script otherwise leaves the editor's Undo broken. |
 | D12 | Spawn path | **`UPlacementSubsystem` with explicit transform and level** (B1 helper, §5.3), rather than `SpawnActorFromObject` + temporary current-level switch. |
-| D13 | Shared actor reference with p28 | **Canonical = actor soft object path** (`FActorLocatorFragment::Path`); `guid`/`label` are lookup-only inputs. |
+| D13 | Shared actor reference with the Sequencer profile | **Canonical = actor soft object path** (`FActorLocatorFragment::Path`); `guid`/`label` are lookup-only inputs. |

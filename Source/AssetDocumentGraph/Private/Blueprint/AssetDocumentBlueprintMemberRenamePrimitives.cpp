@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Case-only member renames (provider "blueprint"). FName compares case-insensitively, so a Diff or a set
 // primitive cannot see "ondied" -> "OnDied"; the editor still applies it, through the same calls it uses for

@@ -1,10 +1,13 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentSidecar.h"
 
 #include "AssetDocumentJson.h"
+#include "AssetDocumentPaths.h"
 #include "AssetDocumentSidecarPathUtils.h"
 
+#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 
 FString FAssetDocumentSidecar::ResolveObjectPathFromSidecar(const FString& FilePath)
@@ -15,20 +18,14 @@ FString FAssetDocumentSidecar::ResolveObjectPathFromSidecar(const FString& FileP
 		return FString();
 	}
 
-	const FString ContentDir = FAssetDocumentSidecarPathUtils::NormalizeContentDirectory();
-	FString ContentRoot = ContentDir;
-	if (!ContentRoot.EndsWith(TEXT("/")))
-	{
-		ContentRoot += TEXT("/");
-	}
-
-	if (!NormalizedPath.StartsWith(ContentRoot, ESearchCase::IgnoreCase))
+	// The file must really be in the project's Content directory: links are followed and names compared
+	// with the volume's case rules, and the target comes from the path as the filesystem stores it.
+	FString RelativePath;
+	if (!AssetDocumentPaths::MakeRelativeWithin(FAssetDocumentSidecarPathUtils::NormalizeContentDirectory(), NormalizedPath, RelativePath)
+		|| RelativePath.IsEmpty())
 	{
 		return FString();
 	}
-
-	FString RelativePath = NormalizedPath.RightChop(ContentRoot.Len());
-	FPaths::NormalizeFilename(RelativePath);
 
 	FString AssetName = FPaths::GetCleanFilename(RelativePath);
 	if (!AssetName.RemoveFromEnd(TEXT(".assetdoc.json"), ESearchCase::IgnoreCase))
@@ -64,20 +61,66 @@ FString FAssetDocumentSidecar::ResolveSidecarPathFromObjectPath(const FString& O
 	return FilePath;
 }
 
+bool FAssetDocumentSidecar::ResolveSidecarFile(const FString& FilePath, FString& OutRealPath, FString& OutError)
+{
+	OutRealPath.Reset();
+	const FString NormalizedPath = FAssetDocumentSidecarPathUtils::NormalizeFilePath(FilePath);
+	const FString ContentDirectory = FAssetDocumentSidecarPathUtils::NormalizeContentDirectory();
+	FString RealPath;
+	if (NormalizedPath.IsEmpty() || !AssetDocumentPaths::ResolveForAccess(ContentDirectory, NormalizedPath, RealPath)
+		|| RealPath.Equals(AssetDocumentPaths::ResolveRealPath(ContentDirectory), ESearchCase::CaseSensitive)
+		|| !NormalizedPath.EndsWith(TEXT(".assetdoc.json"), ESearchCase::IgnoreCase)
+		|| !RealPath.EndsWith(TEXT(".assetdoc.json"), ESearchCase::IgnoreCase))
+	{
+		OutError = FString::Printf(TEXT("Unable to resolve expected Target from sidecar file '%s': a sidecar is a "
+			"<AssetName>.assetdoc.json file inside the project's Content directory (%s), not reached through a link "
+			"that leads out of it; the file was not read"), *NormalizedPath, *ContentDirectory);
+		return false;
+	}
+	OutRealPath = RealPath;
+	return true;
+}
+
 bool FAssetDocumentSidecar::LoadJsonFile(const FString& FilePath, TSharedPtr<FJsonObject>& OutJson, FString& OutError)
 {
-	return FAssetDocumentJson::LoadJsonFile(
-		FAssetDocumentSidecarPathUtils::NormalizeFilePath(FilePath),
-		OutJson,
-		OutError);
+	FString RealPath;
+	return ResolveSidecarFile(FilePath, RealPath, OutError) && FAssetDocumentJson::LoadJsonFile(RealPath, OutJson, OutError);
+}
+
+bool FAssetDocumentSidecar::LoadText(const FString& FilePath, FString& OutText, FString& OutError)
+{
+	FString RealPath;
+	if (!ResolveSidecarFile(FilePath, RealPath, OutError))
+	{
+		return false;
+	}
+	if (!FFileHelper::LoadFileToString(OutText, *RealPath))
+	{
+		OutError = FString::Printf(TEXT("Failed to read JSON file '%s'"), *RealPath);
+		return false;
+	}
+	return true;
+}
+
+bool FAssetDocumentSidecar::LoadBytes(const FString& FilePath, TArray<uint8>& OutBytes, FString& OutError)
+{
+	FString RealPath;
+	if (!ResolveSidecarFile(FilePath, RealPath, OutError))
+	{
+		return false;
+	}
+	if (!FFileHelper::LoadFileToArray(OutBytes, *RealPath, FILEREAD_Silent))
+	{
+		OutError = FString::Printf(TEXT("Failed to read file '%s'"), *RealPath);
+		return false;
+	}
+	return true;
 }
 
 bool FAssetDocumentSidecar::WriteJsonFile(const FString& FilePath, const TSharedPtr<FJsonObject>& Json, FString& OutError)
 {
-	return FAssetDocumentJson::WriteJsonFile(
-		FAssetDocumentSidecarPathUtils::NormalizeFilePath(FilePath),
-		Json,
-		OutError);
+	FString RealPath;
+	return ResolveSidecarFile(FilePath, RealPath, OutError) && FAssetDocumentJson::WriteJsonFile(RealPath, Json, OutError);
 }
 
 bool FAssetDocumentSidecar::ValidateTargetMatchesSidecar(const FString& FilePath, const TSharedPtr<FJsonObject>& Json, FString& OutError)

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // find_assets `uses` scanner (AssetDocumentUsageSearch.h) of the graph module:
 // - Blueprint family (and Level Script Blueprints of maps): the saved Find-in-Blueprints index (Asset Registry tag

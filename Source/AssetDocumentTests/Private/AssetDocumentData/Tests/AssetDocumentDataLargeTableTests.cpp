@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.DataTable.LargeTable / LargeRichTable: a 5,000 row x 20 field
 // DataTable round-trips through the production Service: Extract, Diff, an unchanged re-apply

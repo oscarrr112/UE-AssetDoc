@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Action-key aliases and normalization (contract section 6).
 
 C++ only accepts canonical keys ``<Tag>:<Kind>[:<Owner>][:<Field>][@<Binding>][#<Disambiguator>]``.

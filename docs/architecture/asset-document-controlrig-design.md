@@ -1,14 +1,13 @@
 # AssetDocument Control Rig profile: design
 
-Status: design 2026-10-07, decisions accepted (§8); phase CR0 (read) implemented
-(results in [asset-document-controlrig-matrix.md](asset-document-controlrig-matrix.md)).
-CR5 open-editor apply done 2026-10-18: close, apply, reopen (test `ControlRig.OpenEditorApply`).
+Decisions in §8. Support matrix and results: [asset-document-controlrig-matrix.md](asset-document-controlrig-matrix.md).
+Open-editor apply: close, apply, reopen (test `ControlRig.OpenEditorApply`).
 Governing rules: [design rules](asset-document-design-rules.md) §3 (rollback = functional
 equivalence), §3.1 (Undo history), §3.2 (dependent assets), §4 (editor-equivalent code; raw paths allowed when the
 editor does it that way, in their own file with a behaviour test; no private headers, no unexported symbols) and §5
 (support matrix). The reference is the **Control Rig editor** of UE 5.7 (`Engine/Plugins/Animation/ControlRig`, on top
 of `Engine/Plugins/Runtime/RigVM`), its hierarchy tab, Module Assembly panel, My Blueprint panel, Class Settings and
-Content Browser actions. The legacy generators are not a reference. Acceptance is editor fidelity on real
+Content Browser actions. Acceptance is editor fidelity on real
 engine/plugin content, free edits, and an AI writing rigs from scratch.
 
 Source paths: `CR/` = `Engine/Plugins/Animation/ControlRig/Source/`, `RV/` = `Engine/Plugins/Runtime/RigVM/Source/`.
@@ -30,7 +29,7 @@ ControlRigSpline (beta)) are enabled by default.
 | `/Script/RigVMDeveloper.RigVMBlueprint` (plain RigVM asset, no hierarchy) | Out | Not creatable from the Content Browser. It is only a base class. |
 | Hierarchy **components** (`FRigBaseComponent`; the only implementations are in the experimental `ControlRigPhysics` plugin) | Out, `ControlRig.ComponentsUnsupported` | Experimental, not in shipped content. Extract lists them under `_Skipped`, so applying an extract never deletes them (§3.6). |
 | Procedural elements (created by the Construction event at runtime) | Out (derived) | They exist only in instances. The Blueprint's hierarchy holds the static elements only. |
-| The Control Rig's users: AnimBP `AnimGraphNode_ControlRig`, Level Sequence Control Rig tracks, `UControlRigComponent` | Out here | AnimBP nodes go through the AnimBlueprint profile. Sequences are the Level Sequence design (p28). A sequence stores a binding to a rig class plus channels keyed by control name; this profile never edits sequences, it reports them as dependents (§5.4). |
+| The Control Rig's users: AnimBP `AnimGraphNode_ControlRig`, Level Sequence Control Rig tracks, `UControlRigComponent` | Out here | AnimBP nodes go through the AnimBlueprint profile. Sequences are the Level Sequence design ([asset-document-sequencer-design.md](asset-document-sequencer-design.md)). A sequence stores a binding to a rig class plus channels keyed by control name; this profile never edits sequences, it reports them as dependents (§5.4). |
 | `UControlRigValidator` passes, `RigGraphDisplaySettings` profiling fields, the debug instance | Out | Runtime validation (not run on compile), transient UI state. |
 | The new non-Blueprint RigVM editor (`RigVM.UseNewEditor`, off) and any 5.8 non-Blueprint asset | Out, tracked as risk (§7.1) | 5.7 keeps the data on `UControlRigBlueprint` / `URigVMBlueprint` (`*Legacy.h`). The logic already moved into `IControlRigAssetInterface` / `IRigVMAssetInterface`. |
 
@@ -419,8 +418,6 @@ transient profiling fields of `RigGraphDisplaySettings` (`*MicroSeconds`) are ne
   - On a Control Rig: the extract plus pins per node (with resolved types), the hierarchy tree with global initial
     transforms, shape names available from `ShapeLibraries` (namespaced `Library.Shape` when there are several, as the
     rig resolves them), public functions, events, and compile status (§5).
-  - On a SkeletalMesh / Skeleton: `ControlRigSuggestions.Hierarchy`, the bones, curves and sockets the editor's
-    Import would create, in document form.
   - On a modular rig: `ModularRigSuggestions.AutoConnect` (connections `AutoConnectSecondaryConnectors` /
     `AutoConnectModules` would make, computed on a transient duplicate).
   - On a ShapeLibrary: the resolved shape list.
@@ -482,7 +479,7 @@ The editor's pattern: a panel or spawner opens a transaction or undo bracket and
 | Compile button | finalize (§5) | |
 
 Not reproduced, by design: Mirror (`MirrorElements`, `MirrorModule`) and Duplicate. These are commands whose result
-the document states explicitly; mirror suggestions may come later. Also not reproduced: copy/paste (the document is
+the document states explicitly; there is no mirror suggestion. Also not reproduced: copy/paste (the document is
 the copy format), Python script export, selection, pin watches, debug and preview, the validation tab, Zero Controls /
 "Set Initial from Current" (they read the debugged pose; the document writes the resulting initial values), and the
 editor's auto-conversion to a module on the first connector.
@@ -568,8 +565,8 @@ RigVM edits must go through `URigVMController`, not `UEdGraphSchema` (decision �
   (`/ControlRig/Modules/Modules56/Root`). A `Create` document with `Modules` reconciles from that, so the extract of the
   result equals the document. Without `Modules` the `Root` module stays.
 - The `CreateControlRigFromSkeletalMeshOrSkeleton` action is the document `Create` + `Hierarchy` (imported bones and
-  curves) + `PreviewSkeletalMesh` + `SourceHierarchyImport`/`SourceCurveImport`. Inspect's
-  `ControlRigSuggestions.Hierarchy` gives that `Hierarchy` ready-made.
+  curves) + `PreviewSkeletalMesh` + `SourceHierarchyImport`/`SourceCurveImport`; a `Create` with `FactoryContext`
+  does it in one step.
 
 ### 4.4 Ordering inside one edit call (Python plan)
 
@@ -686,7 +683,7 @@ instruction count are cheap fidelity facts.
 - **AnimBlueprints and Level Sequences** reference controls, curves and variables by name. The editor does not update
   them when an element, variable or public function is renamed or removed. The profile follows the editor and warns
   with `ControlRig.DependentsAffected`, listing the asset-registry referencers and the renamed or removed names. It never
-  edits other packages (same decision as IK Rig chains). Level Sequence documents (p28) store the rig class binding and
+  edits other packages (same decision as IK Rig chains). Level Sequence documents (the Sequencer profile) store the rig class binding and
   control channel names; fixing them is that profile's job.
 - **Rigs calling this asset's public functions**: the function header of a changed public function is refreshed on
   their next load or compile. They are reported as `ControlRig.DependentsAffected`. The controller itself would edit
@@ -694,7 +691,7 @@ instruction count are cheap fidelity facts.
   referencing packages) and edits their reference nodes, outside the snapshot. During an apply the references held by
   other packages are unregistered and registered again afterwards under the identifier they had, so only this
   package changes; the referencing rigs are left as they are and named in the warning (decision 5).
-- **Open editor** (CR5, done): a rig open in the Control Rig editor is closed for the apply and reopened on the result
+- **Open editor**: a rig open in the Control Rig editor is closed for the apply and reopened on the result
   (Info `ControlRig.EditorReopened`). The editor listens to every model and hierarchy notification: an in-place
   rollback (the package snapshot re-serialized into the live objects) runs those listeners on half-restored graphs and
   asserts in the engine, and its debugged rig, graph and hierarchy tabs are only rebuilt by the editor itself. The
@@ -789,7 +786,7 @@ Undo test: human edit in the Control Rig editor, save, AI apply, Ctrl+Z behaviou
 ### 6.4 AI from scratch
 
 - **Python test.** Starting from `SKM_Manny_Simple` only:
-  1. Inspect the mesh and take `ControlRigSuggestions.Hierarchy`.
+  1. Create from the mesh (`FactoryContext`), which imports its bones and curves.
   2. Write `CR_HeadAim` (§3.1, extended with foot IK through two-bone IK units and a Construction event that places
      the controls at their bones).
   3. Compile: no errors. The runtime check moves the head when `head_ctrl` moves.
@@ -799,12 +796,12 @@ Undo test: human edit in the Control Rig editor, save, AI apply, Ctrl+Z behaviou
   Error cases, each at its document path with rollback: unknown unit, ambiguous short name, unknown pin, type-mismatched
   link, second Forwards Solve, unsupported variable type, element parent cycle, unknown shape (warning), non-module
   class in `Modules`, unknown connector.
-- **Black-box trial** (MCP only + schema section):
+- **Black-box check** (MCP only + schema section):
   - "add an IK foot-lock control rig for this mesh";
   - "add a look-at control to CR_Mannequin_Body and wire it into Forwards Solve";
   - "build a modular rig for this biped mesh".
 
-## 7. Risks, unknowns and phases
+## 7. Risks, unknowns and scope
 
 ### 7.1 Risks and unknowns
 
@@ -813,10 +810,10 @@ Undo test: human edit in the Control Rig editor, save, AI apply, Ctrl+Z behaviou
 | 5.7 is mid-migration: data on `*Legacy` Blueprint classes, logic in `IRigVMAssetInterface` / `IControlRigAssetInterface`, a new non-Blueprint editor behind `RigVM.UseNewEditor` | 5.8 may move Control Rig to a non-Blueprint asset class | Primitives are written against the interfaces where they are public (`FRigVMAssetInterfacePtr`, `FControlRigAssetInterfacePtr`) and touch `UControlRigBlueprint` only for `UFUNCTION`s that are protected on the interface (`AddModel`, `RecompileVM`, `GetOrCreateLocalFunctionLibrary`). The document shape never names Blueprint internals. Version-pinned matrix. |
 | Unexported or protected members (`IControlRigAssetInterface` is not class-exported; `FControlRigBlueprintActions`, `FControlRigEditorModule`, `CreateEmptyGraphContentImpl` are private) | link errors | Only exported or virtual members are used. Forwards Solve on create is reproduced with `AddUnitNode` (one raw file + behaviour test against opening the editor). `CreateRootGraphIfRequired` runs inside the factory itself. |
 | `AddMemberVariable` `check`s on unknown types | editor crash | Python validates against the `rigvm_type` catalog and the C++ primitive re-checks with `RigVMTypeUtils` before calling |
-| `AddMemberVariable` compiles synchronously per call | slow applies with many variables | variables are batched first; each add is one compile (as in the editor). Measured in CR1 |
+| `AddMemberVariable` compiles synchronously per call | slow applies with many variables | variables are batched first; each add is one compile (as in the editor) |
 | Controllers refuse through `ReportError` and return values; some calls uniquify names silently (`AddModule`, `AddMemberVariable`, `AddModel`) | silent drift from the document | every add compares the returned name with the requested one (`ControlRig.NameTaken`); reporting captured per op |
 | Hierarchy element rename rewrites pins in this asset (and the editor would keep the document's later writes) | double edits | renames run first (§4.4); later default writes are then no-ops when they agree |
-| Node identity is the name; a rename without `RenamedFrom` is remove + add | links and values are re-created; same state | functional equivalence (§3 of the reset) |
+| Node identity is the name; a rename without `RenamedFrom` is remove + add | links and values are re-created; same state | functional equivalence (design rules §3) |
 | `CollapseNodes` / `PromoteCollapseNodeToFunctionReferenceNode` produce the end state through other calls than the document's adds | different internal names inside collapsed graphs | the document names every inner node, so the end state is the same. The behaviour test compares the editor's command result with the document's |
 | Large assets (Arm module 14 MB, CR_Mannequin_Body 17 MB, MetaHuman 22 MB; StandardFunctionLibrary has hundreds of nodes) | extract size, apply time, result budgets | paged reads, `diff_only` defaults, compact element-key strings, imported-bone pose omission. Durations are recorded, not gated (as Niagara stress) |
 | Auto-resolve and engine-side connector refresh in modular rigs need a debugged modular rig or CDO (`GetDebuggedModularRig`) | behaviour without an open editor may differ | connect with auto-resolve off; behaviour test against the Module Assembly panel's calls headlessly |
@@ -825,20 +822,18 @@ Undo test: human edit in the Control Rig editor, save, AI apply, Ctrl+Z behaviou
 | Editor-only follow-ups after Class Settings edits | instances or CDO stale | finalize always propagates; behaviour test against the editor's Details path |
 | Corpus without modular rigs; MetaHuman and AnimatorKit off by default | thin modular coverage | builder fixtures (§6.1); AnimatorKit recommended in the sandbox |
 
-### 7.2 Phases (each independently mergeable)
+### 7.2 Scope and acceptance by area
 
-| Phase | Content | Acceptance |
+| Area | Content | Acceptance |
 |---|---|---|
-| **CR0 read** | `rig.controlrig.read/catalog` primitives; Python Extract / Inspect / Diff for all three rig types (Apply refused with `ControlRig.ReadOnly`); `list_types` kinds; compile-status describer (reads `Status` + log, no compile); shape library Inspect | Extract stable (twice equal, equal after reload) on corpus #1–#10 (+#11–#13 when enabled) and `CR_AllKinds`; Inspect pins equal the registry |
-| **CR1 rig apply without graphs** | edit + compile primitives; create (Rig and Module, Forwards Solve on create); `Variables`; `Hierarchy` (all element types, spaces, hosts, metadata, imported-bone omission); `Module` + rig-type conversion; Class Settings and preview-mesh adapter; rollback rebuilder; open-editor refusal; undo rule | §6.2 on #3, #5 and a hierarchy-only fixture; hierarchy and variable free edits of §6.3; rollback on a refused op and a failed compile; Undo test |
-| **CR2 graphs** | `Graphs` (all node kinds except functions and collapse, aggregate nodes included: decision 10), links, defaults, bindings, traits, multiple models, events | §6.2 on #7–#9 (rigs without local functions) and `CR_AllKinds` minus functions; graph free edits; `ComputeVMHash` and the runtime pose equal |
-| **CR3 functions** | `Functions` (signature, locals, access, metadata), collapse nodes, function references (local and external) | §6.2 on #1, #2, #4, #6, #11, #12; function free edits; dependents warning for public functions |
-| **CR4 modular rigs** | `Modules`, `Connections`, `ModularSettings`, create from the factory with `Root`, dependents rule for modules | §6.2 on the modular fixtures; modular free edits; `AutoConnect` suggestion |
-| **CR5 AI surface** (open-editor apply done 2026-10-18) | `rig.controlrig.suggest.v1`, `MCP/schemas/assetdocument/ControlRig.md`, tool descriptions, open-editor apply (refresh the editor, editor Undo tested) if decided | §6.4 Python test and black-box trial; matrix doc `asset-document-controlrig-matrix.md` approved |
+| **Read** | `rig.controlrig.read/catalog` primitives; Python Extract / Inspect / Diff for all three rig types; `list_types` kinds; compile-status describer (reads `Status` + log, no compile); shape library Inspect | Extract stable (twice equal, equal after reload) on corpus #1–#10 (+#11–#13 when enabled) and `CR_AllKinds`; Inspect pins equal the registry |
+| **Rig apply without graphs** | edit + compile primitives; create (Rig and Module, Forwards Solve on create); `Variables`; `Hierarchy` (all element types, spaces, hosts, metadata, imported-bone omission); `Module` + rig-type conversion; Class Settings and preview-mesh adapter; rollback rebuilder; undo rule | §6.2 on #3, #5 and a hierarchy-only fixture; hierarchy and variable free edits of §6.3; rollback on a refused op and a failed compile; Undo test |
+| **Graphs** | `Graphs` (all node kinds except functions and collapse, aggregate nodes included: decision 10), links, defaults, bindings, traits, multiple models, events | §6.2 on #7–#9 (rigs without local functions) and `CR_AllKinds` minus functions; graph free edits; `ComputeVMHash` and the runtime pose equal |
+| **Functions** | `Functions` (signature, locals, access, metadata), collapse nodes, function references (local and external) | §6.2 on #1, #2, #4, #6, #11, #12; function free edits; dependents warning for public functions |
+| **Modular rigs** | `Modules`, `Connections`, `ModularSettings`, create from the factory with `Root`, dependents rule for modules | §6.2 on the modular fixtures; modular free edits; `AutoConnect` suggestion |
+| **AI surface** | `rig.controlrig.suggest.v1`, `MCP/schemas/assetdocument/ControlRig.md`, tool descriptions, open-editor apply (close, apply, reopen; editor Undo tested) | §6.4 Python test and black-box check; matrix doc `asset-document-controlrig-matrix.md` |
 
 ## 8. Decisions
-
-The user accepted all eight recommendations on 2026-10-07:
 
 1. **Module / owner.** The Control Rig files live in `AssetDocumentRig` (owner `Rig`, provider `rig`).
    `UEAssetDoc.uplugin` lists `ControlRig` and `RigVM` explicitly; nothing new is enabled, since IKRig already depends
@@ -853,18 +848,15 @@ The user accepted all eight recommendations on 2026-10-07:
    `ShapeLibrary` facts (default shape and resolved shapes). The rig profile checks `ShapeName` with a warning.
 5. **Dependents** of renames and removals are warn-only: `ControlRig.DependentsAffected` names them, and other
    packages are never edited. The one exception is loaded modular rigs that the engine itself updates.
-6. **Automatic tools** (Import Hierarchy, Auto-Connect / auto-resolve, Mirror) are read-only Inspect suggestions,
-   never document directives.
-7. **Forwards Solve on create.** A `Create` without `Graphs` gets the `Forwards Solve` event (phase CR1). A `Create`
+6. **Automatic tools.** Auto-Connect / auto-resolve is a read-only Inspect suggestion, never a document directive.
+   Import Hierarchy (a `Create` with `FactoryContext` does it) and Mirror are not suggestions.
+7. **Forwards Solve on create.** A `Create` without `Graphs` gets the `Forwards Solve` event. A `Create`
    with `Graphs.Rig` is exactly as written.
-8. **Open editor.** Apply to a rig open in its editor is refused (`ControlRig.OpenInEditor`) until CR5, which lifts it
-   behind a behaviour test. Lifted 2026-10-18 (`ControlRig.OpenEditorApply`).
-
-The user decided two more points on 2026-10-08 (phase CR2):
-
+8. **Open editor.** Apply to a rig open in its editor closes the editor, applies and reopens it on the result
+   (`ControlRig.EditorReopened`, §5.4), behind a behaviour test (`ControlRig.OpenEditorApply`).
 9. **Deprecated units.** Existing nodes of deprecated units are preserved on read and round trip (a `Create` from an
    extract, or an apply to a rig whose graphs are empty, adds them with a `ControlRig.DeprecatedUnit` warning).
    Adding a new node of a deprecated unit to an existing rig is refused with the replacement named, as the editor's
    palette no longer offers it.
-10. **Aggregate nodes** (an `Add` with a third operand) are phase CR2, not CR3: `Aggregate` is authored with the
+10. **Aggregate nodes** (an `Add` with a third operand) belong to the graphs, not to functions: `Aggregate` is authored with the
     node's "+" / "-" (`AddAggregatePin` / `RemoveAggregatePin`).

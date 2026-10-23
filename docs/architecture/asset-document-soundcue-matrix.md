@@ -1,36 +1,36 @@
-# SoundCue support matrix and corpus results (S0–S1)
+# SoundCue support matrix and corpus results
 
-Status: 2026-10-07. Design: [asset-document-soundcue-design.md](asset-document-soundcue-design.md)
+Design: [asset-document-soundcue-design.md](asset-document-soundcue-design.md)
 (§8 Decisions). Rules: [design rules](asset-document-design-rules.md) §3 (rollback = functional
 equivalence), §4 (editor-equivalent code + behaviour test), §5 (support matrix). Reference editor: the Sound Cue editor
 of UE 5.7 (`USoundCueGraphSchema`, `USoundCueGraphNode`, `FSoundCueEditor`) and the Content Browser's New Sound Cue.
 The agent-facing description is `MCP/schemas/assetdocument/SoundCue.md`; the graph contract additions are
 [graph primitives](asset-document-graph-primitives.md) §10.
 
-| Class | Profile | Phase | State |
-|---|---|---|---|
-| `SoundCue` | `profile.sound_cue.v1` (route `audio_profile`) | S0–S1 | Extract / Inspect / Apply / Diff / Create |
-| `SoundCue` made from a Sound Cue Template | same | — | read only (`SoundCue.UnsupportedAsset`: its graph is derived from the template) |
+| Class | Profile | State |
+|---|---|---|
+| `SoundCue` | `profile.sound_cue.v1` (route `audio_profile`) | Extract / Inspect / Apply / Diff / Create |
+| `SoundCue` made from a Sound Cue Template | same | read only (`SoundCue.UnsupportedAsset`: its graph is derived from the template) |
 
 Classification: **Supported**, **Read only**, **Refused** (an error code; the editor cannot do it either, or the
-runtime would crash on it), **Later** (phase named).
+runtime would crash on it).
 
 ## Editor surfaces
 
 | Editor surface | Body location | Class | Mechanism |
 |---|---|---|---|
-| Cue Details (volume, pitch, attenuation, sound class, concurrency, ...) | top-level `Properties` | Supported (S1) | shared Properties region; derived / internal fields refused (`SoundCue.NotAuthoredProperty`) |
-| New Sound Cue (Content Browser) | `Action: Create` | Supported (S1) | `USoundCueFactoryNew` through the generic factory lifecycle (empty cue + Output node) |
+| Cue Details (volume, pitch, attenuation, sound class, concurrency, ...) | top-level `Properties` | Supported | shared Properties region; derived / internal fields refused (`SoundCue.NotAuthoredProperty`) |
+| New Sound Cue (Content Browser) | `Action: Create` | Supported | `USoundCueFactoryNew` through the generic factory lifecycle (empty cue + Output node) |
 | Create Cue from selected waves | — | Supported as a document | the AI writes the players / Random; the factory's `InitialSoundWaves` result round trips (`SC_FromFactory`) |
-| Palette / context menu: place a node | `Nodes.<k>.Class` | Supported (S1) | `graph.node.spawn.v1` → the palette action `FSoundCueGraphSchemaAction_NewNode::PerformAction` (built through its reflected struct), then renamed to the key |
-| Comment box (C) | `Comments` | Supported (S1) | `GetCreateCommentAction`; text / position through layout, `Size` as the corner drag (`ResizeNode`), other fields as comment Details |
-| Wire drag, Break Link | `Inputs`, `Root.Input` | Supported (S1) | schema `TryCreateConnection` / `BreakPinLinks`; a loop → `SoundCue.ConnectionCycle` |
-| Add Input / Delete Input | length of `Inputs` | Supported (S1) | `USoundCueGraphNode::AddInputPin` / `RemoveInputPin` on the slot whose removal keeps the most links (a slot deleted in the middle shifts the later ones, pin names as the editor leaves them) |
-| Delete (node) | node absent from `Nodes` | Supported (S1) | `FSoundCueEditor::DeleteSelectedNodes` is private: the same result from `AssetDocumentSoundCueRawEdits.cpp`; behaviour test `SoundCue.EditorDelete` presses Delete in an open editor and compares |
-| Node Details | `Nodes.<k>.Properties` | Supported (S1) | `graph.node.property.set.v1`, container `sound_node` (`PostEditChangeChainProperty` as the Details panel; wave player → `LoadAsset`) |
-| Per-child arrays (Random `Weights`, Mixer / Concatenator `InputVolume`, crossfade `CrossFadeInput`, Group Control `GroupSizes`) | node `Properties` | Supported (S1) | follow Add / Delete Input like the editor, then set; wrong length → `SoundCue.ChildArrayLength` |
-| Node move, comment bubble | `Position`, `Comment`, `CommentVisible` | Supported (S1) | `graph.node.layout.set.v1` |
-| Compile / validation | — | Supported (S1) | `graph.finalize.v1`: `CompileSoundNodesFromGraphNodes`, `CacheAggregateValues`; new errors fail at the node path and roll back (`SoundCue.ValidationFailed`); errors the cue already had and warnings are reported (`SoundCue.ValidationError` / `.ValidationWarning`) |
+| Palette / context menu: place a node | `Nodes.<k>.Class` | Supported | `graph.node.spawn.v1` → the palette action `FSoundCueGraphSchemaAction_NewNode::PerformAction` (built through its reflected struct), then renamed to the key |
+| Comment box (C) | `Comments` | Supported | `GetCreateCommentAction`; text / position through layout, `Size` as the corner drag (`ResizeNode`), other fields as comment Details |
+| Wire drag, Break Link | `Inputs`, `Root.Input` | Supported | schema `TryCreateConnection` / `BreakPinLinks`; a loop → `SoundCue.ConnectionCycle` |
+| Add Input / Delete Input | length of `Inputs` | Supported | `USoundCueGraphNode::AddInputPin` / `RemoveInputPin` on the slot whose removal keeps the most links (a slot deleted in the middle shifts the later ones, pin names as the editor leaves them) |
+| Delete (node) | node absent from `Nodes` | Supported | `FSoundCueEditor::DeleteSelectedNodes` is private: the same result from `AssetDocumentSoundCueRawEdits.cpp`; behaviour test `SoundCue.EditorDelete` presses Delete in an open editor and compares |
+| Node Details | `Nodes.<k>.Properties` | Supported | `graph.node.property.set.v1`, container `sound_node` (`PostEditChangeChainProperty` as the Details panel; wave player → `LoadAsset`) |
+| Per-child arrays (Random `Weights`, Mixer / Concatenator `InputVolume`, crossfade `CrossFadeInput`, Group Control `GroupSizes`) | node `Properties` | Supported | follow Add / Delete Input like the editor, then set; wrong length → `SoundCue.ChildArrayLength` |
+| Node move, comment bubble | `Position`, `Comment`, `CommentVisible` | Supported | `graph.node.layout.set.v1` |
+| Compile / validation | — | Supported | `graph.finalize.v1`: `CompileSoundNodesFromGraphNodes`, `CacheAggregateValues`; new errors fail at the node path and roll back (`SoundCue.ValidationFailed`); errors the cue already had and warnings are reported (`SoundCue.ValidationError` / `.ValidationWarning`) |
 | Child limits (32, Branch 3, Quality Level = project levels, players 0) | `Inputs` | Refused when exceeded | `SoundCue.ChildCount` before any edit (`CanAddInputPin` agrees) |
 | A Delay without its input slot | `Inputs: []` | Refused | `SoundCue.ValidationFailed` before any edit: `USoundNodeDelay::GetDuration` reads input 0 unchecked, the next compile would crash the editor |
 | Apply into an open Sound Cue editor | — | Supported | in place, then the editor's Undo refresh (selection cleared, `NotifyGraphChanged`); test `SoundCue.OpenEditorApply` |
@@ -38,8 +38,7 @@ runtime would crash on it), **Later** (phase named).
 
 ## Corpus results
 
-Timings: Windows CI PC, Development editor, commit `143935e4`, suite `-j 3` (other agents' suites ran at the same
-time), in milliseconds. `extract` = first Extract of the duplicate, `create` = the extracted document applied as a new
+Timings: Development editor, several test suites running at the same time, in milliseconds. `extract` = first Extract of the duplicate, `create` = the extracted document applied as a new
 `/Game` asset (`Action: Create`), `extract new` = Extract of the created cue, `reapply` = the same document applied
 again (no-op: nothing written, nothing saved), `reload` = Extract after a package reload. Each round trip compares
 (§6.2 of the design) the documents, the graph (nodes by key with class, properties, input pins, link per slot, Root
@@ -82,7 +81,7 @@ of `SoundCue.FromScratch` is created in 279 ms.
   `Weights` length, unknown key, a Delay without its slot, a cue where a wave belongs) fail at their document path and
   leave no asset.
 - `SoundCue.Rollback`: a failed validation and a failed connect leave graph and runtime tree as before.
-- `SoundCue.Undo`: human edit, save, AI apply, Ctrl+Z / redo behaviour per §3.1 of the direction reset.
+- `SoundCue.Undo`: human edit, save, AI apply, Ctrl+Z / redo behaviour per [design rules](asset-document-design-rules.md) §3.1.
 - `SoundCue.OpenEditorApply`: with the editor open, apply, a rolled-back failed apply, a human edit
   with Undo / Redo and a second apply; the open graph panel shows each state.
 - `SoundCue.RenamedNodes`: keys survive save, reload and duplication.

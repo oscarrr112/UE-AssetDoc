@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -34,7 +35,7 @@ constexpr FExpectedDecision ExpectedDecisions[] = {
 	{TEXT("ai.behavior_tree.graph.author_scratch.v1"), 1, TEXT("ai_profile"), TEXT("ai_profile"), TEXT("")},
 	{TEXT("ai.behavior_tree.node_class.inspect.v2"), 2, TEXT("ai_profile"), TEXT("ai_profile"), TEXT("")},
 	{TEXT("ai.blackboard.key_type.inspect.v1"), 1, TEXT("ai_profile"), TEXT("ai_profile"), TEXT("")},
-	{TEXT("ai.blackboard.key_type.create.v1"), 1, TEXT("ai_provider_design"), TEXT(""), TEXT("AD.G1.BLOCK.AI.BLACKBOARD_KEY_TYPE_AUTHORITY")},
+	{TEXT("ai.blackboard.key_type.create.v1"), 1, TEXT("ai_provider_design"), TEXT(""), TEXT("AD.BLOCK.AI.BLACKBOARD_KEY_TYPE_AUTHORITY")},
 	{TEXT("ai.blackboard.key_type.apply_properties.v1"), 1, TEXT("ai_profile"), TEXT("ai_profile"), TEXT("")},
 	{TEXT("ai.blackboard.parent.set.v1"), 1, TEXT("ai_profile"), TEXT("ai_profile"), TEXT("")},
 	{TEXT("ai.blackboard.local_keys.replace.v1"), 1, TEXT("ai_profile"), TEXT("ai_profile"), TEXT("")},
@@ -118,7 +119,7 @@ void AssertReadbackV2Descriptor(
 	Test.TestEqual(TEXT("readback v2 is versioned independently of v1"), Descriptor.Version, 2u);
 	Test.TestEqual(TEXT("readback v2 is read-only"), Descriptor.Access,
 		EAssetDocumentPrimitiveAccess::ReadOnly);
-	Test.TestEqual(TEXT("readback v2 admits exactly the H0 phases"), Descriptor.AllowedPhases,
+	Test.TestEqual(TEXT("readback v2 admits exactly the readback phases"), Descriptor.AllowedPhases,
 		TArray<EAssetDocumentRuntimeRequestPhase>{
 			EAssetDocumentRuntimeRequestPhase::Validate,
 			EAssetDocumentRuntimeRequestPhase::Preflight,
@@ -152,14 +153,14 @@ void AssertReadbackV2Descriptor(
 		Descriptor.Admission.AuthorityFingerprint,
 		FString(TEXT("ue-5.7.4-launcher-cl-51494982|ai|ai.blackboard.entry.readback.v2|AssetDocumentAI+AIModule+PropertyEditor|"))
 			+ ExactApi + TEXT("|AD.AI.BLACKBOARD.KEYTYPE-STRUCT-CANONICAL-READ-v1|AssetDocumentAIBlackboardKeyTypeStructCanonicalRead::ReadCanonicalValue(ExactLiveDefaultValue)"));
-	Test.TestEqual(TEXT("readback v2 verifies H0 and the private canonical READ scope"),
+	Test.TestEqual(TEXT("readback v2 verifies the readback and the private canonical READ scope"),
 		Descriptor.Admission.VerificationTestIds,
 		TArray<FString>{TEXT("UEAssetDoc.AIProvider.Authority.PublicSurface"),
 			TEXT("UEAssetDoc.AIProvider.BlackboardKeyTypeStructCanonicalRead"),
 			TEXT("UEAssetDoc.AIProvider.BlackboardV2.Readback")});
-	Test.TestEqual(TEXT("readback v2 has the H0 identity contract"),
+	Test.TestEqual(TEXT("readback v2 has the readback identity contract"),
 		Descriptor.Admission.IdentityLifetimeContractId,
-		FString(TEXT("P.identity.h0-path-resolve-single-invocation.v2")));
+		FString(TEXT("P.identity.path-resolve-single-invocation.v2")));
 	Test.TestEqual(TEXT("readback v2 rejects active transactions by contract"),
 		Descriptor.Admission.TransactionContractId,
 		FString(TEXT("P.transaction.no-active-transaction.v2")));
@@ -459,7 +460,7 @@ void AssertEntryAddV2Descriptor(
 	Test.TestEqual(TEXT("entry add v2 has exact verification evidence"),
 		Descriptor.Admission.VerificationTestIds,
 		TArray<FString>{TEXT("UEAssetDoc.AIProvider.Authority.PublicSurface"),
-			TEXT("UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceGate"),
+			TEXT("UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceCheck"),
 			TEXT("UEAssetDoc.AIProvider.BlackboardV2.Add")});
 }
 
@@ -529,7 +530,7 @@ void AssertEntryReplaceClassV2Descriptor(
 	Test.TestEqual(TEXT("replace-class v2 has exact verification evidence"),
 		Descriptor.Admission.VerificationTestIds,
 		TArray<FString>{TEXT("UEAssetDoc.AIProvider.Authority.PublicSurface"),
-			TEXT("UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceGate"),
+			TEXT("UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceCheck"),
 			TEXT("UEAssetDoc.AIProvider.BlackboardV2.ReplaceClass")});
 }
 
@@ -597,7 +598,7 @@ void AssertEntryRemoveV2Descriptor(
 	Test.TestEqual(TEXT("entry remove v2 has exact verification evidence"),
 		Descriptor.Admission.VerificationTestIds,
 		TArray<FString>{TEXT("UEAssetDoc.AIProvider.Authority.PublicSurface"),
-			TEXT("UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceGate"),
+			TEXT("UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceCheck"),
 			TEXT("UEAssetDoc.AIProvider.BlackboardV2.Remove")});
 }
 
@@ -673,7 +674,7 @@ void AssertLocalKeysReorderV2Descriptor(
 	Test.TestEqual(TEXT("local-keys reorder v2 has exact admission evidence"),
 		Descriptor.Admission.VerificationTestIds,
 		TArray<FString>{TEXT("UEAssetDoc.AIProvider.Authority.PublicSurface"),
-			TEXT("UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceGate"),
+			TEXT("UEAssetDoc.AIProvider.BlackboardV2.StructuralSourceCheck"),
 			TEXT("UEAssetDoc.AIProvider.BlackboardV2.Reorder")});
 	Test.TestTrue(TEXT("local-keys reorder v2 fingerprint retains the canonical READ authority"),
 		Descriptor.Admission.AuthorityFingerprint.Contains(

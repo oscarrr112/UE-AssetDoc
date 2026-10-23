@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Physics Asset apply (profile.physics_asset.v1): the document as the Physics Asset Editor's edits (design §4.2).
 
 The Body is reconciled in phases, each a batch of ``physics.asset.edit.v1`` ops planned against a fresh read:

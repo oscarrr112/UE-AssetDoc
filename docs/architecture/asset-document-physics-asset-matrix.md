@@ -1,16 +1,16 @@
-# Physics Asset support matrix and corpus results (P0 + P1 + P2)
+# Physics Asset support matrix and corpus results
 
-Status: 2026-10-08, P0 + P1 merged, P2 create implemented; ready for approval. P3 open-editor apply done 2026-10-18 (test `PhysicsAsset.OpenEditorApply`). Design: [asset-document-physics-asset-design.md](asset-document-physics-asset-design.md)
+Design: [asset-document-physics-asset-design.md](asset-document-physics-asset-design.md)
 (decisions in §8). Rules: [design rules](asset-document-design-rules.md) §3 (rollback = functional
 equivalence), §4 (editor-equivalent code + behaviour test), §5 (support matrix). Reference editor: the Physics Asset
 Editor (`FPhysicsAssetEditorSharedData`, `FPhysicsAssetDetailsCustomization`, the asset / body / constraint Details).
 The agent-facing description is `MCP/schemas/assetdocument/PhysicsAsset.md`.
 
-| Class | Profile | Phase | State |
-|---|---|---|---|
-| `PhysicsAsset` | `profile.physics_asset.v1` (`physics_profile`, provider `physics`, owner `Physics` = 13) | P0, P1, P2 | Extract / Inspect / Diff / Apply; Create from a skeletal mesh (document bodies or the editor's generation) |
+| Class | Profile | State |
+|---|---|---|
+| `PhysicsAsset` | `profile.physics_asset.v1` (`physics_profile`, provider `physics`, owner `Physics` = 13) | Extract / Inspect / Diff / Apply; Create from a skeletal mesh (document bodies or the editor's generation) |
 
-Classification: **Supported**, **Read only**, **Refused** (an error code), **Later** (phase named).
+Classification: **Supported**, **Read only**, **Refused** (an error code), **Not authored**.
 
 ## Editor surfaces
 
@@ -40,13 +40,13 @@ Classification: **Supported**, **Read only**, **Refused** (an error code), **Lat
 | New Physics Asset (factory + mesh picker) | `Action: Create`, `FactoryContext` (else `Body.PreviewMesh`) | Supported | generic factory route with the dialog-factory seam: `IAssetTools::CreateAsset` + the factory's pre-dialog step (`PreviewSkeletalMesh = TargetSkeletalMesh`); no mesh `PhysicsAsset.MeshRequired`, not a mesh `PhysicsAsset.UnknownMesh`; never assigned to the mesh (decision §8.2) |
 | New Physics Asset generation dialog (body / constraint creation settings, Create Asset) | `Body.Generation` (create without `Bodies`; create-only, never extracted) | Supported | provider op `generate`: `FPhysicsAssetUtils::CreateFromSkeletalMesh(bSetToMesh=false, bShowProgress=false)` with the project's `UPhysicsAssetGenerationSettings` overlaid by `Generation`; with `Bodies` `PhysicsAsset.GenerationWithBodies`; on an existing asset `PhysicsAsset.GenerationIgnored` warning |
 | (suggestion) what the dialog would generate | Inspect `Generation` `{Settings, Body}` | Read only | the same generation on a transient asset, read as document regions |
-| Asset open in the Physics Asset Editor | — | Supported (P3): close, apply, reopen (Info `PhysicsAsset.EditorReopened`) | test `PhysicsAsset.OpenEditorApply` |
+| Asset open in the Physics Asset Editor | — | Supported: close, apply, reopen (Info `PhysicsAsset.EditorReopened`) | test `PhysicsAsset.OpenEditorApply` |
 
 ## Corpus results
 
-Mac (M-series, Development editor, 2026-10-07). Read = `Corpus` / `Read` tests (extract and Inspect of the asset as
+Mac (M-series, Development editor). Read = `Corpus` / `Read` tests (extract and Inspect of the asset as
 stored); Fidelity = `Fidelity` test (a duplicate is emptied, rebuilt from the source's extract, re-applied unchanged,
-saved and reloaded; the rebuilt and reloaded extracts equal the source's). PC numbers come from the gate suite.
+saved and reloaded; the rebuilt and reloaded extracts equal the source's). Timings were measured on a Windows machine.
 
 | Asset | Content | Extract / Inspect | Doc size | Status | Fidelity (empty / rebuild / unchanged re-apply) |
 |---|---|---|---|---|---|
@@ -63,8 +63,8 @@ saved and reloaded; the rebuilt and reloaded extracts equal the source's). PC nu
 | ChaosModularVehicleExamples SportsCar_PhysicsAsset | - | - | - | - | skipped: plugin not enabled in the test sandbox |
 | MetaHuman PA_MetaHuman_ARKit_Mapping | - | - | - | - | skipped: plugin not enabled in the test sandbox |
 
-Fixes the corpus drove: `-0.0` components read as `0` (GrenadeLauncher box `Rotation.Yaw`, SportsCar / Manny
-constraint axes); Snap / frame checks only when both bones are in the preview mesh (the engine asserts otherwise).
+`-0.0` components read as `0` (GrenadeLauncher box `Rotation.Yaw`, SportsCar / Manny constraint axes); Snap / frame
+checks run only when both bones are in the preview mesh (the engine asserts otherwise).
 
 ### Create from extract (§6.2 as written)
 
@@ -72,7 +72,7 @@ constraint axes); Snap / frame checks only when both bones are in the preview me
 asset; its extract, status and runtime facts (a `USkeletalMeshComponent` instancing it: per-body mass, constraint
 count, bounds bodies) equal the source's, the mesh is neither assigned nor dirtied, an unchanged re-apply is a no-op,
 save + reload keeps the extract. Create time = the whole Create apply, PC (Windows) / Mac (M-series), Development
-editor, 2026-10-08:
+editor:
 
 | Asset | Create PC / Mac | Doc size | Result |
 |---|---|---|---|
@@ -100,7 +100,7 @@ editor, 2026-10-08:
 | `SaveReloadProfile` | `DefaultProfile` / `ProfileInstance` save swap: values across save + reload, after a human save while previewing a profile, profile renames |
 | `Rollback` | failures after earlier phases changed the asset (late bad value, new status error) restore the saved state |
 | `Undo` | undo history around a human edit, an AI apply and a failed apply |
-| `OpenEditorApply` | P3: with the asset open in the Physics Asset Editor and not saved, an apply (a leaf body deleted with its constraint and pairs, a mass override, a profile) reopens the editor on the result (its preview shows the applied bodies); a failed apply rolls back and reopens it on the rolled-back asset; a human Details edit is saved, undone and redone; the editor closes without a prompt |
+| `OpenEditorApply` | with the asset open in the Physics Asset Editor and not saved, an apply (a leaf body deleted with its constraint and pairs, a mass override, a profile) reopens the editor on the result (its preview shows the applied bodies); a failed apply rolls back and reopens it on the rolled-back asset; a human Details edit is saved, undone and redone; the editor closes without a prompt |
 
 ## Known limits
 
@@ -108,6 +108,5 @@ editor, 2026-10-08:
   for Add / Delete Body: `FPhysicsAssetEditorSharedData` is private and its commands act on the editor's selection, so
   a test cannot run the real command; every other editor-side edit is the engine / Details call the editor makes.
 - The §6.4 flow is a C++ automation test driving documents through the document service (as the IK Rig `FromScratch`),
-  not a Python test; the AI-facing black-box trial is P3 and scheduled separately.
-- Apply to an asset open in the Physics Asset Editor stays refused (P3 decision).
+  not a Python test.
 - `Generation` / `Fit` with level-set geometry types make read-only shapes (Inspect `ReadOnlyShapes`).

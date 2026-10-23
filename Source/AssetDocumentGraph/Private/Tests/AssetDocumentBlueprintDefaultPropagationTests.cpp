@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // After a Blueprint apply the live dependents look exactly as after the same edit in the
 // Blueprint editor (AssetDocumentGraphDefaultsPropagation.h), and an omitted or empty region means
@@ -283,7 +284,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentBlueprintDefaultPropagationTest,
 bool FAssetDocumentBlueprintDefaultPropagationTest::RunTest(const FString& Parameters)
 {
 	using namespace AssetDocumentBlueprintDefaultPropagationTests;
-	const FPropagationFixture Fixture(*this, {TEXT("BP_P66Parent"), TEXT("BP_P66Child")});
+	const FPropagationFixture Fixture(*this, {TEXT("BP_PropagationParent"), TEXT("BP_PropagationChild")});
 	const FPropagationAsset& Parent = Fixture[0];
 	const FPropagationAsset& Child = Fixture[1];
 
@@ -398,7 +399,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentBlueprintInheritedNullOverrideTes
 bool FAssetDocumentBlueprintInheritedNullOverrideTest::RunTest(const FString& Parameters)
 {
 	using namespace AssetDocumentBlueprintDefaultPropagationTests;
-	const FPropagationFixture Fixture(*this, {TEXT("BP_P66Base"), TEXT("BP_P66Mid"), TEXT("BP_P66Leaf")});
+	const FPropagationFixture Fixture(*this, {TEXT("BP_PropagationBase"), TEXT("BP_PropagationMid"), TEXT("BP_PropagationLeaf")});
 	const FPropagationAsset& Base = Fixture[0];
 	const FPropagationAsset& Mid = Fixture[1];
 	const FPropagationAsset& Leaf = Fixture[2];
@@ -449,7 +450,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentBlueprintEmptyEventGraphTest,
 bool FAssetDocumentBlueprintEmptyEventGraphTest::RunTest(const FString& Parameters)
 {
 	using namespace AssetDocumentBlueprintDefaultPropagationTests;
-	const FPropagationFixture Fixture(*this, {TEXT("BP_P66Events")});
+	const FPropagationFixture Fixture(*this, {TEXT("BP_PropagationEvents")});
 	const FPropagationAsset& Asset = Fixture[0];
 	// BeginPlay sets Count and hides Spear: the nodes use the variable and the component.
 	const FString Created = Asset.Document(TEXT("Create"), TEXT("\"ParentClass\":\"/Script/Engine.Actor\","

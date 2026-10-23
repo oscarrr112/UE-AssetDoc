@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // audio.metasound.edit.v1: edits of a MetaSound Source / Patch made the way the MetaSound editor makes them
 // (asset-document-metasound-design.md §4.1). One transaction per call, Asset->Modify() (and

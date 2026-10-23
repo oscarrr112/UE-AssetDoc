@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentIngressQueue.h"
 
@@ -35,7 +36,7 @@ FString LoadAssetDocumentSource(
 	if (!FFileHelper::LoadFileToString(Source, *FilePath))
 	{
 		Test.AddError(FString::Printf(
-			TEXT("Failed to read source gate file '%s'"),
+			TEXT("Failed to read source file '%s'"),
 			*FilePath));
 	}
 	return Source;

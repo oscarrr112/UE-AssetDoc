@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "Runtime/AssetDocumentPrimitiveRegistry.h"
 
@@ -187,7 +188,7 @@ FFreezeFixture MakeFrozenBridgeFixture(const FAssetDocumentAuthorityCandidateRec
 	Fixture.Descriptors.Add(Descriptor);
 	Fixture.Required.Add({Descriptor.PrimitiveId, Descriptor.Version, ConsumerId});
 	Fixture.Providers.Add({TEXT("ai"), EAssetDocumentProviderAvailabilityState::Available, {}});
-	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Frozen = GetG1FrozenAuthorityExceptionRecords();
+	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Frozen = GetFrozenAuthorityExceptionRecords();
 	Fixture.AuthorityCatalog.Append(Frozen.GetData(), Frozen.Num());
 	return Fixture;
 }
@@ -198,7 +199,7 @@ FFreezeFixture MakeFreezeFixture()
 	Fixture.Descriptors.Add(MakeOrdinaryDescriptor());
 	Fixture.Required.Add({Fixture.Descriptors[0].PrimitiveId, 1, TEXT("route.apply")});
 	Fixture.Providers.Add({TEXT("editor"), EAssetDocumentProviderAvailabilityState::Available, {}});
-	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Frozen = GetG1FrozenAuthorityExceptionRecords();
+	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Frozen = GetFrozenAuthorityExceptionRecords();
 	Fixture.AuthorityCatalog.Append(Frozen.GetData(), Frozen.Num());
 	return Fixture;
 }
@@ -272,7 +273,7 @@ FAssetDocumentPrimitiveDescriptor MakeStableBlockerDescriptor()
 	Descriptor.ProviderId = TEXT("umg");
 	Descriptor.Owner = EAssetDocumentPrimitiveOwner::UMG;
 	Descriptor.AllowedPhases = {EAssetDocumentRuntimeRequestPhase::Apply};
-	Descriptor.StableDiagnosticCodes = {TEXT("AD.G1.BLOCK.UMG.DESIGNER_BINDING_EVIDENCE")};
+	Descriptor.StableDiagnosticCodes = {TEXT("AD.BLOCK.UMG.DESIGNER_BINDING_EVIDENCE")};
 	Descriptor.Admission.Disposition = EAssetDocumentPrimitiveDisposition::StableBlocker;
 	Descriptor.Admission.AuthorityPath = EAssetDocumentPrimitiveAuthorityPath::StableBlocker;
 	Descriptor.Admission.PhysicalOwner = EAssetDocumentPrimitiveOwner::UMG;
@@ -290,7 +291,7 @@ FFreezeFixture MakeSingleDescriptorFixture(const FAssetDocumentPrimitiveDescript
 		Fixture.Required.Add({Descriptor.PrimitiveId, Descriptor.Version, ConsumerId});
 	}
 	Fixture.Providers.Add({Descriptor.ProviderId, EAssetDocumentProviderAvailabilityState::Available, {}});
-	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Frozen = GetG1FrozenAuthorityExceptionRecords();
+	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Frozen = GetFrozenAuthorityExceptionRecords();
 	Fixture.AuthorityCatalog.Append(Frozen.GetData(), Frozen.Num());
 	return Fixture;
 }
@@ -476,7 +477,7 @@ void TestAuthorityCatalogDelegation(FAutomationTestBase& Test)
 
 void TestBridgeResolutionAndCandidateOnlyEvidence(FAutomationTestBase& Test)
 {
-	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Frozen = GetG1FrozenAuthorityExceptionRecords();
+	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Frozen = GetFrozenAuthorityExceptionRecords();
 	Test.TestEqual(TEXT("P: immutable governance catalog has fifteen rows after BT admission"), Frozen.Num(), 15);
 	int32 BridgeCount = 0;
 	for (const FAssetDocumentAuthorityCandidateRecord& Candidate : Frozen)
@@ -530,7 +531,7 @@ void TestFrozenBridgeOwnerSymbolAndReviewBindings(FAutomationTestBase& Test)
 			TEXT("blackboard.structural_publication_catalog_probe"),
 		},
 	};
-	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Frozen = GetG1FrozenAuthorityExceptionRecords();
+	const TConstArrayView<FAssetDocumentAuthorityCandidateRecord> Frozen = GetFrozenAuthorityExceptionRecords();
 	for (const FBindingExpectation& Expected : Expectations)
 	{
 		const FAssetDocumentAuthorityCandidateRecord* Candidate =

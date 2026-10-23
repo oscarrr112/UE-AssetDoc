@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Control Rig extract sizes, refused calls and a modular biped created in one apply.
 // UEAssetDoc.ControlRig.ExtractSizes: extract and list_types sizes (bounds, and the parts they are made
@@ -523,7 +524,7 @@ bool FAssetDocumentControlRigRefusedCallsTest::RunTest(const FString& Parameters
 {
 	using namespace AssetDocumentControlRigSizesAndModularTests;
 	FFixtures Fixtures;
-	// 1. Task 2: FactoryContext as the mesh's package path (it was refused: "the object path").
+	// 1. FactoryContext as the mesh's package path (it was refused: "the object path").
 	const FTarget& OnMesh = Fixtures.Add(TEXT("CR_PackagePath"));
 	{
 		const TSharedPtr<FJsonObject> Create = Document(OnMesh, TEXT("Create"), TEXT("{\"Hierarchy\": [{\"Type\": \"Null\", \"Name\": \"extra\"}],"
@@ -537,7 +538,7 @@ bool FAssetDocumentControlRigRefusedCallsTest::RunTest(const FString& Parameters
 		const TArray<TSharedPtr<FJsonValue>>* Hierarchy = nullptr;
 		TestTrue(TEXT("the mesh's bones were imported"), Made.IsValid() && BodyOf(Made)->TryGetArrayField(TEXT("Hierarchy"), Hierarchy)
 			&& Hierarchy->Num() > 10);
-		// 2. Task 1 / 10: a function renamed with RenamedFrom reads as a rename in Diff (it read as a delete and an add).
+		// 2. A function renamed with RenamedFrom reads as a rename in Diff (it read as a delete and an add).
 		const TSharedPtr<FJsonObject> Renaming = Parse(Serialize(Made));
 		Renaming->SetStringField(TEXT("Action"), TEXT("Update"));
 		const TSharedPtr<FJsonObject> Functions = BodyOf(Renaming)->GetObjectField(TEXT("Functions"));
@@ -557,7 +558,7 @@ bool FAssetDocumentControlRigRefusedCallsTest::RunTest(const FString& Parameters
 			TestTrue(TEXT("renamed"), Renamed.IsValid() && BodyOf(Renamed)->GetObjectField(TEXT("Functions"))->HasField(TEXT("Align Chain")));
 		}
 	}
-	// 3. Task 3: a sparse Update of a modular rig without RigType (refused ModularRegionUnsupported: omitted meant Rig).
+	// 3. A sparse Update of a modular rig without RigType (refused ModularRegionUnsupported: omitted meant Rig).
 	const FTarget& Modular = Fixtures.Add(TEXT("CR_SparseModular"));
 	const FString Modules = TEXT("[{\"Name\": \"Root\", \"Class\": \"/ControlRig/Modules/Modules56/Root.Root_C\"},"
 		"{\"Name\": \"Spine\", \"Class\": \"/ControlRigModules/Modules56/Spine.Spine_C\", \"Parent\": \"Root\"},"
@@ -587,7 +588,7 @@ bool FAssetDocumentControlRigRefusedCallsTest::RunTest(const FString& Parameters
 		Auto->RemoveField(TEXT("Properties"));
 		TestTrue(TEXT("\"Auto\" is not a connection (ControlRig.InvalidBody)"), HasCode(Validate(Auto), TEXT("ControlRig.InvalidBody")));
 	}
-	// 4. Task 7: Spine under Neck and Neck under Spine is a cycle (it came back as ParentAfterChild).
+	// 4. Spine under Neck and Neck under Spine is a cycle (it came back as ParentAfterChild).
 	{
 		const TSharedPtr<FJsonObject> Cycle = Document(Modular, TEXT("Update"), TEXT("{\"Modules\": [{\"Name\": \"Root\", \"Class\": \"/ControlRig/Modules/Modules56/Root.Root_C\"},"
 			"{\"Name\": \"Spine\", \"Class\": \"/ControlRigModules/Modules56/Spine.Spine_C\", \"Parent\": \"Neck\"},"
@@ -694,7 +695,7 @@ bool FAssetDocumentControlRigModularOneApplyTest::RunTest(const FString& Paramet
 	FString Text;
 	TestEqual(TEXT("re-apply diff"), DiffCount(Again, Text), 0);
 	AddInfo(Text.Left(2000));
-	// Task 5: Inspect lists what the modules build (it showed only the mesh's bones).
+	// Inspect lists what the modules build (it showed only the mesh's bones).
 	const FAssetDocumentResult Inspected = Inspect(Target.ObjectPath);
 	const TSharedPtr<FJsonObject>* Globals = nullptr;
 	const TSharedPtr<FJsonObject>* Counts = nullptr;
@@ -711,7 +712,7 @@ bool FAssetDocumentControlRigModularOneApplyTest::RunTest(const FString& Paramet
 		TestTrue(TEXT("Arm_l's controls are listed"), ModuleControls > 0);
 		TestTrue(TEXT("module_elements counted"), (*Counts)->GetIntegerField(TEXT("module_elements")) > 0);
 	}
-	// Task 5: Inspect's AutoConnect suggestion for an Arm on the Spine shoulder socket (the editor's drop picks the same
+	// Inspect's AutoConnect suggestion for an Arm on the Spine shoulder socket (the editor's drop picks the same
 	// clavicle as its Elbow Bone) comes with Check on it.
 	const FTarget& Suggesting = Fixtures.Add(TEXT("CR_OneApplySuggest"));
 	const TSharedPtr<FJsonObject> Partial = Document(Suggesting, TEXT("Create"), TEXT("{\"RigType\": \"Modular\", \"Modules\": ["

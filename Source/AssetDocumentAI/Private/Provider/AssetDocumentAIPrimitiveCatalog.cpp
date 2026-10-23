@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "Provider/AssetDocumentAIPrimitiveCatalog.h"
 #include "Provider/Blackboard/AssetDocumentAIBlackboardPrimitives.h"
@@ -85,7 +86,7 @@ void AppendBlackboardV1DecisionProjectionRows(
 		{TEXT("ai.blackboard.key_type.create.v1"),
 			EAssetDocumentPrimitiveDisposition::StableBlocker,
 			TEXT("ai_provider_design"),
-			TEXT("AD.G1.BLOCK.AI.BLACKBOARD_KEY_TYPE_AUTHORITY")},
+			TEXT("AD.BLOCK.AI.BLACKBOARD_KEY_TYPE_AUTHORITY")},
 		{TEXT("ai.blackboard.key_type.apply_properties.v1"),
 			EAssetDocumentPrimitiveDisposition::OrdinaryHelper,
 			TEXT("ai_profile"), TEXT("")},

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // data.user_enum.read.v1 / data.user_enum.edit.v1: enumerators of a User Defined Enum as the
 // Enum editor edits them (FEnumEditorUtils: add / remove / move / display name / bitflags; the

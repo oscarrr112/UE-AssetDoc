@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -18,7 +19,7 @@ enum class EAssetDocumentAnimationBootstrapDependency : uint8
 
 enum class EAssetDocumentAnimationBootstrapDisposition : uint8
 {
-	FrozenG1NotApplicable = 0,
+	FrozenNotApplicable = 0,
 	VerifiedAssetIdentityReady = 1,
 	RuntimeHandleBootstrapBlocked = 2,
 };
@@ -29,29 +30,29 @@ enum class EAssetDocumentAnimationFinalDisposition : uint8
 	StableBlocker = 1,
 };
 
-struct FAssetDocumentAnimationT0DecisionRecord
+struct FAssetDocumentAnimationAuthorityDecisionRecord
 {
 	const TCHAR* DecisionId = TEXT("");
-	const TCHAR* AuthorityGateId = TEXT("");
+	const TCHAR* AuthorityGroupId = TEXT("");
 	const TCHAR* RowDiagnostic = TEXT("");
-	bool bFrozenG1Blocker = false;
+	bool bFrozenBlocker = false;
 	bool bMutating = false;
 	uint8 RequiredInputHandleCount = 0;
 	EAssetDocumentAnimationBootstrapDependency BootstrapDependency =
 		EAssetDocumentAnimationBootstrapDependency::None;
 	EAssetDocumentAnimationBootstrapDisposition BootstrapDisposition =
-		EAssetDocumentAnimationBootstrapDisposition::FrozenG1NotApplicable;
+		EAssetDocumentAnimationBootstrapDisposition::FrozenNotApplicable;
 	EAssetDocumentAnimationFinalDisposition FinalDisposition =
 		EAssetDocumentAnimationFinalDisposition::StableBlocker;
 	const TCHAR* FinalDiagnostic = TEXT("");
 };
 
-TConstArrayView<FAssetDocumentAnimationT0DecisionRecord>
-GetAssetDocumentAnimationT0DecisionRecords();
+TConstArrayView<FAssetDocumentAnimationAuthorityDecisionRecord>
+GetAssetDocumentAnimationAuthorityDecisionRecords();
 
-struct FAssetDocumentAnimationAuthorityGateEvidence
+struct FAssetDocumentAnimationAuthorityEvidence
 {
-	const TCHAR* GateId = TEXT("");
+	const TCHAR* GroupId = TEXT("");
 	const TCHAR* PublicModule = TEXT("");
 	const TCHAR* PublicHeader = TEXT("");
 	const TCHAR* ExportMacro = TEXT("");
@@ -66,7 +67,7 @@ struct FAssetDocumentAnimationAuthorityGateEvidence
 	bool bLocalAuthorityClosed = false;
 };
 
-TConstArrayView<FAssetDocumentAnimationAuthorityGateEvidence>
-GetAssetDocumentAnimationAuthorityGateEvidence();
+TConstArrayView<FAssetDocumentAnimationAuthorityEvidence>
+GetAssetDocumentAnimationAuthorityEvidence();
 
 #endif

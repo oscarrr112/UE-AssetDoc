@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Shared fixtures of the Physics Asset automation tests: /Game targets, the corpus (design §6.1: the engine's tutorial
 // mannequin, the template packs copied into /Game as creating a project from a template does, optional plugin

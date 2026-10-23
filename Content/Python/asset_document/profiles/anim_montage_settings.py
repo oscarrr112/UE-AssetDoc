@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Montage settings regions: validation, snapshot projection and lowering.
 
 Plain reflected fields lower to one generic Editor property batch step. Fields

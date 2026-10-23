@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Open-editor apply of the Niagara assets (Runtime/AssetDocumentOpenEditor.h, AssetDocumentNiagaraOpenEditor.cpp).
 //   UEAssetDoc.Niagara.OpenEditorApply.System      a system with a scratch pad, open in the system
@@ -499,8 +500,8 @@ bool FAssetDocumentNiagaraOpenEditorApplySystemTest::RunTest(const FString& Para
 	}
 	TestTrue(TEXT("the result reports the reopened editor"), HasDiagnostic(Applied, TEXT("Niagara.EditorReopened")));
 	{
-		// Trial 7: the reopened editor requests a compile (compile for edit); the result reported Dirty while
-		// the next inspect said UpToDate. The result waits for that compile and reports its outcome.
+		// The reopened editor requests a compile (compile for edit): the result waits for that compile and
+		// reports its outcome, the status the next inspect reports.
 		const FString Status = Applied.Compile.IsValid() ? Applied.Compile->GetStringField(TEXT("Status")) : FString();
 		AddInfo(FString::Printf(TEXT("compile status after the apply: %s"), *Status));
 		TestTrue(TEXT("the result's compile status is settled (not Dirty)"), Status.StartsWith(TEXT("UpToDate")) || Status == TEXT("Error"));

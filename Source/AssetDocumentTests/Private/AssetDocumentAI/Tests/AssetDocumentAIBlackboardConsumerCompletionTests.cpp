@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -491,9 +492,9 @@ TOptional<FFixture> MakeFixture(FAutomationTestBase& Test,
 		? TEXT("BT_ConsumerCompletion_") + FGuid::NewGuid().ToString(EGuidFormats::Digits)
 		: RequestedAssetName;
 	Fixture.Package.Reset(CreatePackage(*FString::Printf(
-		TEXT("/Game/AssetDocumentTests/P_AI/%s"), *AssetName)));
+		TEXT("/Game/AssetDocumentTests/AIProvider/%s"), *AssetName)));
 	Fixture.BlackboardPackage.Reset(bSeparateBlackboardPackage
-		? CreatePackage(*FString::Printf(TEXT("/Game/AssetDocumentTests/P_AI/%s_Blackboard"),
+		? CreatePackage(*FString::Printf(TEXT("/Game/AssetDocumentTests/AIProvider/%s_Blackboard"),
 			*AssetName))
 		: Fixture.Package.Get());
 	Fixture.Blackboard.Reset(NewObject<UBlackboardData>(Fixture.BlackboardPackage.Get(),
@@ -1691,7 +1692,7 @@ bool FAssetDocumentAIBlackboardConsumerCompletionRegistryCodecProofTest::RunTest
 		CaptureLoadedBehaviorTreeConsumerReceipt(*UnregisteredTarget).HasValue());
 
 	const FString IsolatedPackageName = FString::Printf(
-		TEXT("/Game/AssetDocumentTests/P_AI/BB_ConsumerCompletion_Isolated_%s"),
+		TEXT("/Game/AssetDocumentTests/AIProvider/BB_ConsumerCompletion_Isolated_%s"),
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 	const FString IsolatedFilename = FPackageName::LongPackageNameToFilename(
 		IsolatedPackageName, FPackageName::GetAssetPackageExtension());
@@ -1763,7 +1764,7 @@ bool FAssetDocumentAIBlackboardConsumerCompletionRegistryCodecProofTest::RunTest
 			return Asset.GetSoftObjectPath() == UnsavedTreePath;
 		}));
 	const FString UnloadedPackageName = FString::Printf(
-		TEXT("/Game/AssetDocumentTests/P_AI/BT_UnloadedReferencer_%s"),
+		TEXT("/Game/AssetDocumentTests/AIProvider/BT_UnloadedReferencer_%s"),
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 	UPackage* UnloadedPackage = CreatePackage(*UnloadedPackageName);
 	UBehaviorTree* UnloadedTree = NewObject<UBehaviorTree>(UnloadedPackage,
@@ -1871,19 +1872,17 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FAssetDocumentAIBlackboardConsumerCompletionSupportedEntryProofTest::RunTest(const FString&)
 {
 	using namespace AssetDocumentAIBlackboardConsumerCompletionTests;
-	// Test Design Scan:
+	// Test design:
 	// - Behavior under test: v1 local-key replacement completes real loaded BT
 	//   consumers inside one active Atomic transaction and rolls the same receipt
 	//   back after its late forward-completion terminals.
 	// - Candidate technique: public supported-entry state transitions.
 	// - Risk or gap: a direct handler/receipt test could pass while the v1 caller
 	//   publishes before capture, skips completion, or retries poisoned rollback.
-	// - Next RED test: invoke the public v1 entry through a real composition,
+	// - Test: invoke the public v1 entry through a real composition,
 	//   inject the lifecycle seams, and observe terminal/output/preimage state.
 	// - Expected observable outcome: capture is pre-effect; success/no-op share
 	//   one golden DTO; all completion failures are empty DerivedRefreshFailed.
-	// - Expected failure reason: the caller has no receipt wiring or rollback
-	//   wrapper at the required structural-publication lifecycle point.
 	TOptional<FFixture> OptionalFixture = MakeFixture(*this);
 	if (!OptionalFixture.IsSet()) return false;
 	FFixture& Fixture = OptionalFixture.GetValue();

@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// UEAssetDoc.Niagara.Apply.*: system Apply (N2 system level, N3 stacks) through the production
+// UEAssetDoc.Niagara.Apply.*: system Apply (system level, stacks) through the production
 // Service, the way the MCP tools send documents. Module stack free edits: AssetDocumentNiagaraStackTests.cpp.
 //   EditorEquivalence  free edits made with the Niagara editor's own API on one duplicate of a template system
 //                      (rename / disable / delete emitters, add an emitter from a template, emitter Details, the

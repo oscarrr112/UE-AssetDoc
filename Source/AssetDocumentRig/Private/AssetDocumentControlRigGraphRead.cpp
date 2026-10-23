@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Graph records of rig.controlrig.read.v1 (design §3.3, §3.5): the event graphs (models), the local function library
 // and the collapsed graphs inside them, one record per node, keyed by the model's own node names. Injected nodes

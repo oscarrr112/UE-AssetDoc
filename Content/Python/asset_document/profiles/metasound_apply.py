@@ -1,18 +1,21 @@
-"""Apply of the MetaSound Profiles (phases M1-M3: Sources, Patches and presets, graph pages).
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Apply of the MetaSound Profiles (Sources, Patches and presets, graph pages).
 
 The document is written the way the MetaSound editor writes it, through ``audio.metasound.edit.v1`` (one transaction
 per call, the asset's own document builder) and ``audio.metasound.compile.v1`` (registration as the editor does after
-its edits, then validation).  The apply is planned in phases, each against a fresh read of the asset:
+its edits, then validation).  The apply is planned in passes, each against a fresh read of the asset:
 
 1. the removal of pages no longer listed, the editor's open-time input template injection (when the read simulated
    one) and ``Interfaces``;
 2. ``Metadata``, members (``Inputs`` / ``Outputs``: add, rename by ``RenamedFrom``, fields, input widgets, page
    defaults) and each page's ``Variables`` (a type change is remove + add, as the editor does; their nodes come back
-   in phase 4);
+   in pass 4);
 3. kept nodes' classes: the editor's Update Node (``Version``) and node Details configuration (``Configuration``),
    which change their pins;
 4. per page: nodes (deletes, creates, settings, connections), comments; then the removal of members no longer listed;
-5. the pages the document adds (the Pages Details "+": a copy of the MetaSound's last page), then phases 2-4 again for
+5. the pages the document adds (the Pages Details "+": a copy of the MetaSound's last page), then passes 2-4 again for
    them.
 
 Graph ops name their page (``"page"``; Default when absent).  Pages must be pages of the project's
@@ -248,7 +251,7 @@ def phase_preset(body, live):
 
 
 # ---------------------------------------------------------------------------
-# Phase 1: open-time injection, interfaces
+# Interfaces pass: open-time injection, interfaces
 # ---------------------------------------------------------------------------
 def phase_interfaces(body, live):
     ops = []
@@ -271,7 +274,7 @@ def phase_interfaces(body, live):
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: metadata, members, variables
+# Members pass: metadata, members, variables
 # ---------------------------------------------------------------------------
 def _metadata_ops(body, live):
     if "Metadata" not in body:
@@ -312,7 +315,7 @@ def _renames(authored, records, interface, path):
 
 
 def _member_ops(body, live, region, output_node_ids):
-    """Adds, renames and field changes of Inputs or Outputs (removals are phase 3)."""
+    """Adds, renames and field changes of Inputs or Outputs (removals are in the graph pass)."""
     if region not in body:
         return []
     is_input = region == "Inputs"
@@ -402,7 +405,7 @@ def _variable_ops(graph, live, page=DEFAULT):
         path = f"{variables}/{common.escape(name)}"
         record = records.get(renames.get(name, name))
         if record is not None and "Type" in entry and entry["Type"] != record["type"]:
-            # The editor's type change: remove the variable and its nodes, add it again (phase 3 adds the nodes).
+            # The editor's type change: remove the variable and its nodes, add it again (the graph pass adds the nodes).
             ops.append((on_page({"op": "variable.remove", "name": record["name"]}, page), path))
             record = None
         if record is None:
@@ -447,7 +450,7 @@ def _live_pages(body, live):
 
 def phase_node_classes(body, live):
     """Kept nodes whose class version or configuration changes: the editor's Update Node and the node Details
-    configuration, before the graph phase plans connections against the pins they leave."""
+    configuration, before the graph pass plans connections against the pins they leave."""
     ops = []
     for page, graph in _live_pages(body, live):
         nodes = graph.get("Nodes", {})
@@ -489,13 +492,13 @@ def phase_members(body, live):
 
 def phase_pages(body, live):
     """The pages the document adds: the Pages Details "+" (AddGraphPage, a copy of the MetaSound's last page, which the
-    phases before have already brought to the document), then reconciled by phases 2-4 like any page."""
+    passes before have already brought to the document), then reconciled by passes 2-4 like any page."""
     return [({"op": "page.add", "name": page}, graph_path(page)) for page in body.get("Graphs", {})
             if page not in live.pages]
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: nodes, connections, comments, member removals
+# Graph pass: nodes, connections, comments, member removals
 # ---------------------------------------------------------------------------
 def _parse_source(source, path):
     if type(source) is not str or not source:

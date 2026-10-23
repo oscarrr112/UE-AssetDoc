@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // rig.suggest.v1: what the editors' automatic setup buttons would make, computed on a transient copy of the asset
 // (decision §8.5: suggestions are read-only Inspect facts; the document applies them). Never changes the asset: the

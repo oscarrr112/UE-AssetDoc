@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Raw reflected factory configuration kept in its own file. When an asset
 // class has no factory of its own, the editor's New-asset flow uses the

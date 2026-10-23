@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // audio.metasound.read.v1: the document of a MetaSound Source / Patch as the MetaSound editor shows it after
 // opening (FNormalizedDocument), as flat records the Python profile assembles into the Body (design §3).

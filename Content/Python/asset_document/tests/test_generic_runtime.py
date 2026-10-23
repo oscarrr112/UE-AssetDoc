@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import importlib.util
@@ -745,7 +748,7 @@ class BlackboardDataRuntimeTests(unittest.TestCase):
                 "Parent": None,
                 "Keys": (
                     {
-                        "Category": "G3",
+                        "Category": "Lifecycle",
                         "Description": "parent baseline",
                         "KeyTypeClass": {"Kind": "ClassRef", "Path": "/Script/AIModule.BlackboardKeyType_Int"},
                         "KeyTypeProperties": {"DefaultValue": 0},
@@ -1033,7 +1036,7 @@ class GenericRuntimeCutoverTests(unittest.TestCase):
                 "BlockedFragments": (
                     {
                         "kind": "EmbeddedObject",
-                        "code": "AD.G1.BLOCK.EDITOR.EMBEDDED_OBJECT_AUTHORITY",
+                        "code": "AD.BLOCK.EDITOR.EMBEDDED_OBJECT_AUTHORITY",
                     },
                 ),
             },

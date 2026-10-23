@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -26,7 +27,7 @@ struct FExpectedDecision
 	const TCHAR* PrimitiveId;
 	EAssetDocumentAnimationDecisionDisposition Disposition;
 	const TCHAR* ConsumerId;
-	const TCHAR* AuthorityGateId;
+	const TCHAR* AuthorityGroupId;
 	const TCHAR* StableBlockerDiagnostic;
 };
 
@@ -47,42 +48,42 @@ constexpr const TCHAR* AnimationProviderDesignConsumer =
 	TEXT("animation_provider_design");
 
 const FExpectedDecision ExpectedDecisions[] = {
-	{TEXT("animation.asset.preview_mesh.set.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("T0-ASSET"), NoStableBlockerDiagnostic},
-	{TEXT("animation.sequence.retarget_source_asset.set.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-ASSET"), TEXT("AD.PANIM.BLOCK.RETARGET_SOURCE_AUTHORITY")},
-    {TEXT("animation.sequence.retarget_source_asset.set.v2"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("T0-ASSET"), NoStableBlockerDiagnostic},
-    {TEXT("animation.sequence.retarget_source_name.set.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("T0-ASSET"), NoStableBlockerDiagnostic},
-    {TEXT("animation.sequence.compression.settings.set.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("T0-SEQUENCE"), NoStableBlockerDiagnostic},
-	{TEXT("animation.curve.float.enumerate.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("T0-DATA"), NoStableBlockerDiagnostic},
-	{TEXT("animation.curve.float.enumerate.v2"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("T0-DATA"), NoStableBlockerDiagnostic},
-	{TEXT("animation.curve.float.replace.v2"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("C0-EXACT"), NoStableBlockerDiagnostic},
-	{TEXT("animation.curve.float.replace.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-DATA"), TEXT("AD.PANIM.BLOCK.ROLLBACK_COMPOSITION")},
-	{TEXT("animation.notify_track.enumerate.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-TIMELINE"), TEXT("AD.PANIM.BLOCK.NOTIFY_LIBRARY_DEPENDENCY")},
-	{TEXT("animation.notify_track.replace.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-TIMELINE"), TEXT("AD.PANIM.BLOCK.NOTIFY_LIBRARY_DEPENDENCY")},
-	{TEXT("animation.notify_event.enumerate.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-TIMELINE"), TEXT("AD.PANIM.BLOCK.NOTIFY_LIBRARY_DEPENDENCY")},
-	{TEXT("animation.notify_event.remove.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-TIMELINE"), TEXT("AD.PANIM.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
-	{TEXT("animation.notify_event.add.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-TIMELINE"), TEXT("AD.PANIM.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
-	{TEXT("animation.sync_marker.enumerate.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-TIMELINE"), TEXT("AD.PANIM.BLOCK.NOTIFY_LIBRARY_DEPENDENCY")},
-	{TEXT("animation.sync_marker.replace.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-TIMELINE"), TEXT("AD.PANIM.BLOCK.NOTIFY_LIBRARY_DEPENDENCY")},
-	{TEXT("animation.metadata.enumerate.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("T0-METADATA"), NoStableBlockerDiagnostic},
-	{TEXT("animation.asset_metadata.replace.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-METADATA"), TEXT("AD.PANIM.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
-	{TEXT("animation.montage.section_metadata.replace.v1"), EAssetDocumentAnimationDecisionDisposition::FrozenG1StableBlocker, AnimationProviderDesignConsumer, TEXT("G1"), TEXT("AD.G1.BLOCK.ANIMATION.SECTION_METADATA_AUTHORITY")},
-	{TEXT("animation.asset_user_data.enumerate.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("T0-METADATA"), NoStableBlockerDiagnostic},
-	{TEXT("animation.asset_user_data.replace_managed.v1"), EAssetDocumentAnimationDecisionDisposition::FrozenG1StableBlocker, AnimationProviderDesignConsumer, TEXT("G1"), TEXT("AD.G1.BLOCK.ANIMATION.ASSET_USER_DATA_LIFECYCLE")},
-	{TEXT("animation.sequence.complete_edit.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-SEQUENCE"), TEXT("AD.PANIM.BLOCK.SEQUENCE_COMPLETION_AUTHORITY")},
-    {TEXT("animation.sequence.complete_edit.v2"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("T0-SEQUENCE"), NoStableBlockerDiagnostic},
+	{TEXT("animation.asset.preview_mesh.set.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("ANIMATION-ASSET"), NoStableBlockerDiagnostic},
+	{TEXT("animation.sequence.retarget_source_asset.set.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-ASSET"), TEXT("AD.ANIMATION.BLOCK.RETARGET_SOURCE_AUTHORITY")},
+    {TEXT("animation.sequence.retarget_source_asset.set.v2"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("ANIMATION-ASSET"), NoStableBlockerDiagnostic},
+    {TEXT("animation.sequence.retarget_source_name.set.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("ANIMATION-ASSET"), NoStableBlockerDiagnostic},
+    {TEXT("animation.sequence.compression.settings.set.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("ANIMATION-SEQUENCE"), NoStableBlockerDiagnostic},
+	{TEXT("animation.curve.float.enumerate.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("ANIMATION-DATA"), NoStableBlockerDiagnostic},
+	{TEXT("animation.curve.float.enumerate.v2"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("ANIMATION-DATA"), NoStableBlockerDiagnostic},
+	{TEXT("animation.curve.float.replace.v2"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("ANIMATION-CURVE-EXACT"), NoStableBlockerDiagnostic},
+	{TEXT("animation.curve.float.replace.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-DATA"), TEXT("AD.ANIMATION.BLOCK.ROLLBACK_COMPOSITION")},
+	{TEXT("animation.notify_track.enumerate.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-TIMELINE"), TEXT("AD.ANIMATION.BLOCK.NOTIFY_LIBRARY_DEPENDENCY")},
+	{TEXT("animation.notify_track.replace.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-TIMELINE"), TEXT("AD.ANIMATION.BLOCK.NOTIFY_LIBRARY_DEPENDENCY")},
+	{TEXT("animation.notify_event.enumerate.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-TIMELINE"), TEXT("AD.ANIMATION.BLOCK.NOTIFY_LIBRARY_DEPENDENCY")},
+	{TEXT("animation.notify_event.remove.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-TIMELINE"), TEXT("AD.ANIMATION.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
+	{TEXT("animation.notify_event.add.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-TIMELINE"), TEXT("AD.ANIMATION.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
+	{TEXT("animation.sync_marker.enumerate.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-TIMELINE"), TEXT("AD.ANIMATION.BLOCK.NOTIFY_LIBRARY_DEPENDENCY")},
+	{TEXT("animation.sync_marker.replace.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-TIMELINE"), TEXT("AD.ANIMATION.BLOCK.NOTIFY_LIBRARY_DEPENDENCY")},
+	{TEXT("animation.metadata.enumerate.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("ANIMATION-METADATA"), NoStableBlockerDiagnostic},
+	{TEXT("animation.asset_metadata.replace.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-METADATA"), TEXT("AD.ANIMATION.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
+	{TEXT("animation.montage.section_metadata.replace.v1"), EAssetDocumentAnimationDecisionDisposition::FrozenStableBlocker, AnimationProviderDesignConsumer, TEXT("FROZEN-AUTHORITY"), TEXT("AD.BLOCK.ANIMATION.SECTION_METADATA_AUTHORITY")},
+	{TEXT("animation.asset_user_data.enumerate.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("ANIMATION-METADATA"), NoStableBlockerDiagnostic},
+	{TEXT("animation.asset_user_data.replace_managed.v1"), EAssetDocumentAnimationDecisionDisposition::FrozenStableBlocker, AnimationProviderDesignConsumer, TEXT("FROZEN-AUTHORITY"), TEXT("AD.BLOCK.ANIMATION.ASSET_USER_DATA_LIFECYCLE")},
+	{TEXT("animation.sequence.complete_edit.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-SEQUENCE"), TEXT("AD.ANIMATION.BLOCK.SEQUENCE_COMPLETION_AUTHORITY")},
+    {TEXT("animation.sequence.complete_edit.v2"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("ANIMATION-SEQUENCE"), NoStableBlockerDiagnostic},
 	{TEXT("animation.montage.slot_tracks.replace.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("MONTAGE-STRUCTURAL"), NoStableBlockerDiagnostic},
 	{TEXT("animation.montage.sections.mutate.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("MONTAGE-STRUCTURAL"), NoStableBlockerDiagnostic},
-	{TEXT("animation.montage.profile.snapshot.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("M5-PROFILE"), NoStableBlockerDiagnostic},
-	{TEXT("animation.montage.sync_cache.complete.v1"), EAssetDocumentAnimationDecisionDisposition::FrozenG1StableBlocker, AnimationProviderDesignConsumer, TEXT("G1"), TEXT("AD.G1.BLOCK.ANIMATION.SYNC_CACHE_AUTHORITY")},
-	{TEXT("animation.montage.time_stretch.configure_bake.v1"), EAssetDocumentAnimationDecisionDisposition::FrozenG1StableBlocker, AnimationProviderDesignConsumer, TEXT("G1"), TEXT("AD.G1.BLOCK.ANIMATION.TIME_STRETCH_CONFIG_AUTHORITY")},
-	{TEXT("animation.linked_anim_layer.action.enumerate.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-GRAPH"), TEXT("AD.PANIM.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
-	{TEXT("animation.anim_graph.lifecycle.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-GRAPH"), TEXT("AD.PANIM.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
-	{TEXT("animation.state_machine.node.create.v1"), EAssetDocumentAnimationDecisionDisposition::FrozenG1StableBlocker, AnimationProviderDesignConsumer, TEXT("G1"), TEXT("AD.G1.BLOCK.ANIMATION.STATE_MACHINE_NODE_AUTHORITY")},
-	{TEXT("animation.linked_anim_layer.edit.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-GRAPH"), TEXT("AD.PANIM.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
-	{TEXT("animation.anim_parent_override.replace.v1"), EAssetDocumentAnimationDecisionDisposition::FrozenG1StableBlocker, AnimationProviderDesignConsumer, TEXT("G1"), TEXT("AD.G1.BLOCK.ANIMATION.PARENT_OVERRIDE_LIFECYCLE")},
-	{TEXT("animation.state_transition.connect.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-GRAPH"), TEXT("AD.PANIM.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
-	{TEXT("animation.asset.skeleton.set.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("T0-ASSET"), NoStableBlockerDiagnostic},
-	{TEXT("animation.state_entry.connect.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("T0-GRAPH"), TEXT("AD.PANIM.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
+	{TEXT("animation.montage.profile.snapshot.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("MONTAGE-PROFILE"), NoStableBlockerDiagnostic},
+	{TEXT("animation.montage.sync_cache.complete.v1"), EAssetDocumentAnimationDecisionDisposition::FrozenStableBlocker, AnimationProviderDesignConsumer, TEXT("FROZEN-AUTHORITY"), TEXT("AD.BLOCK.ANIMATION.SYNC_CACHE_AUTHORITY")},
+	{TEXT("animation.montage.time_stretch.configure_bake.v1"), EAssetDocumentAnimationDecisionDisposition::FrozenStableBlocker, AnimationProviderDesignConsumer, TEXT("FROZEN-AUTHORITY"), TEXT("AD.BLOCK.ANIMATION.TIME_STRETCH_CONFIG_AUTHORITY")},
+	{TEXT("animation.linked_anim_layer.action.enumerate.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-GRAPH"), TEXT("AD.ANIMATION.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
+	{TEXT("animation.anim_graph.lifecycle.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-GRAPH"), TEXT("AD.ANIMATION.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
+	{TEXT("animation.state_machine.node.create.v1"), EAssetDocumentAnimationDecisionDisposition::FrozenStableBlocker, AnimationProviderDesignConsumer, TEXT("FROZEN-AUTHORITY"), TEXT("AD.BLOCK.ANIMATION.STATE_MACHINE_NODE_AUTHORITY")},
+	{TEXT("animation.linked_anim_layer.edit.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-GRAPH"), TEXT("AD.ANIMATION.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
+	{TEXT("animation.anim_parent_override.replace.v1"), EAssetDocumentAnimationDecisionDisposition::FrozenStableBlocker, AnimationProviderDesignConsumer, TEXT("FROZEN-AUTHORITY"), TEXT("AD.BLOCK.ANIMATION.PARENT_OVERRIDE_LIFECYCLE")},
+	{TEXT("animation.state_transition.connect.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-GRAPH"), TEXT("AD.ANIMATION.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
+	{TEXT("animation.asset.skeleton.set.v1"), EAssetDocumentAnimationDecisionDisposition::Admitted, AnimationProfileConsumer, TEXT("ANIMATION-ASSET"), NoStableBlockerDiagnostic},
+	{TEXT("animation.state_entry.connect.v1"), EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker, AnimationProfileConsumer, TEXT("ANIMATION-GRAPH"), TEXT("AD.ANIMATION.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")},
 };
 
 const FExpectedDescriptor ExpectedDescriptors[] = {
@@ -536,7 +537,7 @@ bool FAssetDocumentAnimationProviderDescriptorsTest::RunTest(const FString&)
 		static_cast<int32>(UE_ARRAY_COUNT(ExpectedDecisions)));
 	int32 AdmittedCount = 0;
 	int32 OrdinaryStableBlockerCount = 0;
-	int32 FrozenG1StableBlockerCount = 0;
+	int32 FrozenStableBlockerCount = 0;
 	for (int32 Index = 0; Index < Decisions.Num()
 		&& Index < UE_ARRAY_COUNT(ExpectedDecisions); ++Index)
 	{
@@ -553,8 +554,8 @@ bool FAssetDocumentAnimationProviderDescriptorsTest::RunTest(const FString&)
 			Expected.Disposition);
 		TestEqual(TEXT("decision consumer is immutable"), Actual.ConsumerId,
 			FString(Expected.ConsumerId));
-		TestEqual(TEXT("decision authority gate is immutable"), Actual.AuthorityGateId,
-			FString(Expected.AuthorityGateId));
+		TestEqual(TEXT("decision authority group is immutable"), Actual.AuthorityGroupId,
+			FString(Expected.AuthorityGroupId));
 		TestEqual(TEXT("decision blocker diagnostic is immutable"),
 			Actual.StableBlockerDiagnostic,
 			FString(Expected.StableBlockerDiagnostic));
@@ -567,16 +568,16 @@ bool FAssetDocumentAnimationProviderDescriptorsTest::RunTest(const FString&)
 		case EAssetDocumentAnimationDecisionDisposition::OrdinaryStableBlocker:
 			++OrdinaryStableBlockerCount;
 			break;
-		case EAssetDocumentAnimationDecisionDisposition::FrozenG1StableBlocker:
-			++FrozenG1StableBlockerCount;
+		case EAssetDocumentAnimationDecisionDisposition::FrozenStableBlocker:
+			++FrozenStableBlockerCount;
 			break;
 		}
 	}
 	TestEqual(TEXT("existing thirteen operations and supplied compression leaf are admitted"), AdmittedCount, 14);
 	TestEqual(TEXT("sixteen ordinary rows remain stable blockers"),
 		OrdinaryStableBlockerCount, 16);
-	TestEqual(TEXT("six frozen G1 rows remain stable blockers"),
-		FrozenG1StableBlockerCount, 6);
+	TestEqual(TEXT("six frozen rows remain stable blockers"),
+		FrozenStableBlockerCount, 6);
 	TestEqual(TEXT("only admitted decisions produce descriptors"), Descriptors.Num(), 14);
 	TestEqual(TEXT("only admitted decisions produce bindings"), Bindings.Num(), 14);
 
@@ -838,7 +839,7 @@ bool FAssetDocumentAnimationProviderAssetLifecycleTest::RunTest(const FString&)
 		HasDiagnostic(PreviewWithoutTransaction.Diagnostics, TEXTVIEW("AnimationProvider.TransactionUnavailable")));
 	AssertStableBlocker(*this, *Provider, Handles,
 		TEXT("animation.sequence.retarget_source_asset.set.v1"),
-		TEXT("AD.PANIM.BLOCK.RETARGET_SOURCE_AUTHORITY"));
+		TEXT("AD.ANIMATION.BLOCK.RETARGET_SOURCE_AUTHORITY"));
 	TestEqual(TEXT("blocked asset mutations do not issue child handles"),
 		Handles.GetIssueCount(), 0);
 	TestEqual(TEXT("blocked asset mutations do not invalidate handles"),
@@ -861,7 +862,7 @@ bool FAssetDocumentAnimationProviderMetadataLifecycleTest::RunTest(const FString
 	FEnumerationHandleResolver BlockedHandles(BlockedInvocation);
 	AssertStableBlocker(*this, *Provider, BlockedHandles,
 		TEXT("animation.asset_metadata.replace.v1"),
-		TEXT("AD.PANIM.BLOCK.RUNTIME_HANDLE_BOOTSTRAP"));
+		TEXT("AD.ANIMATION.BLOCK.RUNTIME_HANDLE_BOOTSTRAP"));
 
 	UAnimSequence* EmptyAsset = NewObject<UAnimSequence>(GetTransientPackage(),
 		TEXT("AssetDocumentAnimationEmptyMetadata"), RF_Transient);

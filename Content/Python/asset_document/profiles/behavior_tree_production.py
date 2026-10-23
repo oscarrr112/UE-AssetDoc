@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Legacy Tree.Root semantics implemented through finite AI provider operations."""
 from __future__ import annotations
 

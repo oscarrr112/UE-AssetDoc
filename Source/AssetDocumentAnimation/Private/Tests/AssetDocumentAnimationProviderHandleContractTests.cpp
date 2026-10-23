@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -72,7 +73,7 @@ class FWrongPayload final : public IAssetDocumentNativeHandlePayload
 public:
 	virtual FName GetPayloadTypeId() const override
 	{
-		return TEXT("p-anim.wrong-editor-asset-payload.v1");
+		return TEXT("animation.wrong-editor-asset-payload.v1");
 	}
 
 	virtual bool IsAlive() const override
@@ -96,7 +97,7 @@ bool HasDiagnostic(
 }
 
 bool IsDecision(
-	const FAssetDocumentAnimationT0DecisionRecord& Decision,
+	const FAssetDocumentAnimationAuthorityDecisionRecord& Decision,
 	FStringView DecisionId)
 {
 	return FStringView(Decision.DecisionId) == DecisionId;
@@ -169,7 +170,7 @@ bool FAssetDocumentAnimationProviderHandleContractTest::RunTest(const FString&)
 		IdentityCallbackCount,
 		0);
 
-	int32 FrozenG1NotApplicableCount = 0;
+	int32 FrozenNotApplicableCount = 0;
 	int32 OrdinaryCandidateCount = 0;
 	int32 MutatingCandidateCount = 0;
 	int32 ReadOnlyCandidateCount = 0;
@@ -182,18 +183,18 @@ bool FAssetDocumentAnimationProviderHandleContractTest::RunTest(const FString&)
 	int32 GraphOrNodeBootstrapCount = 0;
 	int32 AdmittedCount = 0;
 	int32 OrdinaryStableBlockerCount = 0;
-	for (const FAssetDocumentAnimationT0DecisionRecord& Decision :
-		GetAssetDocumentAnimationT0DecisionRecords())
+	for (const FAssetDocumentAnimationAuthorityDecisionRecord& Decision :
+		GetAssetDocumentAnimationAuthorityDecisionRecords())
 	{
-		if (Decision.bFrozenG1Blocker)
+		if (Decision.bFrozenBlocker)
 		{
-			++FrozenG1NotApplicableCount;
+			++FrozenNotApplicableCount;
 			TestEqual(
 				FString::Printf(
-					TEXT("%s is frozen G1 bootstrap-not-applicable"),
+					TEXT("%s is frozen bootstrap-not-applicable"),
 					Decision.DecisionId),
 				Decision.BootstrapDisposition,
-				EAssetDocumentAnimationBootstrapDisposition::FrozenG1NotApplicable);
+				EAssetDocumentAnimationBootstrapDisposition::FrozenNotApplicable);
 			TestEqual(
 				FString::Printf(
 					TEXT("%s is a frozen stable blocker"),
@@ -202,7 +203,7 @@ bool FAssetDocumentAnimationProviderHandleContractTest::RunTest(const FString&)
 				EAssetDocumentAnimationFinalDisposition::StableBlocker);
 			TestEqual(
 				FString::Printf(
-					TEXT("%s preserves its byte-exact G1 diagnostic"),
+					TEXT("%s preserves its byte-exact frozen diagnostic"),
 					Decision.DecisionId),
 				FString(Decision.FinalDiagnostic),
 				FString(Decision.RowDiagnostic));
@@ -231,11 +232,11 @@ bool FAssetDocumentAnimationProviderHandleContractTest::RunTest(const FString&)
 					TEXT("%s preserves the runtime handle bootstrap blocker"),
 					Decision.DecisionId),
 				FString(Decision.FinalDiagnostic),
-				FString(TEXT("AD.PANIM.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")));
+				FString(TEXT("AD.ANIMATION.BLOCK.RUNTIME_HANDLE_BOOTSTRAP")));
 			break;
-		case EAssetDocumentAnimationBootstrapDisposition::FrozenG1NotApplicable:
+		case EAssetDocumentAnimationBootstrapDisposition::FrozenNotApplicable:
 			AddError(FString::Printf(
-				TEXT("%s cannot be G1 bootstrap-not-applicable"),
+				TEXT("%s cannot be frozen bootstrap-not-applicable"),
 				Decision.DecisionId));
 			break;
 		}
@@ -313,7 +314,7 @@ bool FAssetDocumentAnimationProviderHandleContractTest::RunTest(const FString&)
 				TestEqual(
 					TEXT("curve float replace preserves the rollback composition blocker"),
 					FString(Decision.FinalDiagnostic),
-					FString(TEXT("AD.PANIM.BLOCK.ROLLBACK_COMPOSITION")));
+					FString(TEXT("AD.ANIMATION.BLOCK.ROLLBACK_COMPOSITION")));
 			}
 			else if (Decision.BootstrapDisposition
 				== EAssetDocumentAnimationBootstrapDisposition::VerifiedAssetIdentityReady)
@@ -328,10 +329,10 @@ bool FAssetDocumentAnimationProviderHandleContractTest::RunTest(const FString&)
 		}
 	}
 
-	TestEqual(TEXT("frozen T0 decision closure"),
-		GetAssetDocumentAnimationT0DecisionRecords().Num(), 31);
-	TestEqual(TEXT("frozen G1 bootstrap-not-applicable candidates"),
-		FrozenG1NotApplicableCount, 6);
+	TestEqual(TEXT("frozen decision closure"),
+		GetAssetDocumentAnimationAuthorityDecisionRecords().Num(), 31);
+	TestEqual(TEXT("frozen bootstrap-not-applicable candidates"),
+		FrozenNotApplicableCount, 6);
 	TestEqual(TEXT("ordinary candidates"), OrdinaryCandidateCount, 25);
 	TestEqual(TEXT("ordinary mutating candidates"), MutatingCandidateCount, 17);
 	TestEqual(TEXT("ordinary read-only candidates"), ReadOnlyCandidateCount, 8);

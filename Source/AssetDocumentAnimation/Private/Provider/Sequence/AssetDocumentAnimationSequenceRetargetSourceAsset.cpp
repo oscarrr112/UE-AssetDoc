@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #include "Provider/Sequence/AssetDocumentAnimationSequenceRetargetSourceAsset.h"
 #include "Provider/Sequence/AssetDocumentAnimationSequenceRetargetSourceAssetState.h"
 #include "Provider/Sequence/AssetDocumentAnimationSequenceRetargetReferencesComposition.h"

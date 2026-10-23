@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // add_component / remove_component / reparent_component: the Details panel's
 // component tree for a placed actor (instance components), through

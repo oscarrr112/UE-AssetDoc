@@ -1,9 +1,11 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentEditorSync.h"
 #include "AssetDocumentModule.h"
 #include "AssetDocumentRuntimeModule.h"
 #include "AssetDocumentService.h"
+#include "AssetDocumentSettings.h"
 #include "AssetDocumentSidecar.h"
 
 #include "AssetDocumentPropertyAdapter.h"
@@ -1158,6 +1160,68 @@ bool FAssetDocumentApplyFileTest::RunTest(const FString& Parameters)
 	CleanupTestAsset(MismatchTarget);
 	TestTrue(TEXT("Cleans up ApplyFile test directory"), FileManager.DeleteDirectory(*TestDirectory, false, true));
 
+	return true;
+}
+
+// An apply whose document targets the plugin's own settings object (or its class's package) is refused: the
+// settings, their default object and their config file stay unchanged.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAssetDocumentApplyProtectedSettingsTargetTest,
+	"UEAssetDoc.Settings.ProtectedApplyTarget",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAssetDocumentApplyProtectedSettingsTargetTest::RunTest(const FString& Parameters)
+{
+	UAssetDocumentSettings* PluginSettings = UAssetDocumentSettings::Get();
+	FAssetDocumentService* ActiveService = RequireActiveAssetDocumentService(*this);
+	if (!TestNotNull(TEXT("the plugin settings"), PluginSettings) || ActiveService == nullptr)
+	{
+		return false;
+	}
+	const bool bExecuteBefore = PluginSettings->bEnableExecutePython;
+	const bool bDeleteBefore = PluginSettings->bEnableDeleteAssets;
+	const bool bTokenBefore = PluginSettings->bRequireAuthToken;
+	PluginSettings->bEnableExecutePython = false;
+	PluginSettings->bEnableDeleteAssets = false;
+	PluginSettings->bRequireAuthToken = true;
+	const FString IniFile = FPaths::ConvertRelativePathToFull(PluginSettings->GetDefaultConfigFilename());
+	FString IniBefore;
+	FFileHelper::LoadFileToString(IniBefore, *IniFile);
+
+	const FString TestDirectory = MakeFullNormalizedPath(FPaths::Combine(FPaths::ProjectContentDir(), MakeUniqueTestFolderName()));
+	IFileManager::Get().MakeDirectory(*TestDirectory, true);
+	const TCHAR* const Targets[] = {TEXT("/Script/AssetDocumentServer.Default__AssetDocumentSettings"), TEXT("/Script/AssetDocumentServer"),
+		TEXT("/Script/AssetDocumentServer.AssetDocumentSettings")};
+	int32 Index = 0;
+	for (const TCHAR* Target : Targets)
+	{
+		for (const TCHAR* Action : {TEXT("Update"), TEXT("CreateOrUpdate")})
+		{
+			TSharedPtr<FJsonObject> Document = MakeApplyDocument(Target, TEXT("/Script/AssetDocumentServer.AssetDocumentSettings"), Action);
+			SetProperty(Document, TEXT("bEnableExecutePython"), MakeShared<FJsonValueBoolean>(true));
+			SetProperty(Document, TEXT("bEnableDeleteAssets"), MakeShared<FJsonValueBoolean>(true));
+			SetProperty(Document, TEXT("bRequireAuthToken"), MakeShared<FJsonValueBoolean>(false));
+			const FString FilePath = FPaths::Combine(TestDirectory, FString::Printf(TEXT("Settings%d.assetdoc.json"), Index++));
+			TestTrue(TEXT("writes the document"), WriteJsonObjectToFile(Document, FilePath));
+			FAssetDocumentApplyFileRequest Request;
+			Request.FilePath = FilePath;
+			Request.bSaveAsset = true;
+			const FAssetDocumentResult Result = ActiveService->ApplyFile(Request);
+			AddInfo(FString::Printf(TEXT("%s %s: %s"), Target, Action, *Result.Message));
+			TestFalse(*FString::Printf(TEXT("an apply to %s (%s) is refused"), Target, Action), Result.IsSuccess());
+		}
+	}
+	TestFalse(TEXT("execute_python stays off"), PluginSettings->bEnableExecutePython);
+	TestFalse(TEXT("delete_assets stays off"), PluginSettings->bEnableDeleteAssets);
+	TestTrue(TEXT("the auth token stays required"), PluginSettings->bRequireAuthToken);
+	FString IniAfter;
+	FFileHelper::LoadFileToString(IniAfter, *IniFile);
+	TestEqual(TEXT("the config file is unchanged"), IniAfter, IniBefore);
+
+	IFileManager::Get().DeleteDirectory(*TestDirectory, false, true);
+	PluginSettings->bEnableExecutePython = bExecuteBefore;
+	PluginSettings->bEnableDeleteAssets = bDeleteBefore;
+	PluginSettings->bRequireAuthToken = bTokenBefore;
 	return true;
 }
 

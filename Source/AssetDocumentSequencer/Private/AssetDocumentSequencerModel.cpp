@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The document structure of a sequence (design §3.2, §3.4.2, §3.5): bindings as a tree in Sequencer's order with
 // their names, binding paths and document paths; tracks per scope with type tokens and identities; folders and their

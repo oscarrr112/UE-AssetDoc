@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Material / MaterialFunction Profiles: document validation, class labels, cycle detection, op planning,
 compile-state rule, Extract shape, Diff and primitive-path mapping.  The editor side (expression creation,
 connections, Details edits, compile, rollback) is covered end to end by UEAssetDoc.Material.*."""

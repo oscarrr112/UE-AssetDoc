@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 #if WITH_DEV_AUTOMATION_TESTS
 #include "AssetDocumentAIPrimitiveProvider.h"
 #include "Provider/AssetDocumentAIPrimitiveHandler.h"
@@ -103,7 +104,7 @@ bool FAssetDocumentAIBindingSelectorTest::RunTest(const FString&)
  if (!TestEqual(TEXT("registered AI provider is available in the normal Editor"), Provider->InspectAvailability().State,
   EAssetDocumentProviderAvailabilityState::Available)) return false;
  UClass* Class = LoadClass<UBTTaskNode>(nullptr, TEXT("/Script/AssetDocumentTests.AssetDocumentSelectorTaskTestNode"));
- if (!TestNotNull(TEXT("actual Task6 selector fixture"), Class)) return false;
+ if (!TestNotNull(TEXT("actual selector fixture"), Class)) return false;
  UObject* CDO = Class->GetDefaultObject(); TArray<uint8> Before, After;
  if (!TestTrue(TEXT("CDO authored preimage"), Snapshot(*CDO, Before))) return false;
  TStrongObjectPtr<UPackage> Package(CreatePackage(*(TEXT("/Temp/AssetDocumentAI/BindingSelector_") + FGuid::NewGuid().ToString(EGuidFormats::Digits))));

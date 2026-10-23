@@ -146,7 +146,8 @@ local by default:
 - Requests that send data must be `application/json`, which a web page cannot send to another origin without a CORS
   preflight; the server answers none.
 - A bearer token can be required, and `execute_python` and `delete_assets` can be switched off in Project Settings.
-  Both are on by default.
+  Both are on by default. The switches are not a sandbox: a client that can connect can still make the editor run
+  code (a Blueprint it authors runs in Play In Editor), so who can connect is the boundary.
 - Remote connections are off; turning them on always requires the token.
 
 Treat access to the endpoint like a shell session of the editor's user. [SECURITY.md](../SECURITY.md) says what is

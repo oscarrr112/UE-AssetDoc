@@ -1,4 +1,7 @@
-"""Module stack planning of profile.niagara_system.v1 (N3): module lists, Set Parameters modules, inputs, event
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Module stack planning of profile.niagara_system.v1: module lists, Set Parameters modules, inputs, event
 handlers, simulation stages and lightweight emitters, turned into ``fx.niagara.edit.v1`` stack ops.
 
 Semantics (MCP/schemas/assetdocument/Niagara.md):

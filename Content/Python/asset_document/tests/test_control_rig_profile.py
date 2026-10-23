@@ -1,4 +1,7 @@
-"""Control Rig Profile (phases CR0 - CR4): assembling the Body from rig.controlrig.read.v1 records, the paged read
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Control Rig Profile: assembling the Body from rig.controlrig.read.v1 records, the paged read
 with its token, canonical form and refusals, Diff, and the apply planning (refusals before any write, op batches per
 phase including the graph and function phases, error paths, compile outcome). The editor side (read and edit primitives, compile, fidelity,
 free edits, rollback, undo) is covered by UEAssetDoc.ControlRig.*."""

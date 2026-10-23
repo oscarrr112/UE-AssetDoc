@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // IK Rig apply (design §6, phase R1):
 // UEAssetDoc.IKRig.Fidelity: §6.2 on the editor-built rig fixture and the corpus rigs: extract,
@@ -406,7 +407,7 @@ bool FAssetDocumentIKRigFromScratchTest::RunTest(const FString& Parameters)
 	}), TEXT("IKRig.UnknownSolverType"), TEXT("/Body/Solvers/2/Type"), TEXT("unknown solver type"));
 	ExpectRefused(*this, Target, Edited([](const TSharedPtr<FJsonObject>& Body)
 	{
-		// The goal is added (phase 3) and the solver connected before the limb solver refuses a second goal: rolled back.
+		// The goal is added (the goals pass) and the solver connected before the limb solver refuses a second goal: rolled back.
 		Body->GetObjectField(TEXT("Goals"))->SetObjectField(TEXT("Extra"), Parse(TEXT(R"({"Bone": "head"})")));
 		Body->GetArrayField(TEXT("Solvers"))[1]->AsObject()->GetObjectField(TEXT("Goals"))->SetObjectField(TEXT("LeftFootIK"), MakeShared<FJsonObject>());
 	}), TEXT("IKRig.SolverGoalLimit"), TEXT("/Body/Solvers/1/Goals/LeftFootIK"), TEXT("second goal on a limb solver"));

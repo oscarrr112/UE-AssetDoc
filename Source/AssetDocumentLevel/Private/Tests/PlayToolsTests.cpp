@@ -1,6 +1,8 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "CoreMinimal.h"
+#include "AssetDocumentSettings.h"
 #include "Components/ActorComponent.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraphSchema_K2.h"
@@ -12,7 +14,9 @@
 #include "Engine/StaticMeshActor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "GameMapsSettings.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerInput.h"
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
 #include "InputMappingContext.h"
@@ -23,6 +27,7 @@
 #include "K2Node_FunctionResult.h"
 #include "K2Node_VariableSet.h"
 #include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetMathLibrary.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -31,6 +36,7 @@
 #include "Particles/ParticleSystem.h"
 #include "Particles/ParticleSystemComponent.h"
 #include "Sound/SoundBase.h"
+#include "Play/PlayCommandGuard.h"
 #include "Play/PlayQuery.h"
 #include "Play/PlaySession.h"
 #include "Tests/AutomationCommon.h"
@@ -1197,4 +1203,425 @@ bool FAssetDocumentPlayAudioTest::RunTest(const FString& Parameters)
 	}));
 	return true;
 }
+namespace AssetDocumentPlayToolsTests
+{
+// An Actor Blueprint with an object variable "Held" (an object reference a game could hold, or a document could set),
+// a boolean "bTouched" and a function "ConsoleCommand(Command: String)" (named like the controller's console entry).
+UBlueprint* NewHolderBlueprint()
+{
+	UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(AActor::StaticClass(), GetTransientPackage(),
+		MakeUniqueObjectName(GetTransientPackage(), UBlueprint::StaticClass(), TEXT("BP_PlayProtectedHolder")), BPTYPE_Normal,
+		UBlueprint::StaticClass(), UBlueprintGeneratedClass::StaticClass());
+	FEdGraphPinType ObjectType;
+	ObjectType.PinCategory = UEdGraphSchema_K2::PC_Object;
+	ObjectType.PinSubCategoryObject = UObject::StaticClass();
+	FBlueprintEditorUtils::AddMemberVariable(Blueprint, TEXT("Held"), ObjectType);
+	FEdGraphPinType BoolType;
+	BoolType.PinCategory = UEdGraphSchema_K2::PC_Boolean;
+	FBlueprintEditorUtils::AddMemberVariable(Blueprint, TEXT("bTouched"), BoolType);
+	UEdGraph* Graph = FBlueprintEditorUtils::CreateNewGraph(Blueprint, TEXT("ConsoleCommand"), UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+	FBlueprintEditorUtils::AddFunctionGraph<UClass>(Blueprint, Graph, /*bIsUserCreated*/ true, nullptr);
+	TArray<UK2Node_FunctionEntry*> Entries;
+	Graph->GetNodesOfClass(Entries);
+	if (!Entries.IsEmpty())
+	{
+		FEdGraphPinType StringType;
+		StringType.PinCategory = UEdGraphSchema_K2::PC_String;
+		Entries[0]->CreateUserDefinedPin(TEXT("Command"), StringType, EGPD_Output);
+	}
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection);
+	return Blueprint;
+}
+
+struct FProtectedSettingsState
+{
+	TStrongObjectPtr<UBlueprint> Blueprint;
+	bool bExecuteBefore = true;
+	bool bDeleteBefore = true;
+};
+} // namespace AssetDocumentPlayToolsTests
+
+// The play tools cannot change the plugin's own server and security settings: a console command that names them
+// ("set <object> <property> <value>", at start or in the session), a function argument that does (ServerExec runs a
+// console command), an object value that is their settings object, and a set through an object variable that holds it
+// are refused, and execute_python and delete_assets stay switched off. Functions that run console commands are not
+// called whatever their arguments (ServerExec with a class name built in Python, a function named ConsoleCommand,
+// an exec function taking text), and a key whose debug key binding runs Python is not pressed.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentPlayProtectedSettingsTest,
+	"UEAssetDoc.Level.Play.ProtectedSettings",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentPlayProtectedSettingsTest::RunTest(const FString& Parameters)
+{
+	using namespace AssetDocumentPlayToolsTests;
+	UAssetDocumentSettings* PluginSettings = UAssetDocumentSettings::Get();
+	if (!TestNotNull(TEXT("the plugin settings"), PluginSettings))
+	{
+		return false;
+	}
+	TSharedRef<FProtectedSettingsState> State = MakeShared<FProtectedSettingsState>();
+	State->bExecuteBefore = PluginSettings->bEnableExecutePython;
+	State->bDeleteBefore = PluginSettings->bEnableDeleteAssets;
+	PluginSettings->bEnableExecutePython = false;
+	PluginSettings->bEnableDeleteAssets = false;
+	const auto StillOff = [this, PluginSettings](const TCHAR* Stage)
+	{
+		TestFalse(*FString::Printf(TEXT("%s: execute_python stays off"), Stage), PluginSettings->bEnableExecutePython);
+		TestFalse(*FString::Printf(TEXT("%s: delete_assets stays off"), Stage), PluginSettings->bEnableDeleteAssets);
+	};
+
+	// Checked before a session is needed.
+	const FLevelToolResult ConsoleRefused = Play::RunPlayFromBody(
+		TEXT("{\"action\": \"console\", \"command\": \"setnopec AssetDocumentSettings bEnableDeleteAssets 1\"}"));
+	TestTrue(*FString::Printf(TEXT("a console command naming the settings is refused (%s)"), *Codes(ConsoleRefused)),
+		HasCode(ConsoleRefused, TEXT("Play.CommandRefused")));
+	StillOff(TEXT("before play"));
+
+	{
+		TGuardValue<bool> Unattended(GIsRunningUnattendedScript, true);
+		GEditor->NewMap(false);
+	}
+	UWorld* World = GetEditorWorld();
+	if (!TestNotNull(TEXT("editor world"), World))
+	{
+		PluginSettings->bEnableExecutePython = State->bExecuteBefore;
+		PluginSettings->bEnableDeleteAssets = State->bDeleteBefore;
+		return false;
+	}
+	State->Blueprint.Reset(NewHolderBlueprint());
+	AActor* Holder = State->Blueprint->IsUpToDate()
+		? SpawnActor(*World->PersistentLevel, State->Blueprint->GeneratedClass, FVector(0.0, 0.0, 0.0), TEXT("ProtectedHolder")) : nullptr;
+	if (!TestNotNull(TEXT("the holder is placed"), Holder))
+	{
+		DiscardBlueprint(State->Blueprint.Get());
+		PluginSettings->bEnableExecutePython = State->bExecuteBefore;
+		PluginSettings->bEnableDeleteAssets = State->bDeleteBefore;
+		return false;
+	}
+
+	ADD_LATENT_AUTOMATION_COMMAND(FPlayRequestCommand(TEXT("{\"action\": \"start\", \"paused\": true}"), [this, PluginSettings, StillOff](const FLevelToolResult& Result)
+	{
+		if (!TestTrue(*FString::Printf(TEXT("start succeeds (%s)"), *Codes(Result)), Result.bSuccess))
+		{
+			return;
+		}
+		for (const TCHAR* Command : {TEXT("set Default__AssetDocumentSettings bEnableExecutePython True"),
+			TEXT("set /Script/AssetDocumentServer.Default__AssetDocumentSettings bEnableDeleteAssets True"),
+			TEXT("slomo 1 | SET \"assetdocumentsettings\" bEnableExecutePython 1")})
+		{
+			const FLevelToolResult Refused = Play::RunPlayFromBody(FString::Printf(TEXT("{\"action\": \"console\", \"command\": \"%s\"}"),
+				*FString(Command).ReplaceCharWithEscapedChar()));
+			TestTrue(*FString::Printf(TEXT("'%s' is refused (%s)"), Command, *Codes(Refused)), HasCode(Refused, TEXT("Play.CommandRefused")));
+		}
+		StillOff(TEXT("console"));
+
+		// ServerExec (an exec function of the player controller) runs a console command.
+		const FLevelToolResult Exec = Play::RunPlayFromBody(TEXT("{\"action\": \"call\", \"actor\": \"controller\", \"function\": \"ServerExec\", "
+			"\"args\": {\"Msg\": \"set Default__AssetDocumentSettings bEnableExecutePython True\"}}"));
+		TestTrue(*FString::Printf(TEXT("a call whose argument names the settings is refused (%s)"), *Codes(Exec)),
+			HasCode(Exec, TEXT("Play.ProtectedSettings")));
+		TestTrue(*FString::Printf(TEXT("ServerExec is not callable (%s)"), *Codes(Exec)), HasCode(Exec, TEXT("Play.FunctionNotCallable")));
+		// The class name built inside the command: only the function itself can be refused.
+		const FLevelToolResult Built = Play::RunPlayFromBody(TEXT("{\"action\": \"call\", \"actor\": \"controller\", \"function\": \"ServerExec\", "
+			"\"args\": {\"Msg\": \"py import unreal as u; u.load_class(None, '/Script/AssetDocumentServer.Asset' + 'DocumentSettings')\"}}"));
+		TestTrue(*FString::Printf(TEXT("ServerExec with a built class name is refused (%s)"), *Codes(Built)),
+			HasCode(Built, TEXT("Play.FunctionNotCallable")));
+		for (const TCHAR* Body : {
+			TEXT("{\"action\": \"call\", \"actor\": \"controller\", \"function\": \"SendToConsole\", \"args\": [\"slomo 1\"]}"),
+			TEXT("{\"action\": \"call\", \"actor\": \"controller\", \"function\": \"SetName\", \"args\": [\"Tester\"]}"),
+			TEXT("{\"action\": \"call\", \"actor\": \"ProtectedHolder\", \"function\": \"ConsoleCommand\", \"args\": [\"slomo 1\"]}")})
+		{
+			const FLevelToolResult Runner = Play::RunPlayFromBody(Body);
+			TestTrue(*FString::Printf(TEXT("%s is refused (%s)"), Body, *Codes(Runner)), HasCode(Runner, TEXT("Play.FunctionNotCallable")));
+		}
+		StillOff(TEXT("call"));
+
+		// A debug key binding that runs Python: the key is not pressed.
+		APlayerController* PlayController = GEditor->PlayWorld != nullptr ? GEditor->PlayWorld->GetFirstPlayerController() : nullptr;
+		if (TestTrue(TEXT("the play controller has a player input"), PlayController != nullptr && PlayController->PlayerInput != nullptr))
+		{
+			FKeyBind Bind;
+			Bind.Key = EKeys::F9;
+			Bind.Command = TEXT("slomo 1 | py import unreal");
+			PlayController->PlayerInput->DebugExecBindings.Add(Bind);
+			const FLevelToolResult Pressed = Play::RunPlayFromBody(TEXT("{\"action\": \"input\", \"inputs\": [{\"key\": \"F9\"}]}"));
+			PlayController->PlayerInput->DebugExecBindings.RemoveAll([](const FKeyBind& Entry) { return Entry.Key == EKeys::F9; });
+			TestTrue(*FString::Printf(TEXT("a key bound to Python is not pressed (%s)"), *Codes(Pressed)), HasCode(Pressed, TEXT("Play.CommandRefused")));
+		}
+
+		AActor* PlayHolder = FindPlayActor(TEXT("ProtectedHolder"));
+		FObjectPropertyBase* Held = PlayHolder != nullptr ? CastField<FObjectPropertyBase>(PlayHolder->GetClass()->FindPropertyByName(TEXT("Held"))) : nullptr;
+		if (!TestNotNull(TEXT("the play holder and its Held variable"), Held))
+		{
+			return;
+		}
+		const FLevelToolResult Store = Play::RunPlayFromBody(TEXT("{\"action\": \"set\", \"actor\": \"ProtectedHolder\", \"values\": "
+			"{\"Held\": \"/Script/AssetDocumentServer.Default__AssetDocumentSettings\"}}"));
+		TestTrue(*FString::Printf(TEXT("the settings object is not stored in a variable (%s)"), *Codes(Store)),
+			HasCode(Store, TEXT("Play.ProtectedSettings")));
+		TestNull(TEXT("Held stays empty"), Held->GetObjectPropertyValue_InContainer(PlayHolder));
+
+		// A variable that already holds the settings object (as an authored default could): its values are not set through it.
+		Held->SetObjectPropertyValue_InContainer(PlayHolder, PluginSettings);
+		const FLevelToolResult Through = Play::RunPlayFromBody(TEXT("{\"action\": \"set\", \"actor\": \"ProtectedHolder\", \"values\": "
+			"{\"Held.bEnableExecutePython\": true, \"Held.bEnableDeleteAssets\": true}}"));
+		TestTrue(*FString::Printf(TEXT("a set through the variable is refused (%s)"), *Codes(Through)), HasCode(Through, TEXT("Play.ProtectedSettings")));
+		Held->SetObjectPropertyValue_InContainer(PlayHolder, nullptr);
+		StillOff(TEXT("set"));
+
+		// Ordinary values and commands still work.
+		const FLevelToolResult Touched = Play::RunPlayFromBody(TEXT("{\"action\": \"set\", \"actor\": \"ProtectedHolder\", \"values\": {\"bTouched\": true}}"));
+		TestTrue(*FString::Printf(TEXT("an ordinary set works (%s)"), *Codes(Touched)), Touched.bSuccess);
+		const FLevelToolResult Slomo = Play::RunPlayFromBody(TEXT("{\"action\": \"console\", \"command\": \"slomo 1\"}"));
+		TestTrue(*FString::Printf(TEXT("an ordinary console command works (%s)"), *Codes(Slomo)), Slomo.bSuccess);
+	}));
+	ADD_LATENT_AUTOMATION_COMMAND(FPlayRequestCommand(TEXT("{\"action\": \"stop\"}"), [this, State, PluginSettings, StillOff](const FLevelToolResult& Result)
+	{
+		TestTrue(*FString::Printf(TEXT("stop (%s)"), *Codes(Result)), Result.bSuccess);
+		StillOff(TEXT("after play"));
+		// A start whose console commands name the settings is refused before anything starts.
+		const FLevelToolResult StartRefused = Play::RunPlayFromBody(
+			TEXT("{\"action\": \"start\", \"console\": [\"slomo 1\", \"set Default__AssetDocumentSettings bEnableExecutePython True\"]}"));
+		TestTrue(*FString::Printf(TEXT("a start console command naming the settings is refused (%s)"), *Codes(StartRefused)),
+			HasCode(StartRefused, TEXT("Play.CommandRefused")));
+		if (!StartRefused.bSuccess)
+		{
+			TestNull(TEXT("and nothing started"), GEditor->PlayWorld.Get());
+		}
+		else
+		{
+			Play::RunPlayFromBody(TEXT("{\"action\": \"stop\"}"));
+		}
+		PluginSettings->bEnableExecutePython = State->bExecuteBefore;
+		PluginSettings->bEnableDeleteAssets = State->bDeleteBefore;
+		DiscardBlueprint(State->Blueprint.Get());
+		State->Blueprint.Reset();
+		TGuardValue<bool> Unattended(GIsRunningUnattendedScript, true);
+		GEditor->NewMap(false);
+	}));
+	return true;
+}
+
+// "set", "setnopec" and "get" reach only objects of the play session. Their target is read and looked up as the engine
+// reads it (the object name unescaped, a class first), and its identity decides: a class default object (the plugin's
+// settings named with an escaped character, another class's defaults), an editor-world actor and a config class
+// (a class-wide set saves its config file) are refused, at start, in the session and through a key binding; an actor
+// of the play world is not. "get" always reads class defaults and is refused for a class that exists.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentPlayPropertyCommandTargetsTest,
+	"UEAssetDoc.Level.Play.PropertyCommandTargets",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentPlayPropertyCommandTargetsTest::RunTest(const FString& Parameters)
+{
+	using namespace AssetDocumentPlayToolsTests;
+	UAssetDocumentSettings* PluginSettings = UAssetDocumentSettings::Get();
+	UGameMapsSettings* MapsSettings = GetMutableDefault<UGameMapsSettings>();
+	if (!TestNotNull(TEXT("the plugin settings"), PluginSettings) || !TestNotNull(TEXT("the maps settings"), MapsSettings))
+	{
+		return false;
+	}
+	// The escaped name unescapes (FParse::Token) to Default__AssetDocumentSettings.
+	const FString EscapedSettings = TEXT("set \"Default__AssetDocument\\Settings\" bEnableExecutePython true");
+	TSharedRef<FProtectedSettingsState> State = MakeShared<FProtectedSettingsState>();
+	State->bExecuteBefore = PluginSettings->bEnableExecutePython;
+	PluginSettings->bEnableExecutePython = false;
+	const bool bSplitscreenBefore = MapsSettings->bUseSplitscreen;
+
+	const auto ConsoleBody = [](const FString& Command)
+	{
+		return FString::Printf(TEXT("{\"action\": \"console\", \"command\": \"%s\"}"), *Command.ReplaceCharWithEscapedChar());
+	};
+	const auto Refused = [](const FLevelToolResult& Result)
+	{
+		return !Result.bSuccess && (HasCode(Result, TEXT("Play.TargetOutsidePlay")) || HasCode(Result, TEXT("Play.CommandRefused")));
+	};
+
+	// Before a session: the escaped name is refused at start, and nothing starts.
+	const FLevelToolResult StartRefused = Play::RunPlayFromBody(FString::Printf(TEXT("{\"action\": \"start\", \"console\": [\"%s\"]}"),
+		*EscapedSettings.ReplaceCharWithEscapedChar()));
+	TestTrue(*FString::Printf(TEXT("a start command with the escaped settings name is refused (%s)"), *Codes(StartRefused)), Refused(StartRefused));
+	TestNull(TEXT("and nothing started"), GEditor->PlayWorld.Get());
+
+	{
+		TGuardValue<bool> Unattended(GIsRunningUnattendedScript, true);
+		GEditor->NewMap(false);
+	}
+	UWorld* World = GetEditorWorld();
+	State->Blueprint.Reset(NewHolderBlueprint());
+	AActor* Holder = World != nullptr && State->Blueprint->IsUpToDate()
+		? SpawnActor(*World->PersistentLevel, State->Blueprint->GeneratedClass, FVector(0.0, 0.0, 0.0), TEXT("TargetHolder")) : nullptr;
+	if (!TestNotNull(TEXT("the holder is placed"), Holder))
+	{
+		DiscardBlueprint(State->Blueprint.Get());
+		PluginSettings->bEnableExecutePython = State->bExecuteBefore;
+		return false;
+	}
+	const FString EditorHolderPath = Holder->GetPathName();
+
+	ADD_LATENT_AUTOMATION_COMMAND(FPlayRequestCommand(TEXT("{\"action\": \"start\", \"paused\": true}"),
+		[this, PluginSettings, MapsSettings, bSplitscreenBefore, EscapedSettings, EditorHolderPath, ConsoleBody, Refused](const FLevelToolResult& Result)
+	{
+		if (!TestTrue(*FString::Printf(TEXT("start succeeds (%s)"), *Codes(Result)), Result.bSuccess))
+		{
+			return;
+		}
+		UWorld* PlayWorld = GEditor->PlayWorld;
+		AActor* PlayHolder = FindPlayActor(TEXT("TargetHolder"));
+		if (!TestNotNull(TEXT("the play world and its holder"), PlayHolder))
+		{
+			return;
+		}
+
+		// The exact escaped input, typed, and bound to a key.
+		const FLevelToolResult Escaped = Play::RunPlayFromBody(ConsoleBody(EscapedSettings));
+		TestTrue(*FString::Printf(TEXT("the escaped settings name is refused (%s)"), *Codes(Escaped)), Refused(Escaped));
+		TestTrue(TEXT("the guard refuses it as a target outside play"),
+			Play::RefusedConsoleCommand(EscapedSettings, PlayWorld).Code == TEXT("Play.TargetOutsidePlay"));
+		APlayerController* PlayController = PlayWorld->GetFirstPlayerController();
+		if (TestTrue(TEXT("the play controller has a player input"), PlayController != nullptr && PlayController->PlayerInput != nullptr))
+		{
+			FKeyBind Bind;
+			Bind.Key = EKeys::F10;
+			Bind.Command = EscapedSettings;
+			PlayController->PlayerInput->DebugExecBindings.Add(Bind);
+			const FLevelToolResult Pressed = Play::RunPlayFromBody(TEXT("{\"action\": \"input\", \"inputs\": [{\"key\": \"F10\"}]}"));
+			PlayController->PlayerInput->DebugExecBindings.RemoveAll([](const FKeyBind& Entry) { return Entry.Key == EKeys::F10; });
+			TestTrue(*FString::Printf(TEXT("a key bound to it is not pressed (%s)"), *Codes(Pressed)), Refused(Pressed));
+		}
+		TestFalse(TEXT("execute_python stays off"), PluginSettings->bEnableExecutePython);
+
+		// Another class's default object, plain and escaped, and "get" of class defaults.
+		for (const TCHAR* Command : {TEXT("set Default__GameMapsSettings bUseSplitscreen true"),
+			TEXT("setnopec \"Default__GameMaps\\Settings\" bUseSplitscreen true"), TEXT("get GameMapsSettings bUseSplitscreen"),
+			TEXT("slomo 1 | get \"GameMaps\\Settings\" bUseSplitscreen")})
+		{
+			const FLevelToolResult Other = Play::RunPlayFromBody(ConsoleBody(Command));
+			TestTrue(*FString::Printf(TEXT("'%s' is refused as outside play (%s)"), Command, *Codes(Other)),
+				!Other.bSuccess && HasCode(Other, TEXT("Play.TargetOutsidePlay")));
+		}
+		TestEqual(TEXT("the maps settings are unchanged"), MapsSettings->bUseSplitscreen, bSplitscreenBefore);
+
+		// The same actor in the editor world, and a class-wide set of a config class (it saves the config file).
+		for (const FString& Command : {FString::Printf(TEXT("set %s bTouched true"), *EditorHolderPath),
+			FString(TEXT("set PlayerController bShowMouseCursor true"))})
+		{
+			const FLevelToolResult Outside = Play::RunPlayFromBody(ConsoleBody(Command));
+			TestTrue(*FString::Printf(TEXT("'%s' is refused as outside play (%s)"), *Command, *Codes(Outside)),
+				!Outside.bSuccess && HasCode(Outside, TEXT("Play.TargetOutsidePlay")));
+		}
+
+		// The play world's actor, and a class-wide set of a class without config: not refused.
+		const FString PlaySet = FString::Printf(TEXT("set %s bTouched true"), *PlayHolder->GetPathName());
+		TestFalse(TEXT("the guard lets a set of a play-world actor through"), Play::RefusedConsoleCommand(PlaySet, PlayWorld).IsRefused());
+		const FLevelToolResult InPlay = Play::RunPlayFromBody(ConsoleBody(PlaySet));
+		TestTrue(*FString::Printf(TEXT("a set of a play-world actor runs (%s)"), *Codes(InPlay)), InPlay.bSuccess);
+		if (InPlay.Payload.IsValid())
+		{
+			AddInfo(FString::Printf(TEXT("the console printed: %s"), *InPlay.Payload->GetStringField(TEXT("output"))));
+		}
+		TestTrue(TEXT("the play holder is a play session object"), Play::IsPlaySessionObject(*PlayHolder, PlayWorld));
+		TestTrue(TEXT("the play game instance is a play session object"),
+			PlayWorld->GetGameInstance() != nullptr && Play::IsPlaySessionObject(*PlayWorld->GetGameInstance(), PlayWorld));
+		const UClass* PlainClass = UKismetMathLibrary::StaticClass();
+		if (TestFalse(TEXT("the math library class has no config"), PlainClass->HasAnyClassFlags(CLASS_Config)))
+		{
+			TestFalse(TEXT("a class-wide set of a class without config is not refused"),
+				Play::RefusedConsoleCommand(TEXT("set KismetMathLibrary NoSuchValue 1"), PlayWorld).IsRefused());
+		}
+		TestFalse(TEXT("a set of a name that resolves to nothing is not refused"),
+			Play::RefusedConsoleCommand(TEXT("set NoSuchObjectAnywhere Value 1"), PlayWorld).IsRefused());
+	}));
+	ADD_LATENT_AUTOMATION_COMMAND(FPlayRequestCommand(TEXT("{\"action\": \"stop\"}"), [this, State, PluginSettings](const FLevelToolResult& Result)
+	{
+		TestTrue(*FString::Printf(TEXT("stop (%s)"), *Codes(Result)), Result.bSuccess);
+		TestFalse(TEXT("execute_python stays off after play"), PluginSettings->bEnableExecutePython);
+		PluginSettings->bEnableExecutePython = State->bExecuteBefore;
+		DiscardBlueprint(State->Blueprint.Get());
+		State->Blueprint.Reset();
+		TGuardValue<bool> Unattended(GIsRunningUnattendedScript, true);
+		GEditor->NewMap(false);
+	}));
+	return true;
+}
+
+
+// The player's console runs every command of a line, read as UE reads it: split at '|' and line breaks, a command
+// name ending at any character that is not a letter or digit, after any whitespace. Python and the commands that hand
+// text on as another command are refused in every command and every word of the line (also with execute_python
+// switched on), "ke"/"ce" do not call functions that run commands or Python, and ordinary game commands pass. All
+// checked before a session is needed.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentPlayCommandGuardTest,
+	"UEAssetDoc.Level.Play.CommandGuard",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentPlayCommandGuardTest::RunTest(const FString& Parameters)
+{
+	using namespace AssetDocumentPlayToolsTests;
+	UAssetDocumentSettings* PluginSettings = UAssetDocumentSettings::Get();
+	if (!TestNotNull(TEXT("the plugin settings"), PluginSettings))
+	{
+		return false;
+	}
+	// The refusal does not depend on the Python tool's switch.
+	TGuardValue<bool> PythonOn(PluginSettings->bEnableExecutePython, true);
+
+	TArray<FString> Refused = {
+		TEXT("py\timport unreal"),                    // a tab after py
+		TEXT("py\vimport unreal"),                    // other whitespace
+		TEXT("py\fimport unreal"),
+		TEXT("py\"import unreal\""),                  // a quote ends the name too
+		TEXT("PY.exec import unreal"),
+		TEXT("slomo 1\npy import unreal"),            // a line break separates commands
+		TEXT("slomo 1\r\npy import unreal"),
+		TEXT("slomo 1|py\timport unreal"),            // '|' separates commands
+		TEXT("slomo 1 // comment | py\timport unreal"),
+		TEXT("ke * ServerExec slomo 1"),              // ke / ce call a function that runs a command
+		TEXT("ke\t*\tServerExec\tslomo 1"),
+		TEXT("KismetEvent * SendToConsole slomo 1"),
+		TEXT("ce ServerExec slomo 1"),
+		TEXT("ke * \"ExecuteConsoleCommand\" None slomo"),
+		TEXT("ServerExec slomo 1"),                   // functions and commands that hand text on
+		TEXT("\tServerExec\tslomo 1"),
+		TEXT("\"ServerExec\" slomo 1"),
+		TEXT("defer py import unreal"),
+		TEXT("SetBind F9 py\timport unreal"),
+		TEXT("SetBind F9 \"p\\y import unreal\""),    // an escaped word that unescapes to py
+		TEXT("SetBind F9 \"\" \"p\\y import unreal\""),
+		TEXT("exec commands.txt"),
+		TEXT("quit"),
+		TEXT("slomo 1\nexit")};
+	if (FindObject<UClass>(nullptr, TEXT("/Script/PythonScriptPlugin.PythonScriptLibrary")) != nullptr)
+	{
+		// A Python script library function, found by its name.
+		Refused.Add(TEXT("ke Default__PythonScriptLibrary ExecutePythonCommand \"import unreal\""));
+	}
+	const auto RunConsole = [](const FString& Command)
+	{
+		TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+		Body->SetStringField(TEXT("action"), TEXT("console"));
+		Body->SetStringField(TEXT("command"), Command);
+		FString Text;
+		FJsonSerializer::Serialize(Body, TJsonWriterFactory<>::Create(&Text));
+		return Play::RunPlayFromBody(Text);
+	};
+	for (const FString& Command : Refused)
+	{
+		const FLevelToolResult Console = RunConsole(Command);
+		TestTrue(*FString::Printf(TEXT("console '%s' is refused (%s)"), *Command.ReplaceCharWithEscapedChar(), *Codes(Console)),
+			HasCode(Console, TEXT("Play.CommandRefused")));
+	}
+	const FLevelToolResult Start = Play::RunPlayFromBody(TEXT("{\"action\": \"start\", \"console\": [\"slomo 1\", \"py\\timport unreal\"]}"));
+	TestTrue(*FString::Printf(TEXT("a start console command is refused (%s)"), *Codes(Start)), HasCode(Start, TEXT("Play.CommandRefused")));
+	TestNull(TEXT("and nothing started"), GEditor->PlayWorld.Get());
+
+	for (const TCHAR* Command : {TEXT("slomo 0.5"), TEXT("stat fps"), TEXT("god | slomo 2"), TEXT("showdebug ai"), TEXT("summon BP_Enemy_C"),
+		TEXT("ke Boss SetAutoAttack false"), TEXT("ke * SetActorHiddenInGame true"), TEXT("r.ScreenPercentage 50"), TEXT("ce OpenGate"),
+		TEXT("pyramid 1"), TEXT("ke Door Open \"copy\"")})
+	{
+		// Checked, then refused only for want of a session.
+		const FLevelToolResult Console = RunConsole(Command);
+		TestTrue(*FString::Printf(TEXT("'%s' passes the check (%s)"), Command, *Codes(Console)),
+			!HasCode(Console, TEXT("Play.CommandRefused")) && HasCode(Console, TEXT("Play.NoSession")));
+	}
+	return true;
+}
+
 #endif

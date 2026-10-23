@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // SoundCue "compile" (design §5): the Sound Cue editor has no compile button; every structural edit ends with
 // USoundCue::CompileSoundNodesFromGraphNodes. The finalize of the graph host adapter runs that compile once more and

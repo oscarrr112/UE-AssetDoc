@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Automatic layout of graph nodes: the pure layout, the K2 fields it brings (Layout, comment boxes) and
 how apply uses it (nodes without Position, ``"Layout": "Auto"``)."""
 from __future__ import annotations

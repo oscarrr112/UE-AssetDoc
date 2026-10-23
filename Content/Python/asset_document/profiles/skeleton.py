@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered Skeleton Profile (profile.skeleton.v1): the Skeleton editor's authorable surface.
 
 Document (docs/architecture/asset-document-animation-assets-matrix.md)::

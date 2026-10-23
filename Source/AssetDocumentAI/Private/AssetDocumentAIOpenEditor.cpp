@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Open-editor apply for the AI profiles (Runtime/AssetDocumentOpenEditor.h):
 //   EnvQuery     the Environment Query editor edits UEnvQuery::EdGraph itself; refreshed in place as its Undo does

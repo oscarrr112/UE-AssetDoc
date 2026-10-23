@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Raw file (design §4.2 / §4.4, B1 rule): the binding context menu's "Convert To Possessable / Spawnable / <custom
 // binding>" without an ISequencer. FSequencerUtilities::ConvertToPossessable / ConvertToCustomBinding

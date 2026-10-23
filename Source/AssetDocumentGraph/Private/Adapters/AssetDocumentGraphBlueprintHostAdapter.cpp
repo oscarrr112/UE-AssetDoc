@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Blueprint host adapter: graph enumeration/creation/removal/rename on
 // UBlueprint and graph.finalize.v1 = FKismetEditorUtilities::CompileBlueprint.

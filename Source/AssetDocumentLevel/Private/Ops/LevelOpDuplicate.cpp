@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // duplicate: the editor's Duplicate (Ctrl+D / Ctrl+W) through
 // UEditorActorSubsystem::DuplicateActors (UUnrealEdEngine::DuplicateActors), into the

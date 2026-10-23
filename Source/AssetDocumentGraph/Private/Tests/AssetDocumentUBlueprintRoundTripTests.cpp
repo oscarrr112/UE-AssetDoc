@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Blueprint extract -> Create round trips through the production Service:
 // - RoundTrip.EngineSkySphere: a /Game copy of the engine's BP_Sky_Sphere (components, a construction

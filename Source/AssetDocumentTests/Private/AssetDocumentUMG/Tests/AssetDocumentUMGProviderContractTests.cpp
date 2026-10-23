@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentUMGPrimitiveProvider.h"
 #include "AssetDocumentUMGProviderTestSupport.h"
@@ -100,13 +101,13 @@ const FExpectedDecision ExpectedProjection[] = {
 	{TEXT("umg.widget_tree.panel_child.attach.v1"), EAssetDocumentUMGDecisionDisposition::Ordinary, TEXT("umg_profile"), TEXT("")},
 	{TEXT("umg.widget_tree.content.set.v1"), EAssetDocumentUMGDecisionDisposition::Ordinary, TEXT("umg_profile"), TEXT("")},
 	{TEXT("umg.widget_tree.named_slot.set.v1"), EAssetDocumentUMGDecisionDisposition::Ordinary, TEXT("umg_profile"), TEXT("")},
-	{TEXT("umg.widget_tree.replace.v1"), EAssetDocumentUMGDecisionDisposition::StableBlocker, TEXT("umg_provider_design"), TEXT("AD.G1.BLOCK.UMG.WIDGET_REPLACE_HEADLESS_AUTHORITY")},
+	{TEXT("umg.widget_tree.replace.v1"), EAssetDocumentUMGDecisionDisposition::StableBlocker, TEXT("umg_provider_design"), TEXT("AD.BLOCK.UMG.WIDGET_REPLACE_HEADLESS_AUTHORITY")},
 	{TEXT("umg.designer_binding.query.v1"), EAssetDocumentUMGDecisionDisposition::Ordinary, TEXT("umg_profile"), TEXT("")},
-	{TEXT("UMG-DESIGNER-BINDING-APPLY-DELTA-v1"), EAssetDocumentUMGDecisionDisposition::StableBlocker, TEXT("umg_provider_design"), TEXT("AD.G1.BLOCK.UMG.DESIGNER_BINDING_EVIDENCE")},
+	{TEXT("UMG-DESIGNER-BINDING-APPLY-DELTA-v1"), EAssetDocumentUMGDecisionDisposition::StableBlocker, TEXT("umg_provider_design"), TEXT("AD.BLOCK.UMG.DESIGNER_BINDING_EVIDENCE")},
 	{TEXT("umg.variable.notify_lifecycle.v1"), EAssetDocumentUMGDecisionDisposition::Ordinary, TEXT("umg_profile"), TEXT("")},
-	{TEXT("UMG.VAR.FORCE_GUID_V1"), EAssetDocumentUMGDecisionDisposition::StableBlocker, TEXT("umg_provider_design"), TEXT("AD.G1.BLOCK.UMG.CALLER_SELECTED_GUID_UNSUPPORTED")},
+	{TEXT("UMG.VAR.FORCE_GUID_V1"), EAssetDocumentUMGDecisionDisposition::StableBlocker, TEXT("umg_provider_design"), TEXT("AD.BLOCK.UMG.CALLER_SELECTED_GUID_UNSUPPORTED")},
 	{TEXT("umg.animation.query.v1"), EAssetDocumentUMGDecisionDisposition::Ordinary, TEXT("umg_profile"), TEXT("")},
-	{TEXT("UMG-WIDGET-ANIMATION-DELETE-v1"), EAssetDocumentUMGDecisionDisposition::StableBlocker, TEXT("umg_provider_design"), TEXT("AD.G1.BLOCK.UMG.ANIMATION_DELETE_EVIDENCE")},
+	{TEXT("UMG-WIDGET-ANIMATION-DELETE-v1"), EAssetDocumentUMGDecisionDisposition::StableBlocker, TEXT("umg_provider_design"), TEXT("AD.BLOCK.UMG.ANIMATION_DELETE_EVIDENCE")},
 	{TEXT("umg.movie_scene.possessable.add.v1"), EAssetDocumentUMGDecisionDisposition::Ordinary, TEXT("umg_profile"), TEXT("")},
 	{TEXT("umg.movie_scene.possessable.remove.v1"), EAssetDocumentUMGDecisionDisposition::Ordinary, TEXT("umg_profile"), TEXT("")},
 	{TEXT("umg.animation.sequence.bind.v1"), EAssetDocumentUMGDecisionDisposition::Ordinary, TEXT("umg_profile"), TEXT("")},

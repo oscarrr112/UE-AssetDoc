@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """IK Rig apply (profile.ik_rig.v1): the document Body as the IK Rig editor's edits (design §4.1 / §4.2).
 
 The Body is reconciled in phases, each a batch of ``rig.ikrig.edit.v1`` ops planned against a fresh read of the rig:

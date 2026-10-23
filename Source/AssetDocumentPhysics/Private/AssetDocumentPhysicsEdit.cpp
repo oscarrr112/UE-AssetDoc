@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // physics.asset.edit.v1: edits of a Physics Asset as the Physics Asset Editor makes them (design §4.1). Structural
 // edits (bodies, constraints) give the editor's results (AssetDocumentPhysicsEditorEquivalent.cpp); Details edits

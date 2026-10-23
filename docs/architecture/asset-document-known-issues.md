@@ -2,8 +2,6 @@
 
 Open issues that are known but not yet fixed. Each item has its impact, the current workaround and the intended fix. When an item is fixed, delete it from this file and name it in the fixing commit.
 
-Last updated: 2026-10-21.
-
 ## Correctness
 
 ### KI-13 The Niagara Script editor cannot close without its unapplied edits
@@ -39,7 +37,7 @@ Inspect is summarized by default (the shared `inspect_summary.py`: a large `Body
 
 ### KI-9 Unconfirmed: a dependent Blueprint left unsaved by a component Blueprint apply
 - **What:** After `BPC_CombatCore` was applied, the dependent `BP_SamplePlayer` was unsaved, so the next apply of it failed with `DirtyExistingAssetTransactionUnsupported` (worked around by saving it through Python).
-- **Status:** Not reproduced on 8547dc43. `Blueprint.ApplySafety.DependencyCompileKeepsDependentsClean` (structural change and default change of the component Blueprint, a Character parent holding it as SCS component, a child with an inherited override and calls into it, an instance placed in the editor level) keeps every dependent saved, as the editor's compilation manager does (it restores each dependent's dirty flag). An unsaved user edit is still refused.
+- **Status:** Not reproduced. `Blueprint.ApplySafety.DependencyCompileKeepsDependentsClean` (structural change and default change of the component Blueprint, a Character parent holding it as SCS component, a child with an inherited override and calls into it, an instance placed in the editor level) keeps every dependent saved, as the editor's compilation manager does (it restores each dependent's dirty flag). An unsaved user edit is still refused.
 - **Next:** If it happens again, record which dependent packages were dirty and what else was open (a Blueprint editor tab, the level), and extend that test.
 
 ### KI-18 Unconfirmed: a PIE compile leaving a Blueprint package dirty (Enhanced Input)

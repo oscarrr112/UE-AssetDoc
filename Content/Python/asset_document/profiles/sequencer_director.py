@@ -1,4 +1,7 @@
-"""Body.Director of a Level Sequence: its Director Blueprint (design §3.6, §7.2 phase S5), authored as a Blueprint.
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Body.Director of a Level Sequence: its Director Blueprint (design §3.6, §7.2), authored as a Blueprint.
 
 The Director Blueprint is an object inside the Level Sequence package (Sequencer's "Open Director Blueprint"). The
 region holds the Blueprint profile's own member and graph keys (every key optional; an omitted key keeps the live

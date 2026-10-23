@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // End-to-end standalone animation assets through the production Service and the Python Profiles
 // (profile.skeleton.v1, profile.blend_space*.v1 / aim_offset*.v1, profile.pose_asset.v1,
@@ -1032,7 +1033,7 @@ bool FAssetDocumentAnimationAssetsMontageSlotTest::RunTest(const FString& Parame
 		TEXT("\"CompositeSections\":[{\"Name\":\"Default\",\"NextSectionName\":null,\"LinkableTime\":0.0,\"SlotName\":\"UpperBody\",\"LinkMethod\":0}]}}"),
 		*Target.PackageName, Montage, *Skeleton.ObjectPath, IdleAnim);
 
-	// 1. The refusals name the Skeleton and say what it has (task 7: "InvalidSlot: DefaultSlot (at /Primitive)").
+	// 1. The refusals name the Skeleton and say what it has, not only the primitive's "InvalidSlot: DefaultSlot".
 	TestFailsWith(*this, Apply(*this, Target, SkeletonOnly, TEXT("skeleton only")), TEXT("AnimMontage.UnknownSlot"),
 		TEXT("/Body/SlotAnimTracks"), TEXT("skeleton only"), {*Skeleton.ObjectPath, TEXT("'DefaultSlot'"), TEXT("Body.SlotGroups")});
 	TestNothingCreated(*this, Target, TEXT("skeleton only"));
@@ -1052,7 +1053,7 @@ bool FAssetDocumentAnimationAssetsMontageSlotTest::RunTest(const FString& Parame
 	SkeletonAsset = Skeleton.Get<USkeleton>();
 	TestTrue(TEXT("UpperBody slot exists"), SkeletonAsset != nullptr && SkeletonAsset->ContainsSlotName(TEXT("UpperBody")));
 
-	// 3. Task 7's skeleton-only document now creates its montage (on DefaultSlot); a montage with an
+	// 3. A skeleton-only document creates its montage (on DefaultSlot); a montage with an
 	// UpperBody track is created too.
 	{
 		const FTarget SkeletonOnlyTarget(TEXT("AM_SkeletonOnly"));

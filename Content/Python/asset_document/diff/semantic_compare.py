@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Semantic comparison of an authored document value with the value read back from the asset (pure).
 
 The shared rules post-apply verification (and Diff) use when the profile's own comparison says "same":

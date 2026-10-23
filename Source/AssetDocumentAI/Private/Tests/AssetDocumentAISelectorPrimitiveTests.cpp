@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -49,8 +50,8 @@ public:
 };
 
 // The shared descriptor validator checks presence, not the installed Engine version.
-// This exact evidence predicate is the Q574 manifest acceptance gate.
-bool HasStock574Evidence(const FAssetDocumentPrimitiveDescriptor& Descriptor)
+// This exact evidence predicate checks the Engine 5.7.4 manifest evidence.
+bool HasStockEngineEvidence(const FAssetDocumentPrimitiveDescriptor& Descriptor)
 {
 	return ValidateAssetDocumentPrimitiveDescriptor(Descriptor).bValid
 		&& Descriptor.Admission.ExactEngineVersion == TEXT("5.7.4")
@@ -290,14 +291,14 @@ bool FAssetDocumentAISelectorPrimitiveTest::RunTest(const FString&)
 	TestEqual(TEXT("selector primitive requires generic route"), Descriptor->RequiredConsumerIds,
 		TArray<FString>({TEXT("route.generic.v1")}));
 
-	TestTrue(TEXT("selector admission binds exact stock 5.7.4 evidence"), HasStock574Evidence(*Descriptor));
+	TestTrue(TEXT("selector admission binds exact stock 5.7.4 evidence"), HasStockEngineEvidence(*Descriptor));
 	FAssetDocumentPrimitiveDescriptor StaleEvidence = *Descriptor;
 	StaleEvidence.Admission.ExactEngineVersion = TEXT("5.7.3");
-	TestFalse(TEXT("Q574 manifest rejects stale Engine evidence"), HasStock574Evidence(StaleEvidence));
+	TestFalse(TEXT("manifest rejects stale Engine evidence"), HasStockEngineEvidence(StaleEvidence));
 	StaleEvidence = *Descriptor;
 	StaleEvidence.Admission.AuthorityFingerprint =
 		TEXT("ue-5.7.3|ai|propertyeditor.selector-inspect-evidence.v1|public-row-generator-property-handle");
-	TestFalse(TEXT("Q574 manifest rejects stale fingerprint"), HasStock574Evidence(StaleEvidence));
+	TestFalse(TEXT("manifest rejects stale fingerprint"), HasStockEngineEvidence(StaleEvidence));
 
 	FUnusedHandleResolver Handles;
 	const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(

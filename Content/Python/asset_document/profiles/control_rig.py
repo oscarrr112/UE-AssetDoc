@@ -1,6 +1,9 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered Control Rig Profile (profile.control_rig.v1, class /Script/ControlRigDeveloper.ControlRigBlueprint).
 
-Extract, Inspect and Diff for the three rig types (Rig, Module, Modular). Apply and Create (phases CR1 - CR4 of
+Extract, Inspect and Diff for the three rig types (Rig, Module, Modular). Apply and Create (see
 docs/architecture/asset-document-controlrig-design.md, control_rig_apply.py, control_rig_graph.py,
 control_rig_modular.py) author rigs and rig modules: Class Settings, rig type, module settings, variables, the
 hierarchy, the event graphs and the local functions (signature, access, header, local variables, bodies), collapse

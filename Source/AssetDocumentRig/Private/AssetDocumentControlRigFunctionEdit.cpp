@@ -1,7 +1,8 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
-// Function ops of rig.controlrig.edit.v1 (docs/architecture/asset-document-controlrig-design.md §3.5, §4.1, §5.4,
-// phase CR3): the local function library through its controller (what My Blueprint's Functions "+", rename, delete
+// Function ops of rig.controlrig.edit.v1 (docs/architecture/asset-document-controlrig-design.md §3.5, §4.1, §5.4):
+// the local function library through its controller (what My Blueprint's Functions "+", rename, delete
 // and the function's Details "Access" / category / keywords / description / colour do), the exposed pins of a function
 // or collapse graph and the local variables of a function through that graph's controller (the Details panel's Inputs
 // / Outputs and Local Variables), and the dependents report of public functions. Undo and Python print are off (the

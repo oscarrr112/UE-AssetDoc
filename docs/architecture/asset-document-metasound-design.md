@@ -1,13 +1,10 @@
 # MetaSound profile design
 
-Status: M0–M3 implemented (M0 `bab75ed7` / `f37bc9ca`, M1 `303163ed` / `d8593988`, M2 `0e035c53`, M3 `eea54864`);
-M4: guide, Audio Analyzer nodes, format fixtures and the support matrix
-[asset-document-metasound-matrix.md](asset-document-metasound-matrix.md) awaiting approval; the black-box MCP trial
-(§6.4) is still open. Design written 2026-10-06.
+Support matrix and corpus results: [asset-document-metasound-matrix.md](asset-document-metasound-matrix.md).
 Governing rules: [design rules](asset-document-design-rules.md) §3 (rollback = functional
 equivalence), §3.1 (Undo history), §4 (editor-equivalent code, raw paths allowed when the editor does it that way)
 and §5 (support matrix). The reference is the **MetaSound editor** (UE 5.7, `Engine/Plugins/Runtime/Metasound`),
-the MetaSound document builder and the Content Browser. Legacy generators are not a reference. Acceptance is
+the MetaSound document builder and the Content Browser. Acceptance is
 editor fidelity on real engine/plugin content, free edits, and an AI writing MetaSounds from scratch.
 
 Source paths below are relative to `Engine/Plugins/Runtime/Metasound/Source/` unless they start with `Engine/`.
@@ -19,7 +16,7 @@ Source paths below are relative to `Engine/Plugins/Runtime/Metasound/Source/` un
 | `/Script/MetasoundEngine.MetaSoundSource` | **Exact profile** `profile.metasound_source.v1` | The playable MetaSound (`USoundWaveProcedural` + `FMetasoundAssetBase` + `IMetaSoundDocumentInterface`). The graph lives in `RootMetasoundDocument`; the sound settings are ordinary Details properties. |
 | `/Script/MetasoundEngine.MetaSoundPatch` | **Exact profile** `profile.metasound_patch.v1` | Same document model, no sound settings, used as a node in other MetaSounds. |
 | Presets (Source or Patch whose `RootGraph.PresetOptions.bIsPreset` is true) | **Same two profiles**, `Body.Preset` | A preset is not a class. It is a Source/Patch whose graph the frontend regenerates from the referenced MetaSound on every registration (`FAutoUpdateRootGraph::Transform` → `FRebuildPresetRootGraph`). Only its input default overrides and the reference are authored. |
-| Graph pages (`FMetasoundFrontendGraphClass::PagedGraphs`, per-page input defaults) | **Same profiles**, `Body.Graphs.<Page>`, `Inputs.<n>.PageDefaults` | Pages are still "Pages (Experimental)" in `UMetaSoundSettings`, but the editor edits them (`FMetasoundPagesDetailCustomization`) and the data is in every asset (the default page). The one-page case must be first-class; extra pages come in a later phase (§7). |
+| Graph pages (`FMetasoundFrontendGraphClass::PagedGraphs`, per-page input defaults) | **Same profiles**, `Body.Graphs.<Page>`, `Inputs.<n>.PageDefaults` | Pages are still "Pages (Experimental)" in `UMetaSoundSettings`, but the editor edits them (`FMetasoundPagesDetailCustomization`) and the data is in every asset (the default page). The one-page case is first-class; extra pages are authored as further `Graphs.<Page>` entries. |
 | `UMetaSoundBuilderDocument` | Out | Transient object of the builder API; never an asset. |
 | `UMetaSoundSettings`, `UMetasoundEditorSettings` (pages, quality, audition page) | Out | Project and editor settings (config), not assets. `Inspect` reports the page names and quality names a document may use. |
 | `UMetasoundEditorGraph` and its nodes, `UMetasoundEditorGraphMemberDefault*` instances held by the editor graph | Out (derived) | The editor graph is `UPROPERTY(Transient)` (`UMetaSoundSource::EditorGraph`) and is rebuilt from the frontend document (`FGraphBuilder::SynchronizeGraph`). The member-default objects that persist are in the document (§2). |
@@ -278,7 +275,7 @@ location, and omitting it on an existing hidden node gives it a column position.
 | Member `Default`, `SortOrder`, `Advanced`, `DisplayName`, `Description`, `Widget` | new-member value (interface value for interface members) | set |
 | `Preset` | keep (preset stays preset) | `{Parent}` makes/keeps a preset; `null` converts from preset |
 
-### 3.6 Discovery (read-only additions, allowed by §2 of the direction reset)
+### 3.6 Discovery (read-only additions, allowed by [design rules](asset-document-design-rules.md) §2)
 
 - `list_types` gains `kind: "metasound_node"` (registered node classes: `Class`, `Version`, `DisplayName`,
   `Category`, `Deprecated?`, and each pin as `"Name: Type"` / `"Name: Type = default"`), `kind: "metasound_datatype"`
@@ -303,14 +300,14 @@ and `Properties` stay authorable.
   then runs `ConvertToPreset` and copies `OutputFormat`. The factory context comes from `Body.Preset.Parent`, as the
   StateTree profile does with `Body.Schema.Class`; the parent must be a MetaSound of the same class
   (`MetaSound.InvalidPresetParent`).
-- Overrides (M2): a listed input with a `Default` is `SetGraphInputDefault` (which also clears its inheritance), a
+- Overrides: a listed input with a `Default` is `SetGraphInputDefault` (which also clears its inheritance), a
   listed input without one stops inheriting (`SetGraphInputInheritsDefault(false)`, the Details override checkbox),
   an unlisted overriding input inherits again (`SetGraphInputInheritsDefault(true)`; registration's preset rebuild
   restores the parent's value).
 - `Preset: null` on a preset: `UMetaSoundBuilderBase::ConvertFromPreset` (the editor's command). With `Graphs` /
   `Interfaces` / `Outputs` in the Body the regular phases run on the converted graph; otherwise the overrides are
   applied first. Another parent is refused (`MetaSound.PresetParentChanged`).
-- `Preset` added to an existing non-preset: refused (`MetaSound.CannotConvertToPreset`, decision §9.4).
+- `Preset` added to an existing non-preset: refused (`MetaSound.CannotConvertToPreset`, decision §8.4).
 
 ### 3.8 Free edits → operations
 
@@ -366,7 +363,7 @@ a successful apply clears history that references the asset.
 | Class metadata Details (`RootGraph.Metadata` property handles) | `SetDisplayName`, `SetDescription`, `SetAuthor`, `SetKeywords`, `SetCategoryHierarchy`, `Set/AddAccessFlags` | |
 | Node configuration Details (`FMetasoundNodeDetailCustomization`) | `SetNodeConfiguration` + `UpdateNodeInterfaceFromConfiguration` | pins may change; connections to removed pins go, as in the editor |
 | Node comment bubble (`SMetaSoundGraphNode::OnCommentTextCommitted/OnCommentBubbleToggled`) | `SetNodeComment` / `SetNodeCommentVisible` | |
-| Update Node (`FEditor::UpdateSelectedNodeClasses`) | the same controller call the editor uses: `INodeController::ReplaceWithVersion`, then `RemoveUnreferencedDependencies` + `SynchronizeDependencyMetadata` | Controller API: public, used by the 5.7 editor. Isolated in one file with a behaviour test (§4 of the reset). |
+| Update Node (`FEditor::UpdateSelectedNodeClasses`) | the same controller call the editor uses: `INodeController::ReplaceWithVersion`, then `RemoveUnreferencedDependencies` + `SynchronizeDependencyMetadata` | Controller API: public, used by the 5.7 editor. Isolated in one file with a behaviour test . |
 | Pages (`FMetasoundPagesDetailCustomization`) | `AddGraphPage(PageID, bDuplicateLastGraph=true, bSetAsBuildGraph=false)` / `RemoveGraphPage` | The page's authored content is then reconciled like any page |
 | Per-page input default (`MetasoundDefaultLiteralCustomization`) | `SetGraphInputDefaults(Name, all pages)` | |
 | Preset "override inherited default" | `SetGraphInputInheritsDefault` | |
@@ -380,7 +377,7 @@ are explicit), copy/paste (a document is the copy format).
 Generic property admission covers the asset's Details properties, including `OutputFormat` and `QualitySetting`
 (PostEditChange runs the editor's follow-ups). Nothing in the document can go through generic admission. The
 document is one struct property whose Details customisation is the whole editor, and a MetaSound cannot be
-scratch-cloned (`Scratch.UnsupportedSource`, direction reset §4.1). So a new provider is needed, following the
+scratch-cloned (`Scratch.UnsupportedSource`, design rules §4.1). So a new provider is needed, following the
 Material pattern (one provider, read / edit / compile primitives, Python orchestrates):
 
 - Module **`AssetDocumentAudio`** (Editor, PostDefault), owner `EAssetDocumentPrimitiveOwner::Audio` (new value),
@@ -463,7 +460,7 @@ built on play (`GeneratorBuilder::LogBuildErrors`).
    `ISearchEngine::FindClassWithHighestMinorVersion`, `DiffAgainstRegistryInterface`, `INodeTemplate`,
    `IsValidEdge`). They live in their own file, and a behaviour test compares them with the messages the real
    editor shows when the fidelity assets are opened in the MetaSound editor during automation.
-3. Optional build check (phase 3): `FFrontendGraphBuilder::CreateGraph(document, path, PageOrder)` (MetasoundFrontend,
+3. Operator build check: `FFrontendGraphBuilder::CreateGraph(document, path, PageOrder)` (MetasoundFrontend,
    public) and the operator builder (`IOperatorBuilder::BuildGraphOperator`, MetasoundGraphCore, public) with the
    project's default operator settings. The `FBuildErrorArray` entries map to node IDs. This catches errors a
    human only sees in the log when pressing Play.
@@ -503,10 +500,10 @@ not register).
   runs `OnNotifyBeginDestroy` → `UnregisterGraphWithFrontend`. A test checks that no builder, asset manager or node
   registry entry is left behind (§3 item 4).
 - Referencing assets: registration can re-register loaded MetaSounds that use this one as a node (open editors).
-  As with User Defined Struct dependents (§3.2 of the reset), loaded referencers with unsaved changes refuse the
+  As with User Defined Struct dependents, loaded referencers with unsaved changes refuse the
   apply (`MetaSound.DependentHasUnsavedChanges`), and referencers the editor marks dirty are reported
   (`MetaSound.DependentsUpdated`). On rollback they are re-registered after the target is restored.
-- Open editor (M2, decision §9.3): the MetaSound editor works on the real asset, and its Tick resyncs its graph
+- Open editor (decision §8.3): the MetaSound editor works on the real asset, and its Tick resyncs its graph
   from `ModifyContext`, which the builder methods fill; the compile registers with `bForceViewSync`. The edit
   primitive modifies the open editor's graph with the asset as the editor's own edits do, and the snapshot rebuilder
   treats objects under an `UEdGraph` (the transient editor graph) as derived. Test
@@ -604,13 +601,11 @@ Undo test: human edit, save, AI apply, Ctrl+Z behaviour as §3.1 (history cleare
   - a preset of the first source overrides `Cutoff`;
   - errors (bad class, bad pin, type mismatch, constructor-to-reference connection, cycle, preset graph
     authoring, unknown page) fail at their document paths and roll back.
-- **Black-box trial** (using only the MCP tools and the schema section): "a looping wind
+- **Black-box check** (using only the MCP tools and the schema section): "a looping wind
   ambience with a random-gust LFO and a volume input", "an impact one-shot that picks a random wave from an array
   input", and "add a lowpass to an existing MetaSound and expose its cutoff".
 
-## 7. Risks, unknowns and phases
-
-### 7.1 Risks and unknowns
+## 7. Risks and unknowns
 
 | Risk | Effect | Answer |
 |---|---|---|
@@ -618,42 +613,19 @@ Undo test: human edit, save, AI apply, Ctrl+Z behaviour as §3.1 (history cleare
 | Input template injection on old (L/M) assets | Extract before and after the first apply would differ | The normalised read with deterministic IDs (§3.3). Test: extract L assets, apply the extract to the same asset → no-op apart from the injection change, which is reported once. |
 | `FGraphBuilder` (sync, validation, unique names) is private | Validation must be derived | Separate file plus a behaviour test against the real editor's node messages on the fidelity set |
 | Controller API (`ReplaceWithVersion`, sort order) is soft-deprecated | May go away in 5.8 | One isolated file. The builder has `SetGraphInputSortOrderIndex`; Update Node falls back to delete + create keeping edges by vertex name if the controller path goes |
-| Experimental 5.7 surface: node configuration (`TInstancedStruct`), `ClassInterfaceOverride`, `EAutoUpdateEligibility` (`UE_EXPERIMENTAL`), polymorphic data types, pages | Version-specific code | Configuration through the typed value codec, overrides derived (from the configuration), pages behind phase 3. Pin the matrix to 5.7. |
+| Experimental 5.7 surface: node configuration (`TInstancedStruct`), `ClassInterfaceOverride`, `EAutoUpdateEligibility` (`UE_EXPERIMENTAL`), polymorphic data types, pages | Version-specific code | Configuration through the typed value codec, overrides derived (from the configuration), pages through the separate `Graphs.<Page>` regions. Pin the matrix to 5.7. |
 | Literal storage types differ between old assets and new writes | False fidelity diffs | Semantic literal comparison by data type |
 | Async: referenced assets load asynchronously after `PostLoad`; graph registration may be async | Edits or validation on half-loaded state | Wait as `PreSaveAsset` does (async loads) and `WaitForAsyncGraphRegistration` before validation |
-| Harmonix is experimental and off by default; Template content is not mounted | Fidelity set needs a prepared sandbox | `ue.sh` sandbox recipe enables Harmonix and copies the template folder; tests skip with a note when absent |
-| Harmonix Fusion patches without an audio device (`-NoSound`) | `UFusionPatch::CreateProxyData` hits `check(SoundWaveProxy)` (HarmonixDsp `KeyzoneSettings.cpp:48`) and the editor crashes | Our paths never register such a graph: Create / Update of a MetaSound whose literals (or whose referenced MetaSounds', e.g. a preset's parent) hold a Fusion patch are refused with `MetaSound.AudioDeviceRequired` (M2). The engine itself triggers the crash when the first MetaSound editor of a session opens (its asset-tag priming registers the loaded MetaSounds) while such a MetaSound is loaded: the open-editor test unloads them first |
+| Harmonix is experimental and off by default; Template content is not mounted | Fidelity set needs a prepared sandbox | The test project setup enables Harmonix and copies the template folder; tests skip with a note when absent |
+| Harmonix Fusion patches without an audio device (`-NoSound`) | `UFusionPatch::CreateProxyData` hits `check(SoundWaveProxy)` (HarmonixDsp `KeyzoneSettings.cpp:48`) and the editor crashes | Our paths never register such a graph: Create / Update of a MetaSound whose literals (or whose referenced MetaSounds', e.g. a preset's parent) hold a Fusion patch are refused with `MetaSound.AudioDeviceRequired`. The engine itself triggers the crash when the first MetaSound editor of a session opens (its asset-tag priming registers the loaded MetaSounds) while such a MetaSound is loaded: the open-editor test unloads them first |
 | Editors opened during the validation behaviour test, audio device / `-NoSound` | Flaky automation | Validation test runs only with the normal renderer and audio (as Material); the profile itself needs no audio device (`OutputFormat`/quality edits do not touch the device) |
 | Referencing MetaSounds re-registered by an edit of a patch | Side effects on other packages | Dependents rule (§5.3), reported as warnings |
-| Plugin dependency on `Metasound` | Projects that disable MetaSound | MetaSound is enabled by default; the module lives alone, so a later "optional plugin" split only touches `AssetDocumentAudio` |
+| Plugin dependency on `Metasound` | Projects that disable MetaSound | MetaSound is enabled by default; the module lives alone, so an "optional plugin" split would only touch `AssetDocumentAudio` |
 | Performance | Registry has ~1000 classes; graphs ≤ ~300 KB | Class facts are fetched only for classes used in the document; `list_types` is paged. Reads are one document copy, cheap. |
 
-### 7.2 Phases (each independently mergeable)
+## 8. Decisions
 
-| Phase | Content | Acceptance |
-|---|---|---|
-| **M0 read** | `AssetDocumentAudio` module, provider, `read` + `catalog` primitives, Python Extract / Inspect / Diff for both classes (Apply still refused with a `MetaSound.ReadOnly` diagnostic replacing `Scratch.UnsupportedSource`), `list_types` kinds, compile-status describer (validation without registration) | Extract is stable (twice equal, equal after reload) on all 15 fidelity assets; Inspect pins match the registry; Body-owned properties are not emitted as `Properties` |
-| **M1 graph apply** | edit + compile primitives, create through the factory, `Interfaces`, `Metadata`, `Inputs`/`Outputs` (default page), `Graphs.Default` (all node kinds, connections, defaults, comments, variables), `Properties` incl. `OutputFormat`, rollback rebuilder, open-editor refusal, dependents rule | §6.2 on all non-preset single-page assets; §6.3 free edits except configuration / Update Node / presets; §6.4 Python test (without preset); rollback (failed validation, failed connection, failed create leaves no registry entry); Undo test |
-| **M2 presets and details** | `Preset` (create through factory context, convert from (to: refused, §9.4), overrides), node `Configuration`, `Version` (Update Node), member `Widget` metadata | builder-made preset and configuration fixtures pass §6.2; the remaining §6.3 edits; preset part of §6.4 |
-| **M3 pages and build check** | non-default pages, `PageDefaults`, operator build check in compile | two-page fixture passes §6.2 with page settings in the sandbox; build-error fixture fails at the node path |
-| **M4 AI surface** | `MCP/schemas/assetdocument/MetaSound.md` checked against the code, `list_types` description, gap closure (Audio Analyzer nodes, §6.1 format fixtures as test `Formats`), support matrix. Open-editor apply was lifted in M2 (tests `OpenEditor`, `PagesOpenEditor`) | matrix doc [asset-document-metasound-matrix.md](asset-document-metasound-matrix.md) approved by the user (2026-10-18); the trial tasks of §6.4 done through MCP only (AI trial 8, passed) |
-
-## 8. Open questions for the user
-
-1. **Pages**: they are labelled experimental in 5.7 and need project page settings. Is M3 (multi-page authoring)
-   wanted in batch 2, or should the profile read pages (extract shows them) and refuse page edits with a stable
-   diagnostic until a project needs them?
-2. **Harmonix**: 13 of the 15 fidelity assets need the experimental Harmonix plugin enabled in the test sandbox.
-   Is enabling it in the test project acceptable, or should fidelity rely on the two `/Metasound` sources, the
-   two template assets and builder-made fixtures?
-3. **Open editor**: refuse applies while the asset is open in the MetaSound editor (as Material does) until M4,
-   or invest earlier in live apply, since the MetaSound editor, unlike the Material editor, edits the real asset?
-4. **Convert to preset on an existing asset**: the editor has no menu for it (only the builder API and "Create
-   Preset" on a new asset). Admit it (`Preset` added on Update), or require a new asset?
-
-## 9. Decisions (2026-10-06, user)
-
-1. Pages: multi-page editing is in batch 2, phase M3 (M0–M2 single page first).
+1. Pages: multi-page editing is supported (non-default pages, `PageDefaults`, operator build check in compile).
 2. Harmonix: enabled only in the test project (sandbox .uproject); the UEAssetDoc plugin does not depend on it, and tests that need Harmonix content skip with a note when it is not enabled.
-3. Applying while the asset is open in the MetaSound editor moves to M2 (refresh the open editor; editor Undo tested); M1 refuses with `MetaSound.OpenInEditor`.
+3. Applying while the asset is open in the MetaSound editor is supported: the open editor is refreshed and editor Undo is tested (§5.3).
 4. `Preset` on an existing non-preset asset is refused (the editor cannot convert an asset into a preset); presets are created with `Create`, and an existing preset's content stays editable.

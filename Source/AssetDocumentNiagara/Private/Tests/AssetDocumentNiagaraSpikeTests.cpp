@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // UEAssetDoc.Niagara.Spike.HeadlessViewModel: the editor's stack view models built
 // without an editor (FNiagaraSystemViewModel with bIsForDataProcessingOnly, as the engine's merge and

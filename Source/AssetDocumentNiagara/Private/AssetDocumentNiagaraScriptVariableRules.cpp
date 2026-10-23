@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // The parameter panel of a module / function / dynamic input script after a reload. Each time the editor loads such a
 // graph, its script variables (the panel's entries with their defaults and metadata) are brought in line with the

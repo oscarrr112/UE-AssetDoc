@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // rig.ikretargeter.edit.v1: edits of an IK Retargeter as the IK Retarget editor makes them (design §7.2). Every
 // structural edit is the UIKRetargeterController call the editor's UI makes (each its own transaction and

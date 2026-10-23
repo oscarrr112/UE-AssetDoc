@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Rig asset primitives (provider "rig", owner Rig) of the IK Rig and IK Retargeter profiles
 // (docs/architecture/asset-document-ikrig-design.md §4.4):
@@ -9,7 +10,7 @@
 //   rig.ikrig.edit.v1        IK Rig edits as the IK Rig editor makes them (AssetDocumentIKRigEdit.cpp)
 //   rig.ikretargeter.edit.v1 IK Retargeter edits as the IK Retarget editor makes them (AssetDocumentIKRetargeterEdit.cpp)
 //   rig.suggest.v1           the editors' automatic setup on a transient copy (AssetDocumentRigSuggest.cpp)
-// and of the Control Rig profile (docs/architecture/asset-document-controlrig-design.md §4.2, phases CR0 / CR1):
+// and of the Control Rig profile (docs/architecture/asset-document-controlrig-design.md §4.2):
 //   rig.controlrig.read.v1    the authored state of a Control Rig (AssetDocumentControlRigRead.cpp, ...GraphRead.cpp)
 //   rig.controlrig.catalog.v1 RigVM node / value types and rig modules (AssetDocumentControlRigCatalog.cpp)
 //   rig.controlrig.edit.v1    hierarchy, variable, graph and asset edits as the Control Rig editor makes them

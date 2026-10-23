@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Data table family Profiles (DataTable, CompositeDataTable, MirrorDataTable, CurveTable,
 CompositeCurveTable, StringTable): document validation, value comparison, op planning and
 primitive-path mapping.  The editor-side behaviour is covered end to end by

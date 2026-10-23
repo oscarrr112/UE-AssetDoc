@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """SoundCue Apply: the Sound Cue editor's own operations through the shared graph primitives.
 
 Order (design §4.2): cue Details (generic property admission), deletes, spawns (each renamed to its key), input

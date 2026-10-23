@@ -8,7 +8,8 @@ Test a game in Play In Editor (PIE) as a human tester would. Three tools, no exe
 - `get_viewport_screenshot`: the game as the player sees it.
 
 The editor world is never changed: query_level / edit_level / open_level refuse during play
-(Level.PlaySessionActive), and nothing done in the game is kept after stop.
+(Level.PlaySessionActive). The play world's state is discarded at stop; only the map saved by `save_first`, the input-save file
+`reset_input_settings` deletes, and what the game's own code writes can persist.
 
 A typical loop:
 
@@ -29,8 +30,8 @@ Every result has `payload.session` (status, below) and `payload.log`: `errors`, 
 
 | action | fields | result payload |
 |---|---|---|
-| start | `mode`: window (default, a 1280x720 window), viewport (the active Level Editor viewport), simulate (no player pawn); `map` (+ `save_first`) opens a map first; `paused`; `console` (a command or array, run before the first frame); `allow_blueprint_errors` | session, `console` results |
-| stop | | `played_real_seconds`, `played_unpaused_real_seconds`, `final_world_time`, the session's `log` summary |
+| start | `mode`: window (default, 1280x720), viewport (the level viewport), simulate (no player pawn); `map` (+ `save_first`) opens a map first; `paused`; `console` (a command or array, run before the first frame); `allow_blueprint_errors` | session, `console` results |
+| stop | | `played_real_seconds`, `played_unpaused_real_seconds`, `final_world_time`, the `log` summary |
 | status | | `session` |
 | pause / resume | | `session` (state paused / playing) |
 | wait | `seconds` (game time) and/or `until` (condition or array: any); `timeout` (real s, default 10, max 60) | `satisfied`, `reason` (condition, time, timeout, session_ended), `condition`, `observed`, `waited_game_seconds`; not met: `last_observed` + warning Play.WaitTimedOut |
@@ -46,9 +47,8 @@ Every result has `payload.session` (status, below) and `payload.log`: `errors`, 
 `game_mode`, `player` {`controller`, `pawn` (the query_play actor summary)}, `held_inputs`, `log`
 {`session_errors`, `session_warnings`, `session_start_seq`, `last_seq`}.
 
-start compiles modified Blueprints like the Play button; compile errors refuse it with
-**Play.BlueprintCompileErrors** (details.blueprints) instead of the
-editor's prompt: fix them, or pass `allow_blueprint_errors: true`. No Player Start: the player starts
+start compiles modified Blueprints like Play; compile errors refuse it with
+**Play.BlueprintCompileErrors** (details.blueprints): fix them, or pass `allow_blueprint_errors: true`. No Player Start: the player starts
 at the editor camera (warning Play.NoPlayerStart). No pawn: warning Play.NoPlayerPawn (the
 GameMode's Default Pawn Class). Play.StartFailed lists the errors the editor logged.
 
@@ -60,15 +60,16 @@ starts again from 0.
 
 ### call and set
 
-Cheats; both run at once, also while paused; `actor` is a reference (query_play). `call` runs a
+Cheats; both run at once, also paused; `actor` is a reference (query_play). `call` runs a
 Blueprint function, custom event or UFUNCTION of the actor or a component
 (`"CharacterMovement.StopMovementImmediately"`); `args` by name
 (`{"Amount": 50, "Target": "player"}`) or an array in order, in value forms (structs `{"X","Y","Z"}`,
 actors by reference); inputs left out take the pin default (`defaulted`). Errors:
-Play.FunctionNotFound, Play.FunctionNotCallable (latent, delegates), Play.ComponentNotFound,
+Play.FunctionNotFound, Play.FunctionNotCallable (latent, delegates, runs commands or Python), Play.ComponentNotFound,
 Play.InvalidArgument. `set` writes like a Set node: `values` {path: value} (paths as `properties`:
 `"BPC_Combat.bAutoAttack"`); `location` / `rotation` teleport (world cm / degrees; members left out kept). All values are checked before any is
-written (Play.PropertyNotFound / Play.InvalidValue). Warning Play.NotMoved: not Movable.
+written (Play.PropertyNotFound / Play.InvalidValue; through an object outside the game:
+Play.TargetOutsidePlay). Warning Play.NotMoved: not Movable.
 
 ### Conditions (wait until)
 
@@ -90,7 +91,7 @@ Each entry of `inputs` names one of:
   true/1 (default), a number for Axis1D, `{"X", "Y"}` for Axis2D (Move: Y forward, X right; Look: X
   yaw, Y pitch), `{"X","Y","Z"}` for Axis3D. It reaches the action as from a mapped key after
   the mapping's modifiers: give the final value. The action's own triggers apply;
-  a mapping's triggers (such as Pressed on LMB) do not. It bypasses context priority and
+  a mapping's triggers do not. It bypasses context priority and
   consumption: test context switches with `key`.
 - `key`: a key or axis sent as a physical key would be (through the player's mapping contexts,
   their triggers and modifiers): `SpaceBar`, `W`, `LeftShift`,
@@ -100,16 +101,15 @@ Each entry of `inputs` names one of:
 `duration`: game seconds held (default 0: one frame, a tap; a Pressed trigger fires once). `at`:
 game seconds after the request it starts (entries run in parallel: a combo is entries with
 different `at`). `state: "down"` presses and keeps it held after the request
-(`session.held_inputs`; e.g. charge or block) until an entry with
+(`session.held_inputs`) until an entry with
 `state: "up"` (no value or duration) or stop, across pauses and calls (Hold triggers count game time). Errors: Play.InputHeld, Play.InputNotHeld.
 
 Each `inputs[]` result: `input_action` and `mapped_keys`, or `key`; `start` / `end`, `held_frames`;
 `actions[]` reached, each with `triggered`, `triggered_frames` and trigger `events` (Started,
-Triggered, Ongoing, Completed, Canceled); `listeners` bound to them ("IA_Jump: Triggered on
-BP_Hero_C_0"). `triggered: false` with listeners: the triggers did not fire (hold longer, or
+Triggered, Ongoing, Completed, Canceled); `listeners` bound to them. `triggered: false` with listeners: the triggers did not fire (hold longer, or
 tap); no listeners: nothing reacts. Warnings:
-**Play.ActionNotMapped** (no context of the player maps it: a player could not press it), **Play.KeyNotMapped**, **Play.PlayerInputBlocked** (the game disabled the player's input or
-ignores move / look input, as in a cinematic: wait, retry). Errors: Play.InputActionNotFound,
+**Play.ActionNotMapped** (no context of the player maps it), **Play.KeyNotMapped**, **Play.PlayerInputBlocked** (the game disabled or ignores the player's
+input, as in a cinematic: wait, retry). Errors: Play.InputActionNotFound,
 Play.InputActionAmbiguous, Play.UnknownKey, Play.NoPlayer, Play.InputValueTypeMismatch.
 
 ## query_play
@@ -126,10 +126,10 @@ Errors: Play.ActorNotFound (close names), Play.ActorRefAmbiguous.
 
 Each actor: `name`, `label`, `class`, `path` (unique game object path), `location`, `rotation`,
 `velocity` / `speed`, `hidden`, `tags`; pawns: `controller` {name, class, player}; controllers: `pawn`; `vitals`: up to 12
-health-like values (Health, HP, Shield, ...) of the actor and its Blueprint
+health-like values (Health, HP, ...) of the actor and its Blueprint
 components (`"BPC_Combat.Health"`); `montage` {asset, position, section} while one plays; `ai`
 {controller, behavior_tree, running, active_node, active_tasks, blackboard {key: value},
-move_status, focus}. `properties: ["BPC_Combat.bAttacking", "CharacterMovement.MaxWalkSpeed", "Controller.PlayerState"]` adds `values` (and `value_errors` for paths that do not exist): a
+move_status, focus}. `properties: ["BPC_Combat.bAttacking", "CharacterMovement.MaxWalkSpeed"]` adds `values` (and `value_errors` for paths that do not exist): a
 component by name, then properties, struct members and object references. `detail`: "components"
 adds `components`; "properties" (= "full") also `properties` (values that differ from the class
 default; `diff_only: false` for all), as in query_level. Values use the AssetDocument value forms.
@@ -156,18 +156,17 @@ and belong to their `what`; another what's field is refused.
 ## get_viewport_screenshot
 
 `view`: "auto" (default: the game while a session runs, else the editor viewport), "game", "editor"
-(Simulate has no game view). `hud` (default true) adds UMG widgets (rendered off screen; without them: warning Play.HudNotCaptured). `format` "jpeg" (default; `quality` 1-100,
+(Simulate has no game view). `hud` (default true) adds UMG widgets (rendered off screen; else warning Play.HudNotCaptured). `format` "jpeg" (default; `quality` 1-100,
 default 70) or "png" (lossless); `max_width` (64-3840, default 1024) scales down.
 
 ## Pitfalls
 
-- MoveTo needs a navigation mesh. With no `NavMeshBoundsVolume` the enemy stands still (`ai.move_status` `Idle`, `location` unchanged). Stop, then `edit_level` spawn `/Script/NavigationSystem.NavMeshBoundsVolume` scaled over the floor (Behavior Tree guide).
-- `seconds` and `duration` are game time; `timeout` is real time.
-- Spawned actors get names like BP_Enemy_C_3: across sessions use `class`/`tag` filters or labels
-  of placed actors, not remembered names.
-- `console` refuses editor commands (quit, exit, py, obj, ...): Play.CommandRefused. `ke <actor>
-  <event>` targets the game copy (name, label or path). Warning Play.CommandNotRecognized: the game
-  did not know it.
+- MoveTo needs a navigation mesh. With no `NavMeshBoundsVolume` the enemy stands still (`ai.move_status` `Idle`). Stop, then `edit_level` spawn `/Script/NavigationSystem.NavMeshBoundsVolume` over the floor (Behavior Tree guide).
+- Spawned actors get names like BP_Enemy_C_3: across sessions filter by `class`/`tag` or use labels.
+- `console` refuses editor commands (quit, ...), Python and command runners (py, ServerExec, ...)
+  anywhere in a line; `input`, keys bound to them: Play.CommandRefused. `set`/`get` reach only game
+  objects (by path; no class defaults or editor actors): Play.TargetOutsidePlay.
+  `ke <actor> <event>` targets the game copy. Warning Play.CommandNotRecognized: unknown to the game.
 
 ## Diagnostics
 

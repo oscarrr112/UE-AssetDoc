@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Data table family primitives (provider "data", owner Data). The editor-equivalent paths:
 //   DataTable rows      -> FDataTableEditorUtils (AddRow/RemoveRow/RenameRow/MoveRow) and the

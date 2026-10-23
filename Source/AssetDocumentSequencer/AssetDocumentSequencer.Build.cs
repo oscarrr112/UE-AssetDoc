@@ -1,9 +1,10 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 using UnrealBuildTool;
 
 // Sequencer provider ("seq" primitives, owner Cinematics): the Level Sequence document
-// (docs/architecture/asset-document-sequencer-design.md). Phases S1 (read) and S2 (core authoring): the movie scene,
+// (docs/architecture/asset-document-sequencer-design.md). Read and core authoring: the movie scene,
 // binding references, tracks, sections and channels are read and written through the exported MovieScene /
 // MovieSceneTracks / LevelSequence API, reflection and the Editor typed value codec. The invocation plumbing is the graph
 // module's table provider.

@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Acceptance tests of the "graph" provider on K2 (Blueprint) graphs.
 // Contract: docs/architecture/asset-document-graph-primitives.md.

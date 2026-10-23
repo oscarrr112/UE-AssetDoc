@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -41,7 +42,7 @@ struct FNiagaraVariable;
 //   scripts and scratch pads    -> the script graph (nodes, links, pin defaults), its parameters and settings;
 //   parameter collections       -> the parameters with their default values.
 // Reads never compile, never dirty a package and never open UI.
-// System-level authoring (N2): fx.niagara.edit.v1 runs an op list over one headless system view model
+// System-level authoring: fx.niagara.edit.v1 runs an op list over one headless system view model
 // (emitters, emitter properties, renderers: AssetDocumentNiagaraEdit.cpp; user parameters:
 // AssetDocumentNiagaraUserParameters.cpp) and fx.niagara.compile.v1 is the toolbar's Compile
 // (AssetDocumentNiagaraCompile.cpp).

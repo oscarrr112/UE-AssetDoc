@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered Level Sequence Profile (profile.level_sequence.v1, class /Script/LevelSequence.LevelSequence).
 
 Document (MCP/schemas/assetdocument/Sequencer.md)::

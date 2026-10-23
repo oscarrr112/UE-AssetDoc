@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Acceptance 6 (save / unload / reload keeps GUIDs, links and defaults) and the
 // behavior test of the UE-editor-equivalent raw edits.

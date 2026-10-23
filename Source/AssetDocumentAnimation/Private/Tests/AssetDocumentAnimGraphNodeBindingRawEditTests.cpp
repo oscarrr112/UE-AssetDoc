@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // Behaviour test of the raw-edit file AnimBlueprint/AssetDocumentAnimGraphNodeBindingRawEdits:
 // pin property bindings of an anim graph node are written the way the details-panel

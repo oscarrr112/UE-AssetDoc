@@ -1,4 +1,5 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+// SPDX-License-Identifier: Apache-2.0
 
 // End-to-end User Defined Struct / Enum Profiles (profile.user_defined_struct.v1,
 // profile.user_defined_enum.v1) through the production Service:

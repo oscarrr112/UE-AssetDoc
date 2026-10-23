@@ -1,3 +1,6 @@
+# Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
+# SPDX-License-Identifier: Apache-2.0
+
 """Registered Widget Blueprint Profile (profile.widget_blueprint.v1): read, create and update UWidgetBlueprints.
 
 Composition:
