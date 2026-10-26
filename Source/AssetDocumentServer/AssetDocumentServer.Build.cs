@@ -43,7 +43,8 @@ public class AssetDocumentServer : ModuleRules
 			"PythonScriptPlugin"
 		});
 
-		// GameplayAbilities is optional — only link when the plugin is enabled
+		// GameplayAbilities is a required plugin dependency (UEAssetDoc.uplugin): editor builds always link it, so the
+		// descriptor must enable it wherever these binaries load, also in a project that does not list it.
 		if (Target.bBuildDeveloperTools || DoesModuleExist("GameplayAbilities"))
 		{
 			PrivateDependencyModuleNames.Add("GameplayAbilities");

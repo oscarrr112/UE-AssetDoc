@@ -57,7 +57,7 @@ url = "http://127.0.0.1:8559/mcp"
 
 ### Clients that start stdio servers only (stdio bridge)
 
-`ue-assetdoc` relays stdio to the editor's `/mcp` endpoint. It needs Node.js 20 or newer and its runtime dependency (`@modelcontextprotocol/sdk`), which no copy of the plugin includes: install it with `npm ci` in the `MCP` folder. A copy that already has the built bridge in `dist/` (a packaged plugin can) needs only the runtime dependencies; otherwise install everything and compile `src/` into `dist/`:
+`ue-assetdoc` relays stdio to the editor's `/mcp` endpoint. It needs Node.js 20 or newer and its runtime dependency (`@modelcontextprotocol/sdk`), which no copy of the plugin includes: install it with `npm ci` in the `MCP` folder. A copy that already has the built bridge in `dist/` (the prebuilt packages on GitHub Releases do) needs only the runtime dependencies; otherwise install everything and compile `src/` into `dist/`:
 
 ```bash
 cd <plugin>/MCP
@@ -134,7 +134,7 @@ A profile section starts with a `# Title` line, then a `Classes:` line listing t
 
 ## Packaging
 
-`Config/FilterPlugin.ini` adds `MCP/tools.json`, `MCP/schemas/`, the bridge and this README to a packaged copy of the plugin; the editor needs `tools.json` and `schemas/` to serve its tools. For the bridge it adds what `npm ci && npm run build` needs (`MCP/src/`, `MCP/tsconfig.json`, `MCP/package.json`, `MCP/package-lock.json`) and the built `MCP/dist/`. `dist/` is not in the repository: to ship the bridge built, run `npm ci && npm run build` in `MCP/` before packaging. `node_modules/` is never packaged, so users of the package still install the runtime dependencies (`npm ci --omit=dev`, or `npm ci && npm run build` without `dist/`) as in [the stdio bridge setup](#clients-that-start-stdio-servers-only-stdio-bridge).
+`Config/FilterPlugin.ini` adds `MCP/tools.json`, `MCP/schemas/`, the bridge and this README to a packaged copy of the plugin; the editor needs `tools.json` and `schemas/` to serve its tools. For the bridge it adds what `npm ci && npm run build` needs (`MCP/src/`, `MCP/tsconfig.json`, `MCP/package.json`, `MCP/package-lock.json`) and the built `MCP/dist/`. `dist/` is not in the repository: to ship the bridge built, run `npm ci && npm run build` in `MCP/` before packaging, as the prebuilt packages on GitHub Releases are made. `node_modules/` is never packaged, so users of the package still install the runtime dependencies (`npm ci --omit=dev`, or `npm ci && npm run build` without `dist/`) as in [the stdio bridge setup](#clients-that-start-stdio-servers-only-stdio-bridge).
 
 ## Development
 
