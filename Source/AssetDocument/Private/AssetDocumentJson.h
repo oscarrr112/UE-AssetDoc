@@ -23,4 +23,6 @@ public:
 	// "Keys 'A' and 'a' of <object> ..." for the Document.DuplicateKey diagnostic.
 	static FString DuplicateKeyMessage(const FString& Path, const FString& First, const FString& Second);
 	static bool WriteJsonFile(const FString& FilePath, const TSharedPtr<FJsonObject>& Json, FString& OutError);
+	// The bytes WriteJsonFile writes (pretty-printed UTF-8).
+	static bool SerializeForFile(const TSharedPtr<FJsonObject>& Json, TArray<uint8>& OutBytes, FString& OutError);
 };

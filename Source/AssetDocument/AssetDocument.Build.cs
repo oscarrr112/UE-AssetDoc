@@ -24,6 +24,7 @@ public class AssetDocument : ModuleRules
 			"UnrealEd",
 			// An open editor's toolbar commands (OpenEditor::CanExecuteEditorCommand).
 			"Slate",
+			"SlateCore",
 			// Material compile status (the editor's shader platform, GMaxRHIShaderPlatform).
 			"RHI",
 			"Kismet",

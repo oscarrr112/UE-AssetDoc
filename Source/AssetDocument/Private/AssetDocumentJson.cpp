@@ -231,7 +231,7 @@ bool FAssetDocumentJson::ParseJsonString(const FString& Text, TSharedPtr<FJsonOb
 	return true;
 }
 
-bool FAssetDocumentJson::WriteJsonFile(const FString& FilePath, const TSharedPtr<FJsonObject>& Json, FString& OutError)
+bool FAssetDocumentJson::SerializeForFile(const TSharedPtr<FJsonObject>& Json, TArray<uint8>& OutBytes, FString& OutError)
 {
 	if (!Json.IsValid())
 	{
@@ -244,14 +244,28 @@ bool FAssetDocumentJson::WriteJsonFile(const FString& FilePath, const TSharedPtr
 		TJsonWriterFactory<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>::Create(&Contents);
 	if (!FJsonSerializer::Serialize(Json.ToSharedRef(), Writer))
 	{
-		OutError = FString::Printf(TEXT("Failed to serialize JSON file '%s'"), *FilePath);
+		OutError = TEXT("Failed to serialize the JSON object");
 		return false;
 	}
 
 	FTCHARToUTF8 Utf8Contents(*Contents);
-	const TArrayView64<const uint8> Bytes(
-		reinterpret_cast<const uint8*>(Utf8Contents.Get()),
-		Utf8Contents.Length());
+	OutBytes = TArray<uint8>(reinterpret_cast<const uint8*>(Utf8Contents.Get()), Utf8Contents.Length());
+	return true;
+}
+
+bool FAssetDocumentJson::WriteJsonFile(const FString& FilePath, const TSharedPtr<FJsonObject>& Json, FString& OutError)
+{
+	TArray<uint8> Utf8Bytes;
+	if (!SerializeForFile(Json, Utf8Bytes, OutError))
+	{
+		if (Json.IsValid())
+		{
+			OutError = FString::Printf(TEXT("Failed to serialize JSON file '%s'"), *FilePath);
+		}
+		return false;
+	}
+
+	const TArrayView64<const uint8> Bytes(Utf8Bytes.GetData(), Utf8Bytes.Num());
 	FString AtomicError;
 	if (!FAssetDocumentAtomicFile::WriteBytesAtomically(FilePath, Bytes, AtomicError))
 	{

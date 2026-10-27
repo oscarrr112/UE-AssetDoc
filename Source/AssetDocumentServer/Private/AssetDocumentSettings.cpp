@@ -5,7 +5,32 @@
 
 UAssetDocumentSettings::UAssetDocumentSettings()
 {
+	// Actor and object packages of levels are not authored assets.
+	MirrorExcludedPaths = {TEXT("/Game/__ExternalActors__"), TEXT("/Game/__ExternalObjects__")};
+	// Extracting a level loads it; levels are edited with the level tools.
+	MirrorExcludedClasses = {FSoftClassPath(TEXT("/Script/Engine.World"))};
 }
+
+FSimpleMulticastDelegate& UAssetDocumentSettings::OnMirrorSettingsChanged()
+{
+	static FSimpleMulticastDelegate Delegate;
+	return Delegate;
+}
+
+#if WITH_EDITOR
+void UAssetDocumentSettings::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+	const FName Name = PropertyChangedEvent.GetMemberPropertyName();
+	if (Name == GET_MEMBER_NAME_CHECKED(UAssetDocumentSettings, bMirrorSidecars)
+		|| Name == GET_MEMBER_NAME_CHECKED(UAssetDocumentSettings, MirrorExcludedPaths)
+		|| Name == GET_MEMBER_NAME_CHECKED(UAssetDocumentSettings, MirrorExcludedClasses)
+		|| Name == GET_MEMBER_NAME_CHECKED(UAssetDocumentSettings, MaxMirrorFileSizeKB))
+	{
+		OnMirrorSettingsChanged().Broadcast();
+	}
+}
+#endif
 
 UAssetDocumentSettings* UAssetDocumentSettings::Get()
 {

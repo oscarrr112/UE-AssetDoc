@@ -14,6 +14,9 @@ from asset_document.diff import semantic_compare
 from asset_document.mutation_intent_projection import (
     SNAPSHOT_COVERED, SNAPSHOT_COVERED_KIND, build_mutation_intent_projection,
 )
+# Module-level on purpose: the native runtime restores sys.modules between phase calls, so an in-call import would load
+# a second copy of the diagnostics module whose errors the handlers below do not catch.
+from asset_document.sync_evidence import dispatch_sync
 from asset_document.dto import OptionalJsonValue, RuntimeOperation as Op, RuntimePhase as Phase, _decode_native_request, _project_native_result, _project_native_failure, _validate_native_context
 from asset_document.dto import PrimitiveRequirement
 from asset_document.profile_runtime import RuntimeTargetPolicy
@@ -79,6 +82,9 @@ class _Dispatch:
             revision = 0
         try:
             typed = _decode_native_request(request)
+            if typed.operation is Op.SYNC:
+                # Sidecar mirroring evidence: a pure function of the document text, served without a profile.
+                return _project_native_result(dispatch_sync(typed, getattr(context, "runtime_revision", revision)))
             binding = self.registry.resolve_runtime_exact(typed.requested_asset_class_path)
             if binding is None:
                 return legacy.dispatch(request, context)

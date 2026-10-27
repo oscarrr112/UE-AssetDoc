@@ -6,10 +6,12 @@
 #include "AssetDocumentIngressQueue.h"
 #include "AssetDocumentService.h"
 #include "AssetDocumentSidecar.h"
+#include "AssetDocumentSidecarSyncState.h"
 
 #include "Async/TaskGraphInterfaces.h"
 #include "HAL/FileManager.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
@@ -241,6 +243,102 @@ bool FAssetDocumentEditorSyncAssetRemovedAdmissionSuppressionTest::RunTest(
 		TEXT("The queued archive belongs to the ordinary target"),
 		ArchivedSidecars.Num() == 1
 			&& ArchivedSidecars[0].StartsWith(TEXT("DA_OrdinaryRemove")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAssetDocumentEditorSyncSuppressionFollowsContentTest,
+	"UEAssetDoc.EditorSync.SuppressionFollowsContent",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAssetDocumentEditorSyncSuppressionFollowsContentTest::RunTest(const FString& Parameters)
+{
+	const FString TestRoot = MakeUniqueSyncTestRoot();
+	const FString SidecarPath = FPaths::Combine(TestRoot, TEXT("DA_Suppressed.assetdoc.json"));
+	ON_SCOPE_EXIT
+	{
+		DeleteDirectoryTree(TestRoot);
+	};
+	IFileManager::Get().MakeDirectory(*TestRoot, true);
+	{
+		FAssetDocumentEditorSync::FScopedSidecarWrite Guard(SidecarPath);
+		FFileHelper::SaveStringToFile(TEXT("{\"written\":\"by the editor\"}"), *SidecarPath);
+	}
+	TestTrue(TEXT("the editor's own write is not seen as a change"), FAssetDocumentEditorSync::IsSidecarWriteSuppressed(SidecarPath));
+	// Someone edits the file right after: that edit is a change, however soon it comes.
+	FFileHelper::SaveStringToFile(TEXT("{\"written\":\"by someone else\"}"), *SidecarPath);
+	TestFalse(TEXT("a different content right after is a change"), FAssetDocumentEditorSync::IsSidecarWriteSuppressed(SidecarPath));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAssetDocumentEditorSyncOwnWriteNotOtherTest,
+	"UEAssetDoc.EditorSync.WriteScopeHidesOnlyItsOwnWrite",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAssetDocumentEditorSyncOwnWriteNotOtherTest::RunTest(const FString& Parameters)
+{
+	const FString TestRoot = MakeUniqueSyncTestRoot();
+	const FString SidecarPath = FPaths::Combine(TestRoot, TEXT("DA_OwnWrite.assetdoc.json"));
+	ON_SCOPE_EXIT
+	{
+		DeleteDirectoryTree(TestRoot);
+	};
+	IFileManager::Get().MakeDirectory(*TestRoot, true);
+	const FString Ours = TEXT("{\"written\":\"by the editor\"}\n");
+	{
+		FAssetDocumentEditorSync::FScopedSidecarWrite Guard(SidecarPath);
+		FString Error;
+		const FTCHARToUTF8 Bytes(*Ours);
+		TestTrue(TEXT("the editor writes the sidecar"), FAssetDocumentSidecar::WriteBytes(SidecarPath,
+			TConstArrayView<uint8>(reinterpret_cast<const uint8*>(Bytes.Get()), Bytes.Length()), Error));
+		// Someone writes the file while the scope still runs (after the editor's write).
+		FFileHelper::SaveStringToFile(TEXT("{\"written\":\"by someone else\"}"), *SidecarPath);
+	}
+	TestFalse(TEXT("the other write is not taken for the editor's"), FAssetDocumentEditorSync::IsSidecarWriteSuppressed(SidecarPath));
+	FFileHelper::SaveStringToFile(Ours, *SidecarPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	TestTrue(TEXT("the editor's own content still is"), FAssetDocumentEditorSync::IsSidecarWriteSuppressed(SidecarPath));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAssetDocumentEditorSyncExpectedContentTest,
+	"UEAssetDoc.EditorSync.WriteScopeReplacesOnlyExpectedContent",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAssetDocumentEditorSyncExpectedContentTest::RunTest(const FString& Parameters)
+{
+	using FScope = FAssetDocumentEditorSync::FScopedSidecarWrite;
+	const FString TestRoot = MakeUniqueSyncTestRoot();
+	const FString SidecarPath = FPaths::Combine(TestRoot, TEXT("DA_Expected.assetdoc.json"));
+	ON_SCOPE_EXIT
+	{
+		DeleteDirectoryTree(TestRoot);
+	};
+	IFileManager::Get().MakeDirectory(*TestRoot, true);
+	FFileHelper::SaveStringToFile(TEXT("{\"read\":1}"), *SidecarPath);
+	const FString ReadDigest = UE::AssetDocument::SidecarSync::DigestSidecarFile(SidecarPath);
+	FFileHelper::SaveStringToFile(TEXT("{\"edited\":2}"), *SidecarPath);
+	const FString Edited = UE::AssetDocument::SidecarSync::DigestSidecarFile(SidecarPath);
+	const TArray<uint8> Bytes = {'{', '}', '\n'};
+	FString Error;
+	{
+		const FScope Guard(SidecarPath, FScope::ERecord::OwnWrites, ReadDigest);
+		TestFalse(TEXT("a write based on older content does not replace the file"), FAssetDocumentSidecar::WriteBytes(SidecarPath, Bytes, Error));
+	}
+	TestEqual(TEXT("the newer content is kept"), UE::AssetDocument::SidecarSync::DigestSidecarFile(SidecarPath), Edited);
+	TestFalse(TEXT("and is a change for the file watcher"), FAssetDocumentEditorSync::IsSidecarWriteSuppressed(SidecarPath));
+	{
+		const FScope Guard(SidecarPath, FScope::ERecord::OwnWrites, Edited);
+		TestTrue(FString::Printf(TEXT("a write based on the current content replaces it: %s"), *Error), FAssetDocumentSidecar::WriteBytes(SidecarPath, Bytes, Error));
+		TestTrue(TEXT("and the next write in the scope is based on that write"), FAssetDocumentSidecar::WriteBytes(SidecarPath, Bytes, Error));
+	}
+	TestTrue(TEXT("the write is hidden from the file watcher"), FAssetDocumentEditorSync::IsSidecarWriteSuppressed(SidecarPath));
+	{
+		const FScope Guard(SidecarPath, FScope::ERecord::OwnWrites);
+		FFileHelper::SaveStringToFile(TEXT("{\"during\":3}"), *SidecarPath);
+	}
+	TestFalse(TEXT("a scope that wrote nothing hides nothing afterwards"), FAssetDocumentEditorSync::IsSidecarWriteSuppressed(SidecarPath));
 	return true;
 }
 

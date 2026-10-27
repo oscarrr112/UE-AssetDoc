@@ -11,7 +11,7 @@ public class AssetDocumentIntegration : ModuleRules
 		PublicDependencyModuleNames.AddRange(new string[] { "Core" });
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
-			"CoreUObject", "Engine", "UnrealEd", "Json", "AssetDocument", "AssetDocumentPython",
+			"CoreUObject", "Engine", "UnrealEd", "Json", "AssetDocument", "AssetDocumentPython", "AssetDocumentServer",
 			"AssetDocumentEditor", "AssetDocumentAI", "AssetDocumentAnimation", "AssetDocumentGraph", "AssetDocumentWidget", "AssetDocumentData",
 			"AssetDocumentNiagara",
 			"AssetDocumentAudio",

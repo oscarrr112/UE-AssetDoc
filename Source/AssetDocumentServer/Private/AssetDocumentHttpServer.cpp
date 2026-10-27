@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "AssetDocumentHttpServer.h"
+#include "Misc/ScopeLock.h"
 #include "AssetDocumentAssetDelete.h"
 #include "AssetDocumentHttpSecurity.h"
 #include "AssetDocumentMcpEndpoint.h"
@@ -276,6 +277,34 @@ FAssetDocumentHttpServer::FAssetDocumentHttpServer()
 FAssetDocumentHttpServer::~FAssetDocumentHttpServer()
 {
 	Stop();
+}
+
+namespace AssetDocumentHttpServerHealth
+{
+FCriticalSection& FieldsLock()
+{
+	static FCriticalSection Lock;
+	return Lock;
+}
+
+TMap<FString, TFunction<TSharedPtr<FJsonObject>()>>& Fields()
+{
+	static TMap<FString, TFunction<TSharedPtr<FJsonObject>()>> Providers;
+	return Providers;
+}
+}
+
+void FAssetDocumentHttpServer::SetHealthField(const FString& Field, TFunction<TSharedPtr<FJsonObject>()> Provider)
+{
+	FScopeLock Lock(&AssetDocumentHttpServerHealth::FieldsLock());
+	if (Provider)
+	{
+		AssetDocumentHttpServerHealth::Fields().Add(Field, MoveTemp(Provider));
+	}
+	else
+	{
+		AssetDocumentHttpServerHealth::Fields().Remove(Field);
+	}
 }
 
 TMap<FDelegateHandle, FAssetDocumentExternalRoute>& FAssetDocumentHttpServer::GetExternalRoutes()
@@ -765,6 +794,16 @@ TSharedPtr<FJsonObject> FAssetDocumentHttpServer::RunHealth(uint32 Port, int32& 
 	// Where /Game maps on disk (AssetDocument sidecars live next to it: /Game/X/Y -> <contentDir>/X/Y.assetdoc.json).
 	ResponseJson->SetStringField(TEXT("projectDir"), FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()));
 	ResponseJson->SetStringField(TEXT("contentDir"), FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()));
+	{
+		FScopeLock Lock(&AssetDocumentHttpServerHealth::FieldsLock());
+		for (const TPair<FString, TFunction<TSharedPtr<FJsonObject>()>>& Field : AssetDocumentHttpServerHealth::Fields())
+		{
+			if (const TSharedPtr<FJsonObject> Value = Field.Value())
+			{
+				ResponseJson->SetObjectField(Field.Key, Value);
+			}
+		}
+	}
 
 	OutStatusCode = 200;
 	return ResponseJson;

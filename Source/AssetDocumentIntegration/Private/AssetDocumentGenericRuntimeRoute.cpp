@@ -1150,6 +1150,34 @@ FAssetDocumentRuntimeResultDto FAssetDocumentGenericRuntimeRoute::DispatchExtrac
 	return Result;
 }
 
+FAssetDocumentRuntimeResultDto FAssetDocumentGenericRuntimeRoute::DispatchSync(const TSharedPtr<FJsonObject>& Options)
+{
+	if (Runtime == nullptr)
+	{
+		FAssetDocumentRuntimeRequestDto Inactive;
+		return MakeRuntimeFailure(
+			Inactive,
+			TEXT("GenericRuntime.Inactive"),
+			TEXT("Generic AssetDocument runtime is inactive."));
+	}
+	TArray<FAssetDocumentRuntimeDiagnostic> Diagnostics;
+	TOptional<FAssetDocumentRuntimeRequestDto> Adapted =
+		FAssetDocumentGenericRequestAdapter::AdaptSync(Options, Runtime->GetActiveRuntimeRevision(), Diagnostics);
+	if (!Adapted.IsSet())
+	{
+		FAssetDocumentRuntimeResultDto Failure = MakeRuntimeFailure(
+			{},
+			TEXT("GenericRuntime.RequestAdaptationFailed"),
+			TEXT("The Service request could not be adapted."));
+		Failure.Diagnostics.Insert(Diagnostics, 0);
+		return Failure;
+	}
+	return FAssetDocumentGenericReadOnlyDispatcher::DispatchPhase(
+		*Runtime,
+		Adapted.GetValue(),
+		EAssetDocumentRuntimeRequestPhase::Validate);
+}
+
 FAssetDocumentRuntimeResultDto FAssetDocumentGenericRuntimeRoute::DispatchDiff(const FAssetDocumentDiffRequest& Request)
 {
 	const FUnattendedRequestScope Unattended;

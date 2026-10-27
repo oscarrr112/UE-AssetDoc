@@ -85,6 +85,14 @@ void FAssetDocumentSidecarApplyLedger::Record(const FString& SidecarPath, TArray
 	Entry.AppliedAtUtc = FDateTime::UtcNow();
 }
 
+void FAssetDocumentSidecarApplyLedger::AddContentHash(const FString& SidecarPath, const FString& ContentHash)
+{
+	if (FRecord* Entry = Records.Find(SidecarPath); Entry != nullptr && !ContentHash.IsEmpty())
+	{
+		Entry->ContentHashes.AddUnique(ContentHash);
+	}
+}
+
 FAssetDocumentResult FAssetDocumentSidecarApplyLedger::MakeReplayedWatcherResult(const FRecord& Record)
 {
 	FAssetDocumentResult Result = Record.Result;

@@ -4,6 +4,8 @@
 #include "Runtime/AssetDocumentSidecarByteIo.h"
 
 #include "AssetDocumentAtomicFile.h"
+#include "AssetDocumentEditorSync.h"
+#include "AssetDocumentModule.h"
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -128,6 +130,10 @@ FAssetDocumentContractValidationResult RestoreAbsent(const FAssetDocumentJournal
 		FAssetDocumentAtomicFile::ReleaseLoadedPackageFileHandles(Artifact.TargetPath);
 #endif
 		bRemoved = IFileManager::Get().Delete(*Artifact.TargetPath, false, true, true);
+		if (bRemoved)
+		{
+			FAssetDocumentEditorSync::NoteSidecarWritten(Artifact.TargetPath, nullptr, 0);
+		}
 	}
 	FString Error;
 	if (!bRemoved || !FAssetDocumentAtomicFile::FlushParentDirectory(Artifact.TargetPath, Error))
@@ -148,6 +154,7 @@ FAssetDocumentContractValidationResult RestoreExisting(const FAssetDocumentJourn
 	{
 		return MakeSidecarResult(TEXT("Atomic.Poisoned.RecoveryFailed"), TEXT("Exact sidecar baseline could not be restored."));
 	}
+	FAssetDocumentEditorSync::NoteSidecarWritten(Artifact.TargetPath, Bytes.GetData(), Bytes.Num());
 	return MakeValidSidecarResult();
 }
 }
@@ -227,12 +234,22 @@ void FAssetDocumentSidecarByteIo::CleanupStaged(
 FAssetDocumentContractValidationResult FAssetDocumentSidecarByteIo::Install(
 	const FAssetDocumentByteArtifact& Artifact)
 {
+	FString Changed;
+	if (!FAssetDocumentEditorSync::CheckSidecarUnchanged(Artifact.TargetPath, Changed))
+	{
+		// The file changed after the apply read it: the newer content stays (the watcher takes it as a change) and
+		// is not replaced by the canonical form of the older one.
+		UE_LOG(LogAssetDocument, Log, TEXT("AssetDocument apply: %s"), *Changed);
+		return MakeValidSidecarResult();
+	}
 	TArray64<uint8> Bytes;
 	if (!LoadAndValidate(Artifact.StagedPath, Artifact.ContentDigest, Bytes)
 		|| !WriteExact(Artifact.TargetPath, Bytes))
 	{
 		return MakeSidecarResult(TEXT("Persistence.AtomicInstallFailed"), TEXT("Sidecar staged bytes were invalid or could not be installed."));
 	}
+	// Recorded only inside an editor write scope of the file (a sidecar; package files have none).
+	FAssetDocumentEditorSync::NoteSidecarWritten(Artifact.TargetPath, Bytes.GetData(), Bytes.Num());
 	return MakeValidSidecarResult();
 }
 

@@ -22,6 +22,11 @@ public:
 		const FString& AssetClassPath,
 		uint64 RuntimeRevision,
 		TArray<FAssetDocumentRuntimeDiagnostic>& OutDiagnostics);
+	// The read-only Sync operation (sidecar mirroring evidence): Options is passed to Python as the document.
+	static TOptional<FAssetDocumentRuntimeRequestDto> AdaptSync(
+		const TSharedPtr<FJsonObject>& Options,
+		uint64 RuntimeRevision,
+		TArray<FAssetDocumentRuntimeDiagnostic>& OutDiagnostics);
 	static TOptional<FAssetDocumentRuntimeRequestDto> AdaptDiff(
 		const FAssetDocumentDiffRequest& Request,
 		uint64 RuntimeRevision,

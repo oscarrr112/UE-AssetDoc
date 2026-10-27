@@ -78,6 +78,8 @@ The settings are in **Project Settings > Plugins > UE-AssetDoc**: the port, the 
 HttpServerPort=8560
 ```
 
+**Sidecar mirroring** (`bMirrorSidecars`, off by default, under **Sidecar Mirroring**) keeps a `<AssetName>.assetdoc.json` next to every `/Game` asset: saving an asset updates its file, editing the file updates the asset, and a change on both sides is reported as a conflict instead of overwriting either. Missing files are generated in the background (with progress and Cancel) at editor start and when you turn it on. `MirrorExcludedPaths`, `MirrorExcludedClasses` and `MaxMirrorFileSizeKB` limit what is mirrored, and assets whose names use characters other than ASCII letters, digits, `_` and `-` are not mirrored; this setting takes effect at once. Commit the sidecars with their `.uasset` files, and ignore `*.assetdoc.asset.json` (conflict copies) and `Content/_DeletedAssetDocs/`.
+
 The editor reads them when it starts. A value in the per-user `Saved/Config/<Platform>Editor/EditorPerProjectUserSettings.ini` of the project, if there is one, takes precedence. The names of all settings are in [MCP/README.md](MCP/README.md#ports-and-several-editors) and [SECURITY.md](SECURITY.md).
 
 ### Troubleshooting

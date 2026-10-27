@@ -1,7 +1,7 @@
 {
   "server": {
     "name": "ue-assetdoc",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "tools": [
     {
@@ -441,6 +441,61 @@
           },
           "target": {
             "argument": "target"
+          }
+        },
+        "response": "document"
+      }
+    },
+    {
+      "name": "sync_asset_document",
+      "description": "Sidecar mirroring (health_check sidecar_sync.enabled; the user turns it on in Project Settings): status of mirrored sidecars (no targets: counts and open issues; targets: checked now), resolve a conflict with accept_sidecar (apply the edited sidecar) or accept_asset (rewrite the sidecar from the asset), or materialize missing sidecars in the background. Errors: Sync.MirroringOff, InvalidAction, InvalidTarget.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "status",
+              "accept_sidecar",
+              "accept_asset",
+              "materialize"
+            ],
+            "description": "What to do."
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "/Game assets (accept_*: required) or folders (status, materialize; default all of /Game)."
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "accept_*: JSON Pointers such as /Properties or /Body/Keys; default every conflicted region."
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "call": {
+        "method": "POST",
+        "route": "/assetdocument/sync",
+        "required": [
+          "action"
+        ],
+        "body": {
+          "action": {
+            "argument": "action"
+          },
+          "targets": {
+            "argument": "targets"
+          },
+          "regions": {
+            "argument": "regions"
           }
         },
         "response": "document"

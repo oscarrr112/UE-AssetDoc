@@ -211,7 +211,7 @@ bool FAssetDocumentMcpEndpointTest::RunTest(const FString& Parameters)
 		const TSharedPtr<FJsonObject> Expected = MakeShared<FJsonObject>();
 		Expected->SetArrayField(TEXT("tools"), Tools->ListTools(FAssetDocumentMcpToolPolicy()));
 		TestEqual(TEXT("tools/list is the manifest"), AssetDocumentMcpJson::StringifyObject(Listed), AssetDocumentMcpJson::StringifyObject(Expected));
-		TestEqual(TEXT("32 tools"), Listed->GetArrayField(TEXT("tools")).Num(), 32);
+		TestEqual(TEXT("33 tools"), Listed->GetArrayField(TEXT("tools")).Num(), 33);
 	}
 
 	// tools/call.

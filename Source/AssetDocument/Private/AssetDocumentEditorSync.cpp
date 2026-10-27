@@ -7,20 +7,48 @@
 #include "AssetDocumentModule.h"
 #include "AssetDocumentSidecar.h"
 #include "AssetDocumentSidecarPathUtils.h"
+#include "AssetDocumentSidecarSyncState.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "HAL/FileManager.h"
 #include "Misc/DateTime.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeLock.h"
+#include "Misc/SecureHash.h"
+
+namespace EditorSyncWriteGuardLocal
+{
+// An editor write of a sidecar: when it stops hiding changes of the file, and the file's content as the write left it
+// (unset while the write is running and has recorded no write).
+struct FRecentSidecarWrite
+{
+	FDateTime Expiry;
+	TOptional<FString> Digest;
+	// Digest is what a recorded write left (not the file at the end of the scope).
+	bool bNoted = false;
+	bool bOwnWritesOnly = false;
+	// The content the scope's writes may replace (unset: any).
+	TOptional<FString> Expected;
+	uint64 Serial = 0;
+};
+
+uint64 GSidecarWriteSerial = 0;
+
+// The file's content digest; empty when there is no file.
+FString DigestOfFile(const FString& FilePath)
+{
+	return UE::AssetDocument::SidecarSync::DigestSidecarFile(FilePath);
+}
+}
 
 namespace
 {
 FCriticalSection GSidecarSyncGuardLock;
 TMap<FString, int32> GActiveSidecarWrites;
-TMap<FString, FDateTime> GRecentSidecarWrites;
+TMap<FString, EditorSyncWriteGuardLocal::FRecentSidecarWrite> GRecentSidecarWrites;
 int32 GActiveSidecarSyncDepth = 0;
 
 FString ObjectPathFromAssetData(const FAssetData& AssetData)
@@ -43,7 +71,7 @@ bool FileExists(const FString& FilePath)
 	return !FilePath.IsEmpty() && IFileManager::Get().FileExists(*FilePath);
 }
 
-void RememberSidecarWriteLocked(const FString& FilePath)
+void RememberSidecarWriteLocked(const FString& FilePath, bool bOwnWritesOnly, const TOptional<FString>& Expected)
 {
 	if (FilePath.IsEmpty())
 	{
@@ -52,7 +80,11 @@ void RememberSidecarWriteLocked(const FString& FilePath)
 
 	const FString NormalizedPath = FAssetDocumentSidecarPathUtils::NormalizeFilePath(FilePath);
 	GActiveSidecarWrites.FindOrAdd(NormalizedPath)++;
-	GRecentSidecarWrites.Add(NormalizedPath, FDateTime::UtcNow() + FTimespan::FromSeconds(5));
+	EditorSyncWriteGuardLocal::FRecentSidecarWrite Recent;
+	Recent.Expiry = FDateTime::UtcNow() + FTimespan::FromSeconds(5);
+	Recent.bOwnWritesOnly = bOwnWritesOnly;
+	Recent.Expected = Expected;
+	GRecentSidecarWrites.Add(NormalizedPath, MoveTemp(Recent));
 }
 
 void ForgetActiveSidecarWriteLocked(const FString& FilePath)
@@ -76,9 +108,10 @@ void ForgetActiveSidecarWriteLocked(const FString& FilePath)
 void PruneRecentSidecarWritesLocked()
 {
 	const FDateTime Now = FDateTime::UtcNow();
-	for (TMap<FString, FDateTime>::TIterator It(GRecentSidecarWrites); It; ++It)
+	for (auto It = GRecentSidecarWrites.CreateIterator(); It; ++It)
 	{
-		if (It.Value() <= Now)
+		// A write still running keeps its record, however long it takes.
+		if (It.Value().Expiry <= Now && !GActiveSidecarWrites.Contains(It.Key()))
 		{
 			It.RemoveCurrent();
 		}
@@ -161,7 +194,7 @@ FAssetDocumentEditorSync::FScopedSidecarWrite::FScopedSidecarWrite(const TArray<
 	GActiveSidecarSyncDepth++;
 	for (const FString& FilePath : FilePaths)
 	{
-		RememberSidecarWriteLocked(FilePath);
+		RememberSidecarWriteLocked(FilePath, false, TOptional<FString>());
 	}
 }
 
@@ -170,14 +203,123 @@ FAssetDocumentEditorSync::FScopedSidecarWrite::FScopedSidecarWrite(const FString
 {
 }
 
-FAssetDocumentEditorSync::FScopedSidecarWrite::~FScopedSidecarWrite()
+FAssetDocumentEditorSync::FScopedSidecarWrite::FScopedSidecarWrite(const FString& InFilePath, ERecord InRecord,
+	const TOptional<FString>& InExpectedDigest)
+	: FilePaths({InFilePath})
+	, Record(InRecord)
 {
 	FScopeLock Lock(&GSidecarSyncGuardLock);
+	GActiveSidecarSyncDepth++;
+	RememberSidecarWriteLocked(InFilePath, InRecord == ERecord::OwnWrites, InExpectedDigest);
+}
+
+FAssetDocumentEditorSync::FScopedSidecarWrite::~FScopedSidecarWrite()
+{
+	// What the scope left in each file: a later change of the file to anything else is not the editor's.
+	TArray<FString> Digests;
 	for (const FString& FilePath : FilePaths)
 	{
-		ForgetActiveSidecarWriteLocked(FilePath);
+		Digests.Add(Record == ERecord::FileAtEnd
+			? EditorSyncWriteGuardLocal::DigestOfFile(FAssetDocumentSidecarPathUtils::NormalizeFilePath(FilePath))
+			: FString());
+	}
+	FScopeLock Lock(&GSidecarSyncGuardLock);
+	for (int32 Index = 0; Index < FilePaths.Num(); ++Index)
+	{
+		ForgetActiveSidecarWriteLocked(FilePaths[Index]);
+		const FString NormalizedPath = FAssetDocumentSidecarPathUtils::NormalizeFilePath(FilePaths[Index]);
+		EditorSyncWriteGuardLocal::FRecentSidecarWrite* Recent = GRecentSidecarWrites.Find(NormalizedPath);
+		if (Recent == nullptr)
+		{
+			continue;
+		}
+		const bool bStillActive = GActiveSidecarWrites.Contains(NormalizedPath);
+		if (!bStillActive)
+		{
+			Recent->Expected.Reset();
+		}
+		if (Recent->bNoted)
+		{
+			continue;
+		}
+		if (Record == ERecord::FileAtEnd)
+		{
+			Recent->Digest = Digests[Index];
+			Recent->Expiry = FDateTime::UtcNow() + FTimespan::FromSeconds(5);
+		}
+		else if (!bStillActive)
+		{
+			// Nothing written: nothing to hide.
+			GRecentSidecarWrites.Remove(NormalizedPath);
+		}
 	}
 	GActiveSidecarSyncDepth = FMath::Max(0, GActiveSidecarSyncDepth - 1);
+}
+
+bool FAssetDocumentEditorSync::CheckSidecarUnchanged(const FString& FilePath, FString& OutError)
+{
+	const FString NormalizedPath = FAssetDocumentSidecarPathUtils::NormalizeFilePath(FilePath);
+	FString Expected;
+	{
+		FScopeLock Lock(&GSidecarSyncGuardLock);
+		const EditorSyncWriteGuardLocal::FRecentSidecarWrite* Recent = GRecentSidecarWrites.Find(NormalizedPath);
+		if (Recent == nullptr || !Recent->Expected.IsSet() || !GActiveSidecarWrites.Contains(NormalizedPath))
+		{
+			return true;
+		}
+		Expected = Recent->Expected.GetValue();
+	}
+	if (EditorSyncWriteGuardLocal::DigestOfFile(NormalizedPath) == Expected)
+	{
+		return true;
+	}
+	OutError = FString::Printf(TEXT("'%s' changed after the content this write is based on was read; it was not overwritten"),
+		*NormalizedPath);
+	return false;
+}
+
+void FAssetDocumentEditorSync::NoteSidecarWritten(const FString& FilePath, const uint8* Data, int64 Num)
+{
+	FString Digest;
+	if (Data != nullptr)
+	{
+		FSHAHash Hash;
+		FSHA1::HashBuffer(Data, static_cast<uint64>(FMath::Max<int64>(Num, 0)), Hash.Hash);
+		Digest = Hash.ToString();
+	}
+	const FString NormalizedPath = FAssetDocumentSidecarPathUtils::NormalizeFilePath(FilePath);
+	FScopeLock Lock(&GSidecarSyncGuardLock);
+	EditorSyncWriteGuardLocal::FRecentSidecarWrite* Recent = GRecentSidecarWrites.Find(NormalizedPath);
+	if (Recent == nullptr || !GActiveSidecarWrites.Contains(NormalizedPath))
+	{
+		return;
+	}
+	Recent->Digest = Digest;
+	Recent->bNoted = true;
+	Recent->Serial = ++EditorSyncWriteGuardLocal::GSidecarWriteSerial;
+	Recent->Expiry = FDateTime::UtcNow() + FTimespan::FromSeconds(5);
+	if (Recent->Expected.IsSet())
+	{
+		Recent->Expected = Digest;
+	}
+}
+
+uint64 FAssetDocumentEditorSync::GetSidecarWriteSerial()
+{
+	FScopeLock Lock(&GSidecarSyncGuardLock);
+	return EditorSyncWriteGuardLocal::GSidecarWriteSerial;
+}
+
+TOptional<FString> FAssetDocumentEditorSync::FindSidecarWriteSince(const FString& FilePath, uint64 Serial)
+{
+	const FString NormalizedPath = FAssetDocumentSidecarPathUtils::NormalizeFilePath(FilePath);
+	FScopeLock Lock(&GSidecarSyncGuardLock);
+	const EditorSyncWriteGuardLocal::FRecentSidecarWrite* Recent = GRecentSidecarWrites.Find(NormalizedPath);
+	if (Recent == nullptr || !Recent->bNoted || Recent->Serial <= Serial || !Recent->Digest.IsSet())
+	{
+		return TOptional<FString>();
+	}
+	return Recent->Digest;
 }
 
 FAssetDocumentEditorSync::~FAssetDocumentEditorSync()
@@ -226,16 +368,33 @@ void FAssetDocumentEditorSync::Unregister()
 
 bool FAssetDocumentEditorSync::IsSidecarWriteSuppressed(const FString& FilePath)
 {
-	FScopeLock Lock(&GSidecarSyncGuardLock);
-	PruneRecentSidecarWritesLocked();
-
-	if (GActiveSidecarSyncDepth > 0 && FilePath.IsEmpty())
-	{
-		return true;
-	}
-
 	const FString NormalizedPath = FAssetDocumentSidecarPathUtils::NormalizeFilePath(FilePath);
-	return GActiveSidecarWrites.Contains(NormalizedPath) || GRecentSidecarWrites.Contains(NormalizedPath);
+	FString Written;
+	{
+		FScopeLock Lock(&GSidecarSyncGuardLock);
+		PruneRecentSidecarWritesLocked();
+
+		if (GActiveSidecarSyncDepth > 0 && FilePath.IsEmpty())
+		{
+			return true;
+		}
+		if (GActiveSidecarWrites.Contains(NormalizedPath))
+		{
+			return true;
+		}
+		const EditorSyncWriteGuardLocal::FRecentSidecarWrite* Recent = GRecentSidecarWrites.Find(NormalizedPath);
+		if (Recent == nullptr)
+		{
+			return false;
+		}
+		if (!Recent->Digest.IsSet())
+		{
+			return true;
+		}
+		Written = Recent->Digest.GetValue();
+	}
+	// Shortly after an editor write, only that write's content is hidden: an edit made right after it is a change.
+	return EditorSyncWriteGuardLocal::DigestOfFile(NormalizedPath) == Written;
 }
 
 FString FAssetDocumentEditorSync::InferDuplicateSourceObjectPath(const FString& NewObjectPath)

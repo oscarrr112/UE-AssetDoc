@@ -118,6 +118,9 @@ public:
 	static TSharedPtr<FJsonObject> CallRoute(const FString& Method, const FString& Endpoint, const FString& Body,
 		const TMap<FString, FString>& QueryParams, uint32 Port, int32& OutStatusCode);
 
+	/** An extra health_check field (any thread may call Provider; it must be thread safe). An empty Provider removes it */
+	static void SetHealthField(const FString& Field, TFunction<TSharedPtr<FJsonObject>()> Provider);
+
 	/** Register an external route: bound now on running servers (and on every later start); their service discovery
 	 *  files are rewritten once on the next tick, however many routes change in between */
 	static FDelegateHandle RegisterExternalRoute(const FAssetDocumentExternalRoute& Route);

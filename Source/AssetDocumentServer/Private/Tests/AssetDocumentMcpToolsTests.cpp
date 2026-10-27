@@ -161,7 +161,7 @@ const TCHAR* const DefaultCatalog[] = {
 	TEXT("get_asset_document_schema"), TEXT("find_assets"), TEXT("list_types"), TEXT("inspect_asset_document_target"),
 	TEXT("inspect_asset_document_profile"), TEXT("create_asset_document_template"), TEXT("extract_asset_document"),
 	TEXT("validate_asset_document"), TEXT("diff_asset_document"), TEXT("apply_asset_document_file"), TEXT("duplicate_asset"),
-	TEXT("sample_animation_bones"), TEXT("retarget_animations"), TEXT("health_check"), TEXT("get_editor_context"), TEXT("query_level"),
+	TEXT("sync_asset_document"), TEXT("sample_animation_bones"), TEXT("retarget_animations"), TEXT("health_check"), TEXT("get_editor_context"), TEXT("query_level"),
 	TEXT("edit_level"), TEXT("undo_editor"), TEXT("open_level"), TEXT("new_level"), TEXT("get_level_editing_guide"), TEXT("play"),
 	TEXT("query_play"), TEXT("execute_python"), TEXT("get_viewport_screenshot"), TEXT("delete_assets"), TEXT("import_assets"),
 	TEXT("settings"), TEXT("save_assets"), TEXT("reload_assets"), TEXT("asset_editor"), TEXT("export_assets"),

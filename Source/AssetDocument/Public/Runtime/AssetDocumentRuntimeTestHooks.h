@@ -19,6 +19,9 @@ struct ASSETDOCUMENT_API FAssetDocumentRuntimeTestHooks
 	// InstallPackageCompanions, InstallSidecar, AdvanceSync, MarkDurableComplete) fails the file
 	// write that follows it; Event Cleanup fails its journal cleanup.
 	static void FailNextPersistenceAtEvent(const FString& Event);
+	// Called with every persistence event (the names above) as it is recorded, before the step that follows it;
+	// empty to remove. Reset() removes it too.
+	static void SetPersistenceEventObserver(TFunction<void(FStringView Event)> Observer);
 	static void Reset();
 
 	// Called by the runtime.

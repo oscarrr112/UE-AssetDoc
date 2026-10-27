@@ -47,6 +47,9 @@ struct ASSETDOCUMENT_API FAssetDocumentApplyFileRequest
 	// or a no-op apply writes nothing.
 	bool bSaveAsset = true;
 	bool bTriggeredByWatcher = false;
+	// Apply the file as it is, also when sidecar mirroring is on (the sync pass's own apply). Otherwise, with mirroring
+	// on, a saved apply of a mirrored asset runs the sync pass (AssetDocumentSidecarSync.h).
+	bool bBypassSidecarSync = false;
 };
 
 struct ASSETDOCUMENT_API FAssetDocumentInspectRequest
@@ -74,6 +77,10 @@ struct ASSETDOCUMENT_API FAssetDocumentTemplateRequest
 // or validate of a document that carries it is refused with Document.StaleBase when the asset changed since, unless
 // the document would change nothing; the profiles never see the field.
 inline const TCHAR* const AssetDocumentBaseRevisionField = TEXT("BaseRevision");
+
+// A mirrored sidecar's system-maintained top-level object: the sync state of its last sync with the asset ("sync") and
+// what the file cannot express ("Skipped"). Apply, validate and diff ignore it; Extract never emits it.
+inline const TCHAR* const AssetDocumentSyncMetaField = TEXT("_meta");
 
 struct ASSETDOCUMENT_API FAssetDocumentExtractRequest
 {

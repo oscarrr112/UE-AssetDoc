@@ -58,16 +58,50 @@ AssetDocumentPaths::EPathLookup ResolveExistingPath(const FString& AbsolutePath,
 #include <limits.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#if PLATFORM_APPLE
+#include <CoreFoundation/CoreFoundation.h>
+#endif
 
 namespace AssetDocumentPathsPlatform
 {
+#if PLATFORM_APPLE
+// The engine creates files and folders on Apple platforms under their decomposed (NFD) names, and realpath returns
+// those; package names and document text use precomposed (NFC) characters. A resolved path is returned precomposed,
+// so a name with accents compares equal to the same name typed in a document (the file system accepts either form).
+FString ToPrecomposed(const char* Utf8)
+{
+	FString Result(UTF8_TO_TCHAR(Utf8));
+	CFMutableStringRef Text = CFStringCreateMutable(kCFAllocatorDefault, 0);
+	if (Text == nullptr)
+	{
+		return Result;
+	}
+	CFStringAppendCString(Text, Utf8, kCFStringEncodingUTF8);
+	CFStringNormalize(Text, kCFStringNormalizationFormC);
+	const CFIndex Capacity = CFStringGetMaximumSizeForEncoding(CFStringGetLength(Text), kCFStringEncodingUTF8) + 1;
+	TArray<char> Buffer;
+	Buffer.SetNumZeroed(static_cast<int32>(Capacity));
+	if (CFStringGetCString(Text, Buffer.GetData(), Capacity, kCFStringEncodingUTF8))
+	{
+		Result = UTF8_TO_TCHAR(Buffer.GetData());
+	}
+	CFRelease(Text);
+	return Result;
+}
+#else
+FString ToPrecomposed(const char* Utf8)
+{
+	return FString(UTF8_TO_TCHAR(Utf8));
+}
+#endif
+
 AssetDocumentPaths::EPathLookup ResolveExistingPath(const FString& AbsolutePath, FString& OutRealPath)
 {
 	const FTCHARToUTF8 Utf8(*AbsolutePath);
 	char Resolved[PATH_MAX];
 	if (realpath(Utf8.Get(), Resolved) != nullptr)
 	{
-		OutRealPath = UTF8_TO_TCHAR(Resolved);
+		OutRealPath = ToPrecomposed(Resolved);
 		return AssetDocumentPaths::EPathLookup::Resolved;
 	}
 	struct stat Entry;

@@ -18,6 +18,9 @@
 #include "AssetDocumentSidecar.h"
 #include "AssetDocumentSidecarApplyLedger.h"
 #include "AssetDocumentSidecarReader.h"
+#include "AssetDocumentSidecarSync.h"
+#include "AssetDocumentSidecarSyncRunner.h"
+#include "AssetDocumentSidecarSyncState.h"
 #include "Discovery/AssetDocumentDiscovery.h"
 #include "AssetDocumentPendingNotices.h"
 
@@ -732,6 +735,8 @@ FAssetDocumentResult ValidateUnroutableDocument(const TSharedPtr<FJsonObject>& D
 FAssetDocumentService::FAssetDocumentService()
 	: SidecarApplyLedger(MakeUnique<FAssetDocumentSidecarApplyLedger>())
 {
+	SidecarSync = MakeUnique<FAssetDocumentSidecarSync>(*this);
+	SidecarSyncRunner = MakeUnique<FAssetDocumentSidecarSyncRunner>(*this);
 }
 
 FAssetDocumentService::~FAssetDocumentService() = default;
@@ -749,6 +754,23 @@ void FAssetDocumentService::UnbindGenericRuntimeRoute(
 	{
 		GenericRuntimeRoute.Reset();
 	}
+}
+
+TOptional<FString> FAssetDocumentService::QueueMirroredSidecar(const FString& SidecarPath)
+{
+	using namespace UE::AssetDocument::SidecarSync;
+	if (!IsMirroringEnabled())
+	{
+		return {};
+	}
+	const FString Target = FAssetDocumentSidecar::ResolveObjectPathFromSidecar(SidecarPath);
+	if (Target.IsEmpty() || !IsInMirrorScope(Target))
+	{
+		return {};
+	}
+	const FString PackageName = ToPackageName(Target);
+	SidecarSyncRunner->Enqueue(PackageName, EAssetDocumentSidecarSyncTrigger::SidecarChanged);
+	return PackageName;
 }
 
 FAssetDocumentResult FAssetDocumentService::HandleIngressEvent(
@@ -787,6 +809,13 @@ FAssetDocumentResult FAssetDocumentService::HandleIngressEvent(
 			return FAssetDocumentResult::Success(Warning);
 		}
 
+		// With mirroring on, a mirrored asset's pass runs in the runner's time-sliced queue, not in this event: many
+		// changed files (a checkout) are many passes over many ticks.
+		if (TOptional<FString> Queued = QueueMirroredSidecar(SidecarPath))
+		{
+			return FAssetDocumentResult::Success(FString::Printf(TEXT("Queued the sidecar sync of %s"), *Queued.GetValue()));
+		}
+
 		FAssetDocumentApplyFileRequest Request;
 		Request.FilePath = SidecarPath;
 		Request.bSaveAsset = true;
@@ -818,6 +847,12 @@ FAssetDocumentResult FAssetDocumentService::HandleIngressEvent(
 				TEXT("AssetDocument sidecar rescan completed"));
 		for (const FString& SidecarPath : SidecarPaths)
 		{
+			// A mirrored asset's sidecar is only queued: the runner's pass decides, from the sync index first,
+			// whether it changed.
+			if (QueueMirroredSidecar(SidecarPath).IsSet())
+			{
+				continue;
+			}
 			const FAssetDocumentResult SidecarResult =
 				ApplyWatchedSidecar(SidecarPath);
 			if (!SidecarResult.IsSuccess())
@@ -1075,8 +1110,51 @@ void TrackWatcherOutcome(const FAssetDocumentApplyFileRequest& Request, const FA
 
 FAssetDocumentResult FAssetDocumentService::ApplyFile(const FAssetDocumentApplyFileRequest& Request)
 {
+	if (TOptional<FAssetDocumentResult> Synced = ApplyFileThroughSidecarSync(Request))
+	{
+		return MoveTemp(*Synced);
+	}
 	FAssetDocumentResult Result = ApplyFileOnce(Request);
 	ServiceLocal::TrackWatcherOutcome(Request, Result);
+	return Result;
+}
+
+TOptional<FAssetDocumentResult> FAssetDocumentService::ApplyFileThroughSidecarSync(const FAssetDocumentApplyFileRequest& Request)
+{
+	using namespace UE::AssetDocument::SidecarSync;
+	if (Request.bBypassSidecarSync || !Request.bSaveAsset || !IsMirroringEnabled())
+	{
+		return {};
+	}
+	const FString FilePath = ServiceLocal::NormalizeValidateFilePath(Request.FilePath);
+	const FString Target = FAssetDocumentSidecar::ResolveObjectPathFromSidecar(FilePath);
+	if (Target.IsEmpty() || !IsInMirrorScope(Target))
+	{
+		return {};
+	}
+	const FString PackageName = ToPackageName(Target);
+	if (!Request.bTriggeredByWatcher)
+	{
+		// An explicit apply right after the watcher's pass of the same file returns that pass's apply.
+		const FAssetDocumentSidecarApplyLedger::FRecord* Prior = SidecarApplyLedger->FindMatching(
+			FilePath, FAssetDocumentSidecarApplyLedger::HashFile(FilePath), PackageName);
+		if (Prior != nullptr && Prior->bByWatcher && Prior->Result.IsSuccess())
+		{
+			return FAssetDocumentSidecarApplyLedger::MakeReplayedWatcherResult(*Prior);
+		}
+	}
+	FAssetDocumentSidecarSyncRequest SyncRequest;
+	SyncRequest.PackageName = PackageName;
+	SyncRequest.Trigger = Request.bTriggeredByWatcher ? EAssetDocumentSidecarSyncTrigger::SidecarChanged : EAssetDocumentSidecarSyncTrigger::Explicit;
+	const FAssetDocumentSidecarSyncOutcome Outcome = SidecarSync->Sync(SyncRequest);
+	FAssetDocumentResult Result = FAssetDocumentSidecarSync::ToApplyResult(Outcome);
+	Result.Payload->SetStringField(TEXT("sidecar_file_path"), FilePath);
+	Result.Payload->SetBoolField(TEXT("triggered_by_watcher"), Request.bTriggeredByWatcher);
+	if (!Outcome.Apply.IsSet() && Result.IsSuccess())
+	{
+		// Nothing left to apply: an earlier failed watcher apply of this file is settled.
+		FAssetDocumentPendingNotices::Resolve(WatcherApplyFailedNotice, FilePath);
+	}
 	return Result;
 }
 
@@ -1091,6 +1169,8 @@ FAssetDocumentResult FAssetDocumentService::ApplyFileOnce(const FAssetDocumentAp
 		return FAssetDocumentResult::Failure(TEXT("ApplyFile requires a sidecar file path"));
 	}
 
+	// The content this apply is of, taken before it is read: the apply's rewrite of the file replaces only that.
+	const FString ReadDigest = UE::AssetDocument::SidecarSync::DigestSidecarFile(NormalizedFilePath);
 	TSharedPtr<FJsonObject> Document;
 	FString Error;
 	if (!FAssetDocumentSidecarReader::LoadValidatedDocument(
@@ -1140,7 +1220,11 @@ FAssetDocumentResult FAssetDocumentService::ApplyFileOnce(const FAssetDocumentAp
 		return MoveTemp(*Stale);
 	}
 
-	FAssetDocumentEditorSync::FScopedSidecarWrite ActiveCanonicalSidecarWrite(NormalizedFilePath);
+	// Only the apply's own rewrite of the file is hidden from the file watcher afterwards, and it replaces the file only
+	// while the file still has the content applied: an edit someone makes while the apply runs stays, as a change.
+	FAssetDocumentEditorSync::FScopedSidecarWrite ActiveCanonicalSidecarWrite(NormalizedFilePath,
+		FAssetDocumentEditorSync::FScopedSidecarWrite::ERecord::OwnWrites, ReadDigest);
+	const uint64 WritesBefore = FAssetDocumentEditorSync::GetSidecarWriteSerial();
 
 	FAssetDocumentApplyRequest ApplyRequest;
 	ApplyRequest.Document = Document;
@@ -1199,10 +1283,14 @@ FAssetDocumentResult FAssetDocumentService::ApplyFileOnce(const FAssetDocumentAp
 
 	if (Request.bSaveAsset)
 	{
-		// The applied content and, when the apply rewrote the sidecar, the file it left.
-		SidecarApplyLedger->Record(NormalizedFilePath,
-			{AppliedContentHash, FAssetDocumentSidecarApplyLedger::HashFile(NormalizedFilePath)},
-			LedgerPackageName, Result, Request.bTriggeredByWatcher);
+		// The applied content and, when the apply rewrote the sidecar, the content it wrote (not what the file has
+		// now: an edit made meanwhile was not applied).
+		TArray<FString> AppliedHashes = {AppliedContentHash};
+		if (const TOptional<FString> Written = FAssetDocumentEditorSync::FindSidecarWriteSince(NormalizedFilePath, WritesBefore))
+		{
+			AppliedHashes.Add(Written.GetValue());
+		}
+		SidecarApplyLedger->Record(NormalizedFilePath, MoveTemp(AppliedHashes), LedgerPackageName, Result, Request.bTriggeredByWatcher);
 	}
 	return Result;
 }
@@ -1894,4 +1982,65 @@ FAssetDocumentResult FAssetDocumentService::ListTypes(const TMap<FString, FStrin
 FAssetDocumentResult FAssetDocumentService::Duplicate(const FAssetDocumentDuplicateRequest& Request)
 {
 	return UE::AssetDocument::DuplicateAsset(Request);
+}
+
+FAssetDocumentRuntimeResultDto IAssetDocumentGenericRuntimeRoute::DispatchSync(const TSharedPtr<FJsonObject>& Options)
+{
+	FAssetDocumentRuntimeResultDto Result;
+	FAssetDocumentRuntimeDiagnostic Diagnostic;
+	Diagnostic.Path = TEXT("/");
+	Diagnostic.Code = TEXT("GenericRuntime.Inactive");
+	Diagnostic.Message = TEXT("This runtime route does not serve sidecar sync evidence.");
+	Result.Diagnostics.Add(MoveTemp(Diagnostic));
+	return Result;
+}
+
+namespace ServiceLocal
+{
+FAssetDocumentRuntimeResultDto MakeServiceRuntimeFailure(const TCHAR* Code, const FString& Message)
+{
+	FAssetDocumentRuntimeResultDto Result;
+	FAssetDocumentRuntimeDiagnostic Diagnostic;
+	Diagnostic.Path = TEXT("/");
+	Diagnostic.Code = Code;
+	Diagnostic.Message = Message;
+	Result.Diagnostics.Add(MoveTemp(Diagnostic));
+	return Result;
+}
+} // namespace ServiceLocal
+
+FAssetDocumentRuntimeResultDto FAssetDocumentService::DispatchSidecarSync(const TSharedRef<FJsonObject>& Options) const
+{
+	const TSharedPtr<IAssetDocumentGenericRuntimeRoute> Route = GenericRuntimeRoute.Pin();
+	if (!Route.IsValid())
+	{
+		return ServiceLocal::MakeServiceRuntimeFailure(TEXT("GenericRuntime.Inactive"),
+			TEXT("The AssetDocument Python runtime is not available."));
+	}
+	return Route->DispatchSync(Options);
+}
+
+FAssetDocumentRuntimeResultDto FAssetDocumentService::ExtractForMirror(const FString& PackageName) const
+{
+	using namespace ServiceLocal;
+	const TSharedPtr<IAssetDocumentGenericRuntimeRoute> Route = GenericRuntimeRoute.Pin();
+	if (!Route.IsValid())
+	{
+		return MakeServiceRuntimeFailure(TEXT("GenericRuntime.Inactive"), TEXT("The AssetDocument Python runtime is not available."));
+	}
+	const UObject* Asset = LoadAssetFromPackageOrObjectPath(PackageName);
+	if (Asset == nullptr)
+	{
+		return MakeServiceRuntimeFailure(TEXT("Sync.AssetUnreadable"), FString::Printf(TEXT("Failed to load asset '%s'"), *PackageName));
+	}
+	FAssetDocumentExtractRequest Request;
+	Request.AssetPath = Asset->GetPathName();
+	Request.bDiffOnly = true;
+	return Route->DispatchExtract(Request, Asset->GetClass()->GetPathName());
+}
+
+void FAssetDocumentService::NoteSidecarRewrite(const FString& SidecarPath, const FString& ContentHash)
+{
+	const FString NormalizedFilePath = ServiceLocal::NormalizeValidateFilePath(SidecarPath);
+	SidecarApplyLedger->AddContentHash(NormalizedFilePath, ContentHash);
 }

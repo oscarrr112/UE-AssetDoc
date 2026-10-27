@@ -32,4 +32,9 @@ public:
 		const FAssetDocumentTemplateRequest& Request,
 		const FString& NormalizedTarget,
 		const FString& AssetClassPath) = 0;
+	// Sidecar mirroring evidence (the read-only Sync operation): Options is {"Mode", "Text", ...} as
+	// asset_document/sync_evidence.py describes; the result's CanonicalValue is {"Regions", "AbsentHash"} and, for
+	// the writing modes, CanonicalBytes the file bytes. Unavailable unless the route serves the Python runtime.
+	virtual FAssetDocumentRuntimeResultDto DispatchSync(
+		const TSharedPtr<FJsonObject>& Options);
 };

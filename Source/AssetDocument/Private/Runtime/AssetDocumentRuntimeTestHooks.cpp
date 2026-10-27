@@ -10,6 +10,13 @@ namespace
 {
 TOptional<EAssetDocumentRuntimeRequestPhase> GArmedRequestPhase;
 FString GArmedPersistenceEvent;
+TFunction<void(FStringView)> GPersistenceEventObserver;
+}
+
+void FAssetDocumentRuntimeTestHooks::SetPersistenceEventObserver(TFunction<void(FStringView Event)> Observer)
+{
+	check(IsInGameThread());
+	GPersistenceEventObserver = MoveTemp(Observer);
 }
 
 void FAssetDocumentRuntimeTestHooks::FailNextRequestAtPhase(EAssetDocumentRuntimeRequestPhase Phase)
@@ -28,6 +35,7 @@ void FAssetDocumentRuntimeTestHooks::Reset()
 {
 	GArmedRequestPhase.Reset();
 	GArmedPersistenceEvent.Reset();
+	GPersistenceEventObserver = nullptr;
 	FAssetDocumentAtomicFile::ResetFailureForTest();
 }
 
@@ -43,6 +51,10 @@ bool FAssetDocumentRuntimeTestHooks::ConsumeRequestPhaseFailure(EAssetDocumentRu
 
 void FAssetDocumentRuntimeTestHooks::ObservePersistenceEvent(FStringView Event)
 {
+	if (GPersistenceEventObserver && IsInGameThread())
+	{
+		GPersistenceEventObserver(Event);
+	}
 	if (GArmedPersistenceEvent.IsEmpty() || Event != GArmedPersistenceEvent || !IsInGameThread())
 	{
 		return;

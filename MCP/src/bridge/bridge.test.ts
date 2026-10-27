@@ -479,7 +479,7 @@ test("while the editor is not listening, tools/list answers the manifest's tools
   const offline = await closedBaseUrl();
   await withClient({ UE_API_BASE: offline }, async (client) => {
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 32);
+    assert.equal(tools.length, 33);
     assert.deepEqual(
       tools.map((tool) => tool.name),
       manifest.tools.map((tool) => tool.name),

@@ -24,6 +24,7 @@ const CATALOG = [
   "diff_asset_document",
   "apply_asset_document_file",
   "duplicate_asset",
+  "sync_asset_document",
   "sample_animation_bones",
   "retarget_animations",
   "health_check",
@@ -105,7 +106,7 @@ test("the manifest names the server like the package and lists exactly the tool 
   const names = manifest.tools.map((entry) => entry.name);
   assert.deepEqual(names, CATALOG);
   assert.equal(new Set(names).size, names.length, "no duplicate tool names");
-  assert.equal(names.length, 32);
+  assert.equal(names.length, 33);
 });
 
 test("removed tools are not in the manifest", () => {
@@ -246,6 +247,7 @@ test("the guide tools name the files the editor reads", () => {
 test("the route table matches the editor's HTTP routes", () => {
   const routes: Record<string, [string, string]> = {
     duplicate_asset: ["POST", "/assetdocument/duplicate"],
+    sync_asset_document: ["POST", "/assetdocument/sync"],
     validate_asset_document: ["POST", "/assetdocument/validate"],
     diff_asset_document: ["POST", "/assetdocument/diff"],
     undo_editor: ["POST", "/editor/undo"],
@@ -272,6 +274,14 @@ test("the route table matches the editor's HTTP routes", () => {
   }
 });
 
+test("sync_asset_document posts its action, targets and regions", () => {
+  const sync = tool("sync_asset_document").call as { body: Record<string, { argument: string }>; required: string[] };
+  assert.deepEqual(sync.body, { action: { argument: "action" }, targets: { argument: "targets" }, regions: { argument: "regions" } });
+  assert.deepEqual(sync.required, ["action"]);
+  const action = (tool("sync_asset_document").inputSchema as { properties: Record<string, { enum?: string[] }> }).properties.action;
+  assert.deepEqual(action.enum, ["status", "accept_sidecar", "accept_asset", "materialize"]);
+});
+
 test("execute_python posts its code and description; duplicate_asset its source and target", () => {
   const python = tool("execute_python").call as { body: Record<string, { argument: string }> };
   assert.deepEqual(python.body, { Code: { argument: "code" }, Description: { argument: "description" } });
@@ -294,6 +304,7 @@ test("AssetDocument tools are listed; validate and diff expose an object schema 
     "validate_asset_document",
     "diff_asset_document",
     "duplicate_asset",
+    "sync_asset_document",
   ]) {
     tool(name);
   }

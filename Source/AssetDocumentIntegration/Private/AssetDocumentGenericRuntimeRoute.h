@@ -50,6 +50,8 @@ public:
 		const FString& AssetClassPath) override;
 	virtual FAssetDocumentRuntimeResultDto DispatchDiff(
 		const FAssetDocumentDiffRequest& Request) override;
+	virtual FAssetDocumentRuntimeResultDto DispatchSync(
+		const TSharedPtr<FJsonObject>& Options) override;
 	virtual FAssetDocumentRuntimeResultDto DispatchInspectProfile(
 		const FAssetDocumentProfileRequest& Request,
 		const FString& AssetClassPath) override;

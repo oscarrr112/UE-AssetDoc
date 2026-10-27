@@ -218,7 +218,9 @@ bool AdaptJsonValue(
 }
 
 // A whole document. Its top-level BaseRevision (what Extract emits) is checked by the service before the request
-// gets here (FAssetDocumentService: Document.StaleBase) and is not part of the profiles' document.
+// gets here (FAssetDocumentService: Document.StaleBase) and is not part of the profiles' document. Neither is the
+// system-maintained _meta object of a mirrored sidecar (AssetDocumentSyncMetaField): it is ignored, and a _meta that
+// is not an object is refused (Document.InvalidMeta).
 bool AdaptJsonObject(
 	const TSharedPtr<FJsonObject>& Source,
 	FAssetDocumentRuntimeValueDto& OutValue,
@@ -231,6 +233,18 @@ bool AdaptJsonObject(
 	{
 		if (Field.Key == AssetDocumentBaseRevisionField)
 		{
+			continue;
+		}
+		if (Field.Key == AssetDocumentSyncMetaField)
+		{
+			if (!Field.Value.IsValid() || Field.Value->Type != EJson::Object)
+			{
+				OutDiagnostics.Add(MakeAdapterDiagnostic(
+					FString(TEXT("/")) + AssetDocumentSyncMetaField,
+					TEXT("Document.InvalidMeta"),
+					TEXT("_meta is maintained by the editor's sidecar sync and must be an object; leave it as the editor wrote it or remove it.")));
+				return false;
+			}
 			continue;
 		}
 		OutValue.ObjectKeys.Add(FString(*Field.Key));
@@ -392,6 +406,33 @@ FAssetDocumentGenericRequestAdapter::AdaptExtract(
 	// diff_only (default) lists only values that differ from the class defaults;
 	// diff_only=false or include_all_writable lists every writable value.
 	IncludeDefaults.BooleanValue = Request.bIncludeAllWritable || !Request.bDiffOnly;
+	return Adapted;
+}
+
+TOptional<FAssetDocumentRuntimeRequestDto>
+FAssetDocumentGenericRequestAdapter::AdaptSync(
+	const TSharedPtr<FJsonObject>& Options,
+	uint64 RuntimeRevision,
+	TArray<FAssetDocumentRuntimeDiagnostic>& OutDiagnostics)
+{
+	if (!Options.IsValid() || RuntimeRevision == 0)
+	{
+		OutDiagnostics.Add(MakeAdapterDiagnostic(
+			TEXT("/Request"),
+			TEXT("GenericRuntime.Request.InvalidSync"),
+			TEXT("The sidecar sync request or runtime revision is invalid.")));
+		return {};
+	}
+	FAssetDocumentRuntimeRequestDto Adapted;
+	Adapted.RequestId = FGuid::NewGuid();
+	Adapted.Operation = EAssetDocumentRuntimeOperation::Sync;
+	Adapted.TargetAssetPath = TEXT("/Game/SidecarSync.SidecarSync");
+	Adapted.RequestedAssetClassPath = TEXT("/Script/CoreUObject.Object");
+	Adapted.ExpectedRuntimeRevision = RuntimeRevision;
+	if (!AdaptJsonObject(Options, Adapted.CanonicalDocument, OutDiagnostics))
+	{
+		return {};
+	}
 	return Adapted;
 }
 

@@ -5,8 +5,10 @@
 #include "AssetDocumentEditorSync.h"
 #include "AssetDocumentFileWatcher.h"
 #include "AssetDocumentHttpRoutes.h"
+#include "AssetDocumentHttpServer.h"
 #include "AssetDocumentIngressQueue.h"
 #include "AssetDocumentService.h"
+#include "AssetDocumentSidecarSyncRunner.h"
 
 DEFINE_LOG_CATEGORY(LogAssetDocument);
 
@@ -29,10 +31,23 @@ void FAssetDocumentModule::StartupModule()
 	FileWatcher = MakeUnique<FAssetDocumentFileWatcher>(
 		IngressQueue.ToSharedRef());
 	FileWatcher->Register();
+	if (GIsEditor && !IsRunningCommandlet())
+	{
+		Service->GetSidecarSyncRunner().Register();
+		FAssetDocumentHttpServer::SetHealthField(TEXT("sidecar_sync"), []()
+		{
+			return FAssetDocumentSidecarSyncRunner::GetPublishedStatus();
+		});
+	}
 }
 
 void FAssetDocumentModule::ShutdownModule()
 {
+	FAssetDocumentHttpServer::SetHealthField(TEXT("sidecar_sync"), nullptr);
+	if (Service.IsValid())
+	{
+		Service->GetSidecarSyncRunner().Unregister();
+	}
 	FileWatcher.Reset();
 	EditorSync.Reset();
 	HttpRoutes.Reset();

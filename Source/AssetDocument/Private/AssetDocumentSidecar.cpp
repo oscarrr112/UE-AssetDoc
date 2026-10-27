@@ -3,10 +3,13 @@
 
 #include "AssetDocumentSidecar.h"
 
+#include "AssetDocumentAtomicFile.h"
+#include "AssetDocumentEditorSync.h"
 #include "AssetDocumentJson.h"
 #include "AssetDocumentPaths.h"
 #include "AssetDocumentSidecarPathUtils.h"
 
+#include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 
@@ -120,7 +123,64 @@ bool FAssetDocumentSidecar::LoadBytes(const FString& FilePath, TArray<uint8>& Ou
 bool FAssetDocumentSidecar::WriteJsonFile(const FString& FilePath, const TSharedPtr<FJsonObject>& Json, FString& OutError)
 {
 	FString RealPath;
-	return ResolveSidecarFile(FilePath, RealPath, OutError) && FAssetDocumentJson::WriteJsonFile(RealPath, Json, OutError);
+	TArray<uint8> Bytes;
+	if (!ResolveSidecarFile(FilePath, RealPath, OutError) || !FAssetDocumentJson::SerializeForFile(Json, Bytes, OutError)
+		|| !FAssetDocumentEditorSync::CheckSidecarUnchanged(FilePath, OutError))
+	{
+		return false;
+	}
+	FString AtomicError;
+	if (!FAssetDocumentAtomicFile::WriteBytesAtomically(RealPath, TArrayView64<const uint8>(Bytes.GetData(), Bytes.Num()), AtomicError))
+	{
+		OutError = FString::Printf(TEXT("Failed to atomically write JSON file '%s': %s"), *RealPath, *AtomicError);
+		return false;
+	}
+	FAssetDocumentEditorSync::NoteSidecarWritten(FilePath, Bytes.GetData(), Bytes.Num());
+	return true;
+}
+
+bool FAssetDocumentSidecar::WriteBytes(const FString& FilePath, TConstArrayView<uint8> Bytes, FString& OutError)
+{
+	FString RealPath;
+	if (!ResolveSidecarFile(FilePath, RealPath, OutError) || !FAssetDocumentEditorSync::CheckSidecarUnchanged(FilePath, OutError))
+	{
+		return false;
+	}
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(RealPath), true);
+	if (!FAssetDocumentAtomicFile::WriteBytesAtomically(RealPath, TArrayView64<const uint8>(Bytes.GetData(), Bytes.Num()), OutError))
+	{
+		return false;
+	}
+	FAssetDocumentEditorSync::NoteSidecarWritten(FilePath, Bytes.GetData(), Bytes.Num());
+	return true;
+}
+
+FString FAssetDocumentSidecar::ConflictFilePath(const FString& SidecarPath)
+{
+	const FString Normalized = FAssetDocumentSidecarPathUtils::NormalizeFilePath(SidecarPath);
+	const FString Suffix = TEXT(".assetdoc.json");
+	if (!Normalized.EndsWith(Suffix, ESearchCase::IgnoreCase))
+	{
+		return FString();
+	}
+	return Normalized.LeftChop(Suffix.Len()) + TEXT(".assetdoc.asset.json");
+}
+
+bool FAssetDocumentSidecar::WriteConflictFile(const FString& SidecarPath, TConstArrayView<uint8> Bytes, FString& OutError)
+{
+	FString RealSidecarPath;
+	if (!ResolveSidecarFile(SidecarPath, RealSidecarPath, OutError))
+	{
+		return false;
+	}
+	const FString ConflictPath = ConflictFilePath(RealSidecarPath);
+	if (ConflictPath.IsEmpty())
+	{
+		OutError = FString::Printf(TEXT("'%s' is not a sidecar path"), *SidecarPath);
+		return false;
+	}
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(ConflictPath), true);
+	return FAssetDocumentAtomicFile::WriteBytesAtomically(ConflictPath, TArrayView64<const uint8>(Bytes.GetData(), Bytes.Num()), OutError);
 }
 
 bool FAssetDocumentSidecar::ValidateTargetMatchesSidecar(const FString& FilePath, const TSharedPtr<FJsonObject>& Json, FString& OutError)

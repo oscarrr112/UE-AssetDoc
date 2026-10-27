@@ -154,6 +154,7 @@ TArray<TSharedPtr<FJsonValue>> BuildRouteDescriptors()
 	AddRouteDescriptor(Routes, TEXT("GET"), TEXT("/assetdoc/assetdocument/find-assets"), TEXT("Find assets by path prefix, class and name (Asset Registry, paged)"), false);
 	AddRouteDescriptor(Routes, TEXT("GET"), TEXT("/assetdoc/assetdocument/list-types"), TEXT("List classes, structs or enums (reflection and Asset Registry, paged)"), false);
 	AddRouteDescriptor(Routes, TEXT("POST"), TEXT("/assetdoc/assetdocument/duplicate"), TEXT("Duplicate an asset into an absent /Game path and save it"), true);
+	AddRouteDescriptor(Routes, TEXT("POST"), TEXT("/assetdoc/assetdocument/sync"), TEXT("Sidecar mirroring: status, conflict resolution and materialize"), true);
 	return Routes;
 }
 
@@ -315,6 +316,66 @@ TSharedPtr<FJsonObject> HandleDuplicate(const TSharedRef<FAssetDocumentService>&
 	return Result.ToJson();
 }
 
+// A string array field; a single string counts as one element.
+bool TryGetSyncStringList(const TSharedPtr<FJsonObject>& Json, const TCHAR* Field, TArray<FString>& OutValues, FString& OutError)
+{
+	const TSharedPtr<FJsonValue> Value = Json.IsValid() ? Json->TryGetField(Field) : nullptr;
+	if (!Value.IsValid() || Value->Type == EJson::Null)
+	{
+		return true;
+	}
+	if (Value->Type == EJson::String)
+	{
+		OutValues.Add(Value->AsString());
+		return true;
+	}
+	if (Value->Type == EJson::Array)
+	{
+		for (const TSharedPtr<FJsonValue>& Element : Value->AsArray())
+		{
+			if (!Element.IsValid() || Element->Type != EJson::String)
+			{
+				OutError = FString::Printf(TEXT("%s must be a list of strings"), Field);
+				return false;
+			}
+			OutValues.Add(Element->AsString());
+		}
+		return true;
+	}
+	OutError = FString::Printf(TEXT("%s must be a list of strings"), Field);
+	return false;
+}
+
+TSharedPtr<FJsonObject> HandleSync(const TSharedRef<FAssetDocumentService>& Service, const FString& RequestBody, const TMap<FString, FString>& QueryParams, int32& OutStatusCode)
+{
+	TSharedPtr<FJsonObject> Json;
+	FString Error;
+	if (!TryParseJsonBody(RequestBody, Json, Error))
+	{
+		OutStatusCode = 400;
+		return MakeErrorJson(Error);
+	}
+	FString Action;
+	TArray<FString> Targets;
+	TArray<FString> Regions;
+	if (!TryGetStringFieldAny(Json, {TEXT("action"), TEXT("Action")}, Action) || Action.IsEmpty())
+	{
+		OutStatusCode = 400;
+		return MakeErrorJson(TEXT("Sync requires action (status, accept_sidecar, accept_asset or materialize)"));
+	}
+	if (!TryGetSyncStringList(Json, TEXT("targets"), Targets, Error) || !TryGetSyncStringList(Json, TEXT("regions"), Regions, Error))
+	{
+		OutStatusCode = 400;
+		return MakeErrorJson(Error);
+	}
+	const FAssetDocumentResult Result = RunOnGameThread([Service, Action, Targets, Regions]()
+	{
+		return Service->SyncSidecars(Action, Targets, Regions);
+	});
+	OutStatusCode = GetStatusCode(Result);
+	return Result.ToJson();
+}
+
 TSharedPtr<FJsonObject> HandleTemplate(const TSharedRef<FAssetDocumentService>& Service, const FString& RequestBody, const TMap<FString, FString>& QueryParams, int32& OutStatusCode)
 {
 	TSharedPtr<FJsonObject> Json;
@@ -471,6 +532,7 @@ void FAssetDocumentHttpRoutes::Register()
 	RegisterRoute(TEXT("/assetdoc/assetdocument/find-assets"), CreateServiceRouteHandler(Service, HandleFindAssets), TEXT("GET"), TEXT("Find assets by path prefix, class and name (Asset Registry, paged)"), false, RouteHandles);
 	RegisterRoute(TEXT("/assetdoc/assetdocument/list-types"), CreateServiceRouteHandler(Service, HandleListTypes), TEXT("GET"), TEXT("List classes, structs or enums (reflection and Asset Registry, paged)"), false, RouteHandles);
 	RegisterRoute(TEXT("/assetdoc/assetdocument/duplicate"), CreateServiceRouteHandler(Service, HandleDuplicate), TEXT("POST"), TEXT("Duplicate an asset into an absent /Game path and save it"), true, RouteHandles);
+	RegisterRoute(TEXT("/assetdoc/assetdocument/sync"), CreateServiceRouteHandler(Service, HandleSync), TEXT("POST"), TEXT("Sidecar mirroring: status, conflict resolution and materialize"), true, RouteHandles);
 }
 
 void FAssetDocumentHttpRoutes::Unregister()

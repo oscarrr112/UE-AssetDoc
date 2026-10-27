@@ -1,6 +1,6 @@
 {
   "name": "ue-assetdoc",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP stdio bridge to the UEAssetDoc Unreal Engine plugin, whose editor serves the MCP tools itself: AssetDocument authoring and editor tools",
   "main": "dist/index.js",
   "type": "module",

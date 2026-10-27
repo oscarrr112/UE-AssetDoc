@@ -59,6 +59,8 @@ public:
 	const FRecord* FindMatching(const FString& SidecarPath, const FString& ContentHash, const FString& PackageName) const;
 	void Record(const FString& SidecarPath, TArray<FString> ContentHashes, const FString& PackageName,
 		const FAssetDocumentResult& Result, bool bByWatcher);
+	// The file was rewritten after the recorded run (a mirror of the applied asset): its content counts as applied too.
+	void AddContentHash(const FString& SidecarPath, const FString& ContentHash);
 
 	// What an explicit apply returns for a run the watcher already made.
 	static FAssetDocumentResult MakeReplayedWatcherResult(const FRecord& Record);

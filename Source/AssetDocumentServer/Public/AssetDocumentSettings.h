@@ -5,6 +5,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
+#include "UObject/SoftObjectPath.h"
 #include "AssetDocumentSettings.generated.h"
 
 /**
@@ -88,6 +89,36 @@ public:
 	/** Offer delete_assets to AI clients (default: true). Off: the tool is not listed and the route refuses. */
 	UPROPERTY(config, EditAnywhere, Category = "Security", meta = (EditCondition = "bEnableHttpServer"))
 	bool bEnableDeleteAssets = true;
+
+	//~ Sidecar Mirroring
+
+	/**
+	 * Keep a <AssetName>.assetdoc.json mirror next to every /Game asset (default: false). A save updates the file, a
+	 * file edit updates the asset, and a change on both sides since the last sync is reported as a conflict. Missing
+	 * mirrors are generated in the background at editor start and when this is turned on. Off: sidecars are only the
+	 * files that clients write and apply. Takes effect at once.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Sidecar Mirroring")
+	bool bMirrorSidecars = false;
+
+	/** /Game folders whose assets are not mirrored (a prefix: /Game/Developers excludes everything under it). */
+	UPROPERTY(config, EditAnywhere, Category = "Sidecar Mirroring", meta = (EditCondition = "bMirrorSidecars"))
+	TArray<FString> MirrorExcludedPaths;
+
+	/** Asset classes that are not mirrored, subclasses included. */
+	UPROPERTY(config, EditAnywhere, Category = "Sidecar Mirroring", meta = (EditCondition = "bMirrorSidecars", AllowAbstract = "true"))
+	TArray<FSoftClassPath> MirrorExcludedClasses;
+
+	/** A new mirror larger than this (KiB) is not written; the asset is reported as skipped (too_large). */
+	UPROPERTY(config, EditAnywhere, Category = "Sidecar Mirroring", meta = (EditCondition = "bMirrorSidecars", ClampMin = "1"))
+	int32 MaxMirrorFileSizeKB = 8192;
+
+	/** Broadcast when a Sidecar Mirroring setting is changed in the editor. */
+	static FSimpleMulticastDelegate& OnMirrorSettingsChanged();
+
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 
 	//~ Logging Settings
 

@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 1,
-	"VersionName": "1.0.0",
+	"Version": 2,
+	"VersionName": "1.1.0",
 	"FriendlyName": "UE-AssetDoc",
 	"Description": "AI-friendly Unreal Editor MCP: extract, validate, diff and apply whole assets as .assetdoc.json documents.",
 	"Category": "Editor",
