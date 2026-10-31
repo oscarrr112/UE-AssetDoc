@@ -38,9 +38,10 @@ struct FStatusMessage
 	FString Source;
 };
 
-FString BodyPath(FName Bone, const TCHAR* Suffix = TEXT(""))
+// A body's document path (its key: the bone name, "<bone>~N" for a second or later body on one bone).
+FString BodyPath(const FString& Key, const TCHAR* Suffix = TEXT(""))
 {
-	return FString::Printf(TEXT("/Body/Bodies/%s%s"), *Escape(Bone.ToString()), Suffix);
+	return FString::Printf(TEXT("/Body/Bodies/%s%s"), *Escape(Key), Suffix);
 }
 
 void Describe(const UPhysicsAsset& Asset, FString& OutStatus, TArray<FStatusMessage>& OutMessages)
@@ -55,6 +56,7 @@ void Describe(const UPhysicsAsset& Asset, FString& OutStatus, TArray<FStatusMess
 	}
 
 	const TArray<FString> Keys = ConstraintKeys(Asset);
+	const TArray<FString> BodyKeyList = BodyKeys(Asset);
 	TSet<FName> Constrained;
 	for (int32 Index = 0; Index < Asset.ConstraintSetup.Num(); ++Index)
 	{
@@ -73,7 +75,7 @@ void Describe(const UPhysicsAsset& Asset, FString& OutStatus, TArray<FStatusMess
 		for (const FDataValidationContext::FIssue& Issue : Context.GetIssues())
 		{
 			const bool bError = Issue.Severity == EMessageSeverity::Error;
-			OutMessages.Add({bError ? TEXT("Error") : TEXT("Warning"), Issue.Message.ToString(), BodyPath(Body.BoneName, TEXT("/Shapes")),
+			OutMessages.Add({bError ? TEXT("Error") : TEXT("Warning"), Issue.Message.ToString(), BodyPath(BodyKeyList[Index], TEXT("/Shapes")),
 				TEXT("IsDataValid")});
 		}
 		// Only for a body whose physics meshes were built (CreatePhysicsMeshes; a loaded asset builds them when used).
@@ -82,7 +84,7 @@ void Describe(const UPhysicsAsset& Asset, FString& OutStatus, TArray<FStatusMess
 			if (!Body.AggGeom.ConvexElems[Convex].GetChaosConvexMesh().IsValid() && Body.AggGeom.ConvexElems[Convex].VertexData.Num() > 0)
 			{
 				OutMessages.Add({TEXT("Warning"), FString::Printf(TEXT("Convex %d of body %s has no cooked hull (degenerate or not cooked); it does "
-					"not collide."), Convex, *Body.BoneName.ToString()), BodyPath(Body.BoneName, *FString::Printf(TEXT("/Shapes/Convexes/%d"), Convex)),
+					"not collide."), Convex, *Body.BoneName.ToString()), BodyPath(BodyKeyList[Index], *FString::Printf(TEXT("/Shapes/Convexes/%d"), Convex)),
 					TEXT("Cook")});
 			}
 		}
@@ -94,14 +96,14 @@ void Describe(const UPhysicsAsset& Asset, FString& OutStatus, TArray<FStatusMess
 		if (Bone == INDEX_NONE)
 		{
 			OutMessages.Add({TEXT("Warning"), FString::Printf(TEXT("The preview mesh has no bone %s; the body is not used with this mesh."),
-				*Body.BoneName.ToString()), BodyPath(Body.BoneName), TEXT("Skeleton")});
+				*Body.BoneName.ToString()), BodyPath(BodyKeyList[Index]), TEXT("Skeleton")});
 			continue;
 		}
 		const int32 Parent = Asset.FindParentBodyIndex(Mesh, Bone);
 		if (Parent != INDEX_NONE && !Constrained.Contains(Body.BoneName))
 		{
 			OutMessages.Add({TEXT("Warning"), FString::Printf(TEXT("Body %s has a body above it (%s) but no constraint; it falls off when "
-				"simulated."), *Body.BoneName.ToString(), *Asset.SkeletalBodySetups[Parent]->BoneName.ToString()), BodyPath(Body.BoneName),
+				"simulated."), *Body.BoneName.ToString(), *Asset.SkeletalBodySetups[Parent]->BoneName.ToString()), BodyPath(BodyKeyList[Index]),
 				TEXT("Constraints")});
 		}
 	}
@@ -158,7 +160,7 @@ void Describe(const UPhysicsAsset& Asset, FString& OutStatus, TArray<FStatusMess
 			if (!AnimationProfiles.Contains(Profile.ProfileName))
 			{
 				OutMessages.Add({TEXT("Error"), FString::Printf(TEXT("Body %s has data for physical animation profile %s, which the asset does not "
-					"list."), *Body.BoneName.ToString(), *Profile.ProfileName.ToString()), BodyPath(Body.BoneName,
+					"list."), *Body.BoneName.ToString(), *Profile.ProfileName.ToString()), BodyPath(BodyKeyList[Index],
 					*FString::Printf(TEXT("/PhysicalAnimation/%s"), *Escape(Profile.ProfileName.ToString()))), TEXT("Profiles")});
 			}
 		}

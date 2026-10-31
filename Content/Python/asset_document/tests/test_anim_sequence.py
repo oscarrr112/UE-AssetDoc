@@ -7,7 +7,7 @@ from __future__ import annotations
 import copy
 import unittest
 
-from asset_document.diagnostics import AssetDocumentContractError, RuntimeDiagnostic
+from asset_document.diagnostics import AssetDocumentContractError, RuntimeDiagnostic, collecting_read_warnings
 from asset_document.mutation_intent_projection import SNAPSHOT_COVERED
 from asset_document.profiles import anim_sequence as profile_module
 from asset_document.profiles import anim_sequence_codec as codec
@@ -62,17 +62,22 @@ def snapshot():
                               "VariableFrameStrippingSettings": None},
         "frame_rate": {"numerator": 30, "denominator": 1}, "number_of_frames": 30, "play_length": 1.0,
         "bone_tracks": ["root"],
+        "transform_curves": [{"name": "pelvis", "key_count": 2, "start": 0.0, "end": 0.5},
+                             {"name": "spine_01", "key_count": 0, "start": None, "end": None}],
+        "attributes": [{"bone": "root", "name": "TCFrame", "type": "/Script/Engine.IntegerAnimationAttribute",
+                        "key_count": 30, "start": 0.0, "end": 0.9666666388511658}],
         "curves": [{"name": "Speed", "keys": [native_key(0.0, 1.0), native_key(1.0, 2.0)], "flags": 4,
                     "color": {"R": 0.5, "G": 0.25, "B": 1.0, "A": 1.0},
                     "default_color": {"R": 0.5, "G": 0.25, "B": 1.0, "A": 1.0}, "comment": ""}],
         "notify_tracks": ["Sound", "FX"],
         "notifies": [{"time": 0.25, "track": "Sound", "class": "/Script/Engine.AnimNotify_PlaySound", "name": "PlaySound",
-                      "properties": {"VolumeMultiplier": 0.5, "Sound": None}, "trigger": trigger(NotifyTriggerChance=0.5)},
+                      "properties": {"VolumeMultiplier": 0.5, "Sound": None}, "trigger": trigger(NotifyTriggerChance=0.5),
+                      "guid": "A1"},
                      {"time": 0.5, "track": "Sound", "class": None, "name": "Footstep", "properties": {},
-                      "trigger": trigger()}],
+                      "trigger": trigger(), "guid": "A2"}],
         "notify_states": [{"time": 0.5, "duration": 0.25, "track": "FX",
                            "class": "/Script/Engine.AnimNotifyState_TimedParticleEffect", "name": "TimedParticleEffect",
-                           "properties": {"bDestroyAtEnd": True}, "trigger": trigger()}],
+                           "properties": {"bDestroyAtEnd": True}, "trigger": trigger(), "guid": "B1"}],
         "sync_markers": [{"name": "Left", "time": 0.5, "track": "Sound"}],
         "metadata": [], "asset_user_data": [],
     }
@@ -146,7 +151,7 @@ class AnimSequenceProfileShapeTests(unittest.TestCase):
     def test_template_validates_and_lists_every_region(self):
         template = self.profile.create_template(TARGET)
         self.profile.validate(template)
-        self.assertEqual(set(template["Body"]), set(codec.BODY_KEYS) - {"BoneTracks"})
+        self.assertEqual(set(template["Body"]), set(codec.BODY_KEYS) - set(codec.READ_ONLY_REGIONS))
         self.assertEqual(self.profile.inspect_profile()["BodySections"], list(codec.BODY_KEYS))
 
     def test_validation_errors(self):
@@ -165,6 +170,8 @@ class AnimSequenceProfileShapeTests(unittest.TestCase):
             (document({"Notifies": [{"Time": 0.1, "Name": "X"}, {"Time": 0.1, "Name": "Y"}]}),
              "AnimSequence.OverlappingNotifies", "/Body/Notifies/1/Time"),
             (document({"Notifies": [{"Time": -1, "Name": "X"}]}), "AnimSequence.TimeOutOfRange", "/Body/Notifies/0/Time"),
+            (document({"Notifies": [{"Time": 0, "Name": "X", "Guid": "Footstep"}]}), "AnimSequence.InvalidDocument",
+             "/Body/Notifies/0/Guid"),
             (document({"NotifyStates": [{"Time": 0, "Duration": 1}]}), "AnimSequence.NotifyClassRequired",
              "/Body/NotifyStates/0/Class"),
             (document({"NotifyStates": [{"Time": 0, "Duration": 0, "Class": "/Script/Engine.AnimNotifyState"}]}),
@@ -232,6 +239,8 @@ class AnimSequenceLoweringTests(unittest.TestCase):
         for native, expected in (
                 ("/notifies/0/properties/Subobject/Properties", "/Body/Notifies/0/Properties/Subobject/Properties"),
                 ("/notify_states/1/trigger/NotifyFilterLOD", "/Body/NotifyStates/1/NotifyFilterLOD"),
+                ("/notifies/2/reuse", "/Body/Notifies/2"),
+                ("/notify_states/0/reuse_index", "/Body/NotifyStates/0"),
                 ("/object_properties/RefPoseSeq", "/Body/Additive/RefPoseSeq"),
                 ("/object_properties/Other", "/Properties/Other"),
                 ("/notify_tracks", "/Body/NotifyTracks"),
@@ -269,6 +278,11 @@ class AnimSequenceExtractDiffTests(unittest.TestCase):
         self.assertEqual(body["Notifies"][1], {"Time": 0.5, "Track": "Sound", "Name": "Footstep"})
         self.assertEqual(body["NotifyStates"][0]["Duration"], 0.25)
         self.assertEqual(body["BoneTracks"], ["root"])
+        self.assertEqual(body["TransformCurves"], [{"Name": "pelvis", "KeyCount": 2, "Start": 0.0, "End": 0.5},
+                                                   {"Name": "spine_01", "KeyCount": 0}])
+        self.assertEqual(body["Attributes"], [{"Bone": "root", "Name": "TCFrame",
+                                               "Type": "/Script/Engine.IntegerAnimationAttribute",
+                                               "KeyCount": 30, "Start": 0.0, "End": 0.96666664}])
         self.assertEqual(document_["Properties"], {"StripAnimDataOnDedicatedServer": "UseProjectSetting"})
 
     def test_extract_round_trip_has_no_differences(self):
@@ -324,6 +338,25 @@ class AnimSequenceOrchestrationTests(unittest.TestCase):
         assert_error(self, "AnimSequence.ReadOnlyRegion", "/Body/BoneTracks",
                      lambda: self.profile.preflight(document({"BoneTracks": ["root"]}), None, FakeContext(exists=False)))
 
+    def test_transform_curves_and_attributes_are_read_only_lists(self):
+        live = codec.snapshot_to_document_parts(snapshot())[0]
+        context = FakeContext()
+        listed = {"TransformCurves": live["TransformCurves"], "Attributes": live["Attributes"]}
+        self.assertIs(self.profile.preflight(document(copy.deepcopy(listed)), None, context), SNAPSHOT_COVERED)
+        for region in listed:
+            changed = copy.deepcopy(listed)
+            changed[region] = []
+            assert_error(self, "AnimSequence.ReadOnlyRegion", f"/Body/{region}",
+                         lambda changed=changed: self.profile.preflight(document(changed), None, FakeContext()))
+        # Apply never writes them: the authoring edit carries none of their rows.
+        context = FakeContext()
+        self.profile.apply(document({**copy.deepcopy(listed), "Playback": {"NumberOfFrames": 31}}), Handle("read"),
+                           Handle("mutable"), context)
+        edit = [values for name, values, _ in context.calls if name == profile_module.EDIT]
+        self.assertEqual(edit, [{"number_of_frames": 31}])
+        assert_error(self, "AnimSequence.InvalidDocument", "/Body/TransformCurves/0/KeyCount",
+                     lambda: self.profile.validate(document({"TransformCurves": [{"Name": "pelvis", "KeyCount": "2"}]})))
+
     def test_apply_writes_plain_fields_then_one_authoring_edit(self):
         context = FakeContext()
         body = {"Playback": {"RateScale": 2, "NumberOfFrames": 60}, "Additive": {"RefPoseSeq": None},
@@ -341,6 +374,9 @@ class AnimSequenceOrchestrationTests(unittest.TestCase):
     def test_apply_without_plain_fields_skips_the_batch(self):
         context = FakeContext()
         self.profile.apply(document({"Notifies": []}), Handle("read"), Handle("mutable"), context)
+        self.assertEqual(context.names(), [profile_module.SNAPSHOT, profile_module.EDIT])
+        context = FakeContext()
+        self.profile.apply(document({"SyncMarkers": []}), Handle("read"), Handle("mutable"), context)
         self.assertEqual(context.names(), [profile_module.EDIT])
 
     def test_apply_of_nothing_invokes_nothing(self):
@@ -374,6 +410,219 @@ class AnimSequenceOrchestrationTests(unittest.TestCase):
         handles = self.profile.create_target_context(document({"References": {"Skeleton": SKELETON}}), context)
         self.assertEqual(tuple(item.name for item in handles), ("factory_context",))
         self.assertEqual(context.calls[0][1], {"path": SKELETON, "expected_class": "/Script/Engine.Skeleton"})
+
+
+
+NOTIFY = "/Script/Project.AnimNotify_Field"
+FIELD = {"Unsupported": "TFieldPath<FProperty> has no document form; AssetDoc keeps the value.",
+         "Text": "/Script/Engine.Actor:Tags"}
+GUID_A, GUID_B, GUID_C, GUID_D = ("A" * 32, "B" * 32, "C" * 32, "D" * 32)
+ZERO = "0" * 32
+
+
+def notify_row(time, guid, properties=None, track="Sound", cls=NOTIFY):
+    return {"time": time, "track": track, "class": cls, "name": "Field",
+            "properties": {"Bias": 1.0, **(properties or {})}, "trigger": trigger(), "guid": guid}
+
+
+def kept(guid):
+    return {"reuse": guid}
+
+
+def kept_at(index, guid=ZERO):
+    return {"reuse_index": index, "reuse": guid}
+
+
+class AnimSequenceRowIdentityTests(unittest.TestCase):
+    """Notify, notify state, metadata and user-data rows keep the existing object they stand for."""
+
+    def setUp(self):
+        self.profile = AnimSequenceRuntimeProfile()
+        self.native = snapshot()
+        self.native["notifies"] = [notify_row(0.25, GUID_A, {"Field": dict(FIELD)}), notify_row(0.5, GUID_B)]
+
+    def extract(self):
+        context = FakeContext()
+        context.native = self.native
+        with collecting_read_warnings() as warnings:
+            extracted = self.profile.extract(target=TARGET, asset_handle=Handle("read"), context=context)
+        return extracted, warnings
+
+    def plan(self, body):
+        return codec.reuse_plan(codec.canonical_body(body), self.native)
+
+    def apply(self, body):
+        context = FakeContext()
+        context.native = self.native
+        self.profile.apply(document(body), Handle("read"), Handle("mutable"), context)
+        return context.calls[-1][1]
+
+    def test_extract_shows_the_marker_and_warns(self):
+        extracted, warnings = self.extract()
+        self.assertEqual(extracted["Body"]["Notifies"][0]["Properties"]["Field"], FIELD)
+        self.assertEqual([(item.path, item.code) for item in warnings],
+                         [("/Body/Notifies/0/Properties/Field", "AnimSequence.Unrepresented")])
+        self.assertEqual(self.profile.diff_exact(extracted, copy.deepcopy(extracted)), ())
+
+    def test_extract_writes_a_guid_only_where_it_names_one_notify(self):
+        self.native["notifies"] = [notify_row(0.25, GUID_A), notify_row(0.5, GUID_A), notify_row(0.75, ZERO),
+                                   notify_row(1.0, GUID_D.lower()), notify_row(1.25, "")]
+        extracted, _ = self.extract()
+        self.assertEqual([row.get("Guid") for row in extracted["Body"]["Notifies"]], [None, None, None, GUID_D, None])
+        self.assertEqual(self.profile.diff_exact(extracted, copy.deepcopy(extracted)), ())
+
+    def test_a_guid_is_identity_and_is_not_compared(self):
+        extracted, _ = self.extract()
+        authored = copy.deepcopy(extracted)
+        authored["Body"]["Notifies"][0]["Guid"] = GUID_C.lower()
+        del authored["Body"]["Notifies"][1]["Guid"]
+        self.assertEqual(self.profile.diff_exact(authored, extracted), ())
+
+    def test_unchanged_rows_keep_their_notifies_and_markers_are_not_written(self):
+        extracted, _ = self.extract()
+        intent = self.apply({"Notifies": extracted["Body"]["Notifies"]})
+        self.assertEqual([row["reuse"] for row in intent["notifies"]], [GUID_A, GUID_B])
+        self.assertNotIn("Guid", intent["notifies"][0])
+        self.assertEqual(intent["notifies"][0]["properties"], {"Bias": 1.0})
+
+    def test_inserting_a_row_before_keeps_each_notify(self):
+        extracted, _ = self.extract()
+        rows = [{"Time": 0.1, "Class": NOTIFY, "Properties": {"Bias": 2}}] + extracted["Body"]["Notifies"]
+        intent = self.apply({"Notifies": rows})
+        self.assertEqual([row.get("reuse") for row in intent["notifies"]], [None, GUID_A, GUID_B])
+        self.assertEqual(intent["notifies"][1]["properties"], {"Bias": 1.0})
+
+    def test_removing_a_row_keeps_the_others(self):
+        extracted, _ = self.extract()
+        self.assertEqual(self.plan({"Notifies": extracted["Body"]["Notifies"][1:]}), {"Notifies": [kept(GUID_B)]})
+
+    def test_a_row_keeps_the_notify_its_guid_names_first(self):
+        # The extracted row moved to 0.9, and a new row of the same class where it was: the moved row keeps it.
+        self.native["notifies"] = [notify_row(0.25, GUID_A)]
+        rows = [{"Time": 0.25, "Class": NOTIFY}, {"Time": 0.9, "Class": NOTIFY, "Guid": GUID_A.lower()}]
+        self.assertEqual(self.plan({"Notifies": rows}), {"Notifies": [None, kept(GUID_A)]})
+        extracted, _ = self.extract()
+        moved = dict(extracted["Body"]["Notifies"][0], Time=0.9)
+        intent = self.apply({"Notifies": [{"Time": 0.25, "Class": NOTIFY, "Properties": {"Bias": 3}}, moved]})
+        self.assertEqual([row.get("reuse") for row in intent["notifies"]], [None, GUID_A])
+        self.assertAlmostEqual(intent["notifies"][1]["time"], 0.9, places=6)
+
+    def test_a_guid_of_another_class_or_no_live_notify_pairs_by_time(self):
+        rows = [{"Time": 0.25, "Class": "/Script/Engine.AnimNotify_PlaySound", "Guid": GUID_A},
+                {"Time": 0.45, "Class": NOTIFY, "Guid": GUID_C}]
+        self.assertEqual(self.plan({"Notifies": rows}), {"Notifies": [None, kept(GUID_B)]})
+        rows = [{"Time": 0.5, "Name": "Field", "Guid": GUID_B}]
+        self.assertEqual(self.plan({"Notifies": rows}), {"Notifies": [None]})
+
+    def test_a_zero_or_repeated_document_guid_pairs_by_time(self):
+        rows = [{"Time": 0.6, "Class": NOTIFY, "Guid": GUID_A}, {"Time": 0.25, "Class": NOTIFY, "Guid": GUID_A}]
+        self.assertEqual(self.plan({"Notifies": rows}), {"Notifies": [kept(GUID_B), kept(GUID_A)]})
+        rows = [{"Time": 0.5, "Class": NOTIFY, "Guid": ZERO}, {"Time": 0.9, "Class": NOTIFY, "Guid": GUID_B}]
+        self.assertEqual(self.plan({"Notifies": rows}), {"Notifies": [kept(GUID_A), kept(GUID_B)]})
+
+    def test_the_nearest_pair_wins_over_document_order(self):
+        self.native["notifies"] = [notify_row(0.2, GUID_A), notify_row(0.6, GUID_B)]
+        rows = [{"Time": 0.45, "Class": NOTIFY}, {"Time": 0.55, "Class": NOTIFY}]
+        self.assertEqual(self.plan({"Notifies": rows}), {"Notifies": [kept(GUID_A), kept(GUID_B)]})
+        rows = [{"Time": 0.45, "Class": NOTIFY}, {"Time": 0.55, "Class": NOTIFY}, {"Time": 0.1, "Class": NOTIFY}]
+        self.assertEqual(self.plan({"Notifies": rows}), {"Notifies": [None, kept(GUID_B), kept(GUID_A)]})
+
+    def test_a_moved_row_keeps_the_nearest_notify_of_its_class(self):
+        self.assertEqual(self.plan({"Notifies": [{"Time": 0.3, "Class": NOTIFY}, {"Time": 0.9, "Class": NOTIFY}]}),
+                         {"Notifies": [kept(GUID_A), kept(GUID_B)]})
+        self.assertEqual(self.plan({"Notifies": [{"Time": 0.9, "Class": NOTIFY}]}), {"Notifies": [kept(GUID_B)]})
+        self.assertEqual(self.plan({"Notifies": [{"Time": 0.25, "Name": "Field"}]}), {"Notifies": [None]})
+
+    def test_exact_time_and_track_wins_over_document_order(self):
+        self.native["notifies"].append(notify_row(0.5, GUID_C, track="FX"))
+        plan = self.plan({"Notifies": [{"Time": 0.5, "Track": "FX", "Class": NOTIFY},
+                                       {"Time": 0.5, "Track": "Sound", "Class": NOTIFY}]})
+        self.assertEqual(plan, {"Notifies": [kept(GUID_C), kept(GUID_B)]})
+
+    def test_a_row_without_a_track_is_on_the_first_track(self):
+        self.native["notifies"] = [notify_row(0.5, GUID_A, track="FX"), notify_row(0.5, GUID_B, track="Sound")]
+        self.assertEqual(self.plan({"Notifies": [{"Time": 0.5, "Class": NOTIFY}]}), {"Notifies": [kept(GUID_B)]})
+        self.assertEqual(self.plan({"NotifyTracks": ["FX", "Sound"], "Notifies": [{"Time": 0.5, "Class": NOTIFY}]}),
+                         {"Notifies": [kept(GUID_A)]})
+
+    def test_notifies_without_a_unique_guid_are_kept_by_position(self):
+        self.native["notifies"] = [notify_row(0.25, GUID_A), notify_row(0.5, GUID_A),
+                                   notify_row(0.75, ZERO), notify_row(1.0, GUID_D)]
+        rows = [{"Time": time, "Class": NOTIFY} for time in (0.25, 0.5, 0.75)]
+        self.assertEqual(self.plan({"Notifies": rows}),
+                         {"Notifies": [kept_at(0, GUID_A), kept_at(1, GUID_A), kept_at(2)]})
+        self.native["notifies"] = [notify_row(0.25, GUID_A), dict(notify_row(0.5, ZERO), guid=None)]
+        intent = self.apply({"Notifies": [{"Time": 0.1, "Class": NOTIFY}, {"Time": 0.5, "Class": NOTIFY}]})
+        self.assertEqual([{key: row[key] for key in ("reuse", "reuse_index") if key in row} for row in intent["notifies"]],
+                         [kept(GUID_A), {"reuse_index": 1}])
+
+    def test_a_zero_guid_notify_is_kept_when_a_row_is_inserted(self):
+        self.native["notifies"] = [notify_row(0.25, ZERO, {"Field": dict(FIELD)}), notify_row(0.5, GUID_B)]
+        extracted, _ = self.extract()
+        self.assertNotIn("Guid", extracted["Body"]["Notifies"][0])
+        rows = [{"Time": 0.1, "Class": NOTIFY}] + extracted["Body"]["Notifies"]
+        intent = self.apply({"Notifies": rows})
+        self.assertEqual([{key: row[key] for key in ("reuse", "reuse_index") if key in row} for row in intent["notifies"]],
+                         [{}, kept_at(0), kept(GUID_B)])
+        self.assertEqual(intent["notifies"][1]["properties"], {"Bias": 1.0})
+
+    def test_named_notifies_pair_by_name(self):
+        self.native["notifies"] = [{"time": 0.5, "track": "Sound", "class": None, "name": "Footstep",
+                                    "properties": {}, "trigger": trigger(), "guid": GUID_D}]
+        self.assertEqual(self.plan({"Notifies": [{"Time": 0.1, "Name": "Jump"}, {"Time": 0.2, "Name": "Footstep"}]}),
+                         {"Notifies": [None, kept(GUID_D)]})
+
+    def test_notify_states_pair_by_their_own_rows(self):
+        self.native["notify_states"][0]["guid"] = GUID_C
+        plan = self.plan({"NotifyStates": [{"Time": 0.1, "Duration": 0.1, "Track": "FX",
+                                            "Class": "/Script/Engine.AnimNotifyState_TimedParticleEffect"}]})
+        self.assertEqual(plan, {"NotifyStates": [kept(GUID_C)]})
+
+    def test_an_edited_marker_is_refused(self):
+        extracted, _ = self.extract()
+        rows = extracted["Body"]["Notifies"]
+        rows[0]["Properties"]["Field"]["Text"] = "/Script/Engine.Actor:Layer"
+        assert_error(self, "AnimSequence.UnrepresentedValue", "/Body/Notifies/0/Properties/Field",
+                     lambda: self.plan({"Notifies": rows}))
+
+    def test_a_value_over_a_marker_is_refused(self):
+        extracted, _ = self.extract()
+        rows = extracted["Body"]["Notifies"]
+        rows[0]["Properties"]["Field"] = "/Script/Engine.Actor:Layer"
+        assert_error(self, "AnimSequence.UnrepresentedValue", "/Body/Notifies/0/Properties/Field",
+                     lambda: self.plan({"Notifies": rows}))
+
+    def test_a_marker_where_the_notify_has_a_default_is_refused(self):
+        rows = [{"Time": 0.5, "Class": NOTIFY, "Properties": {"Field": dict(FIELD)}}]
+        assert_error(self, "AnimSequence.UnrepresentedValue", "/Body/Notifies/0/Properties/Field",
+                     lambda: self.plan({"Notifies": rows}))
+
+    def test_a_marker_on_a_new_row_is_refused(self):
+        rows = [{"Time": 0.5, "Class": "/Script/Engine.AnimNotify_PlaySound", "Properties": {"Field": dict(FIELD)}}]
+        assert_error(self, "AnimSequence.UnrepresentedValue", "/Body/Notifies/0/Properties/Field",
+                     lambda: self.plan({"Notifies": rows}))
+        assert_error(self, "AnimSequence.UnrepresentedValue", "/Body/Notifies/0/Properties/Field",
+                     lambda: codec.reuse_plan(codec.canonical_body({"Notifies": rows}), None))
+
+    def test_object_rows_keep_an_equal_object_then_the_next_of_their_class(self):
+        meta = "/Script/Project.Meta"
+        self.native["metadata"] = [
+            {"class": meta, "properties": {"Tag": "a", "Field": dict(FIELD)}, "object": "Meta_0"},
+            {"class": meta, "properties": {"Tag": "b"}, "object": "Meta_1"},
+            {"class": meta, "properties": {"Tag": "c"}}]
+        extracted, warnings = self.extract()
+        self.assertIn(("/Body/Metadata/0/Properties/Field", "AnimSequence.Unrepresented"),
+                      [(item.path, item.code) for item in warnings])
+        rows = extracted["Body"]["Metadata"]
+        self.assertEqual(self.plan({"Metadata": [rows[1], rows[0]]}), {"Metadata": ["Meta_1", "Meta_0"]})
+        self.assertEqual(self.plan({"Metadata": [{"Class": meta, "Properties": {"Tag": "z"}}, rows[0], rows[2]]}),
+                         {"Metadata": ["Meta_1", "Meta_0", None]})
+        intent = self.apply({"Metadata": [rows[0]]})
+        self.assertEqual(intent["metadata"], [{"class": meta, "properties": {"Tag": "a"}, "reuse": "Meta_0"}])
+
+    def test_lowering_without_a_plan_names_no_object(self):
+        intent, _ = codec.lower(codec.canonical_body({"Metadata": [{"Class": "/Script/Project.Meta"}]}), {})
+        self.assertEqual(intent["metadata"], [{"class": "/Script/Project.Meta", "properties": {}}])
 
 
 if __name__ == "__main__":

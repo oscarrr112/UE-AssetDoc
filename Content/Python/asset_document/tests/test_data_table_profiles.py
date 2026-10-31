@@ -31,6 +31,13 @@ class CommonTests(unittest.TestCase):
         self.assertFalse(common.same(True, 1))
         self.assertFalse(common.same("1", 1))
 
+    def test_same_reads_an_authored_display_string_as_the_live_text_form_one_way(self):
+        self.assertTrue(common.same("Hello", 'INVTEXT("Hello")'))
+        self.assertTrue(common.same({"Label": "Hello"}, {"Label": 'NSLOCTEXT("UI", "Greeting", "Hello")'}))
+        self.assertFalse(common.same('INVTEXT("Hello")', "Hello"))
+        self.assertFalse(common.same('NSLOCTEXT("UI", "Greeting", "Hello")', "Hello"))
+        self.assertFalse(common.same(["Hello"], ['LOCTABLE("/Game/UI/ST_Menu.ST_Menu", "Unknown")']))
+
     def test_map_path_turns_primitive_paths_into_document_paths(self):
         op_paths = ["/Body/Rows", "/Body/Rows/3"]
         base = {"row_struct": "/Body/RowStruct", "ops": "/Body/Rows"}
@@ -86,6 +93,19 @@ class DataTableTests(unittest.TestCase):
         authored["Body"]["Rows"][1]["Values"]["Damage"] = 2
         (item,) = data_table.diff(authored, live, True, {"Damage": 0, "Label": ""})
         self.assertEqual((item.path, item.before, item.after), ("/Body/Rows/1/Values/Label", "", "b"))
+
+    def test_writing_a_text_form_over_a_plain_string_is_a_change(self):
+        live = _document(data_table.DATA_TABLE_CLASS, {"RowStruct": "/Script/M.Row", "Rows": [
+            {"Name": "A", "Values": {"Label": "Hello"}}]})
+        for form in ('INVTEXT("Hello")', 'NSLOCTEXT("UI", "Greeting", "Hello")'):
+            authored = _document(data_table.DATA_TABLE_CLASS, {"Rows": [{"Name": "A", "Values": {"Label": form}}]})
+            (item,) = data_table.diff(authored, live, True)
+            self.assertEqual((item.path, item.before, item.after), ("/Body/Rows/0/Values/Label", form, "Hello"))
+        # The display string of the text the row holds in a form names that text: no change.
+        held = _document(data_table.DATA_TABLE_CLASS, {"RowStruct": "/Script/M.Row", "Rows": [
+            {"Name": "A", "Values": {"Label": 'INVTEXT("Hello")'}}]})
+        plain = _document(data_table.DATA_TABLE_CLASS, {"Rows": [{"Name": "A", "Values": {"Label": "Hello"}}]})
+        self.assertEqual(data_table.diff(plain, held, True), ())
 
     def test_diff_counts_and_names_every_changed_row(self):
         # Two changed rows read "would change 1 value(s)"; only the first was listed.
@@ -232,6 +252,100 @@ class DataTableTests(unittest.TestCase):
             data_table.DATA_TABLE_RUNTIME_REGISTRATION, data_table.COMPOSITE_DATA_TABLE_RUNTIME_REGISTRATION,
             data_table.MIRROR_DATA_TABLE_RUNTIME_REGISTRATION)},
             {"profile.data_table.v1", "profile.composite_data_table.v1", "profile.mirror_data_table.v1"})
+
+
+class DataTableMarkerTests(unittest.TestCase):
+    """Fields the codec has no form for, and a row struct that no longer loads, read as markers that apply keeps."""
+
+    FRAGMENT = {"Unsupported": "TObjectPtr<UItemFragment> has no document form; AssetDoc keeps the value.",
+                "Text": "/Game/Data/DT_Items.DT_Items:Fragment_0"}
+
+    def _live(self):
+        return [{"Name": "Sword", "Values": {"Damage": 5, "Fragment": self.FRAGMENT}},
+                {"Name": "Axe", "Values": {"Damage": 7, "Fragment": dict(self.FRAGMENT, Text="")}}]
+
+    def test_marked_values_are_left_out_of_the_writes(self):
+        rows = data_table.writable_rows([{"Name": "Sword", "Values": {"Damage": 6, "Fragment": self.FRAGMENT}}], self._live())
+        self.assertEqual(rows, [{"Name": "Sword", "Values": {"Damage": 6}}])
+        ops = data_table.row_ops(data_table.writable_rows(self._live(), self._live()), self._live(),
+                                 data_table._unmarked({"Damage": 0, "Fragment": dict(self.FRAGMENT, Text="")}))
+        self.assertEqual(ops, [])
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            data_table.writable_rows([{"Name": "Sword", "Values": {"Fragment": dict(self.FRAGMENT, Text="edited")}}],
+                                     self._live())
+        self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                         ("DataTable.UnrepresentedValue", "/Body/Rows/0/Values/Fragment"))
+        with self.assertRaises(AssetDocumentContractError):
+            data_table.writable_rows([{"Name": "Mace", "Values": {"Fragment": self.FRAGMENT}}], self._live())
+
+    def test_an_omitted_marked_field_is_kept(self):
+        live = _document(data_table.DATA_TABLE_CLASS, {"RowStruct": "/Script/M.Row", "Rows": self._live()})
+        authored = _document(data_table.DATA_TABLE_CLASS, {"Rows": [{"Name": "Sword", "Values": {"Damage": 5}},
+                                                                    {"Name": "Axe", "Values": {"Damage": 7}}]})
+        defaults = {"Damage": 0, "Fragment": dict(self.FRAGMENT, Text="")}
+        self.assertEqual(data_table.diff(authored, live, True, defaults), ())
+
+    # A struct field with a member the codec has no form for reads with the marker inside it.
+    PATH = {"Unsupported": "TFieldPath<FProperty> has no document form; AssetDoc keeps the value.",
+            "Text": "/Script/M.Row:Count"}
+    DEFAULT_PATH = dict(PATH, Text="None")
+
+    def _nested_live(self):
+        return [{"Name": "A", "Values": {"Count": 1, "Settings": {"X": 2, "P": self.PATH},
+                                         "Entries": [{"X": 1, "P": self.PATH}]}}]
+
+    def _nested_defaults(self):
+        return data_table._unmarked({"Count": 0, "Settings": {"X": 0, "P": self.DEFAULT_PATH}, "Entries": []})
+
+    def test_a_value_with_markers_inside_is_sent_whole(self):
+        live = self._nested_live()
+        # The extract re-applies as a no-op.
+        self.assertEqual(data_table.row_ops(data_table.writable_rows(live, live), live, self._nested_defaults()), [])
+        # Editing a sibling member sends the struct with its marker: the editor decodes it over the current value.
+        edited = [{"Name": "A", "Values": {"Count": 1, "Settings": {"X": 5, "P": self.PATH},
+                                           "Entries": [{"X": 1, "P": self.PATH}]}}]
+        self.assertEqual([op for op, _ in data_table.row_ops(data_table.writable_rows(edited, live), live,
+                                                              self._nested_defaults())],
+                         [{"op": "set", "row": "A", "values": edited[0]["Values"], "replace": True}])
+
+    def test_an_omitted_field_holding_markers_keeps_its_value(self):
+        live = self._nested_live()
+        defaults = self._nested_defaults()
+        # Leaving out the struct and the array (both off their defaults, both with markers inside) changes nothing.
+        self.assertEqual(data_table.row_ops([{"Name": "A", "Values": {"Count": 1}}], live, defaults), [])
+        # Another edit of the row sends a replace without them; the editor keeps them as they are.
+        self.assertEqual([op for op, _ in data_table.row_ops([{"Name": "A", "Values": {"Count": 4}}], live, defaults)],
+                         [{"op": "set", "row": "A", "values": {"Count": 4}, "replace": True}])
+        document = _document(data_table.DATA_TABLE_CLASS, {"RowStruct": "/Script/M.Row", "Rows": live})
+        sparse = _document(data_table.DATA_TABLE_CLASS, {"Rows": [{"Name": "A", "Values": {"Count": 1}}]})
+        self.assertEqual(data_table.diff(sparse, document, True, defaults), ())
+        # A field without markers still goes back to its default.
+        self.assertEqual([change.path for change in data_table.diff(
+            _document(data_table.DATA_TABLE_CLASS, {"Rows": [{"Name": "A", "Values": {}}]}), document, True, defaults)],
+            ["/Body/Rows/0/Values/Count"])
+
+    def test_markers_inside_a_value_warn_on_extract(self):
+        from asset_document.diagnostics import collecting_read_warnings
+        body = {"Rows": self._nested_live() + [{"Name": "B", "Values": {"Settings": {"X": 1, "P": self.PATH}}}]
+                + self._live()}
+        with collecting_read_warnings() as warnings:
+            data_table._warn(body)
+        self.assertEqual([(item.code, item.path) for item in warnings], [
+            ("DataTable.Unrepresented", "/Body/Rows/0/Values/Settings/P"),
+            ("DataTable.Unrepresented", "/Body/Rows/0/Values/Entries/0/P"),
+            ("DataTable.Unrepresented", "/Body/Rows/2/Values/Fragment")])
+
+    def test_a_row_struct_that_does_not_load_marks_the_rows(self):
+        first = {"row_struct": "/Game/Data/S_Gone.S_Gone", "row_struct_loaded": False, "row_struct_valid": False}
+        body = data_table._body(first, [])
+        self.assertEqual(body["RowStruct"], "/Game/Data/S_Gone.S_Gone")
+        self.assertTrue(body["Rows"]["Unsupported"].startswith("The row struct /Game/Data/S_Gone.S_Gone does not load"))
+        document = data_table.canonicalize(_document(data_table.DATA_TABLE_CLASS, body))
+        self.assertEqual(data_table.diff(document, _document(data_table.DATA_TABLE_CLASS, body), True), ())
+        edited = dict(body, Rows=[{"Name": "A"}])
+        self.assertEqual([item.path for item in data_table.diff(_document(data_table.DATA_TABLE_CLASS, edited),
+                                                                _document(data_table.DATA_TABLE_CLASS, body), True)],
+                         ["/Body/Rows"])
 
 
 class CurveTableTests(unittest.TestCase):

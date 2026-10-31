@@ -119,6 +119,9 @@ struct FIntent
  TOptional<float> SamplingRate, Precision;
  TOptional<TArray<FMetaIntent>> Metadata;
  TArray<TPair<FName, TArray<FMetaIntent>>> SectionMetadata;
+ // The Details list of instanced asset user data, whole, in its typed document
+ // form, held as the one-field object the subobject property writer takes.
+ TOptional<FValue> AssetUserData;
 };
 
 FAssetDocumentContractValidationResult ParseBlend(const FValue& Value, const TCHAR* Path, FBlendIntent& Out)
@@ -165,7 +168,7 @@ FAssetDocumentContractValidationResult ParseIntent(const FValue& Value, FIntent&
 {
  if (!ValidateAssetDocumentRuntimeValue(Value).bValid || !OnlyKeys(Value, {TEXT("blend_in"), TEXT("blend_out"),
   TEXT("blend_profile_in"), TEXT("blend_profile_out"), TEXT("root_motion"), TEXT("preview_base_pose"),
-  TEXT("time_stretch"), TEXT("metadata"), TEXT("section_metadata")}))
+  TEXT("time_stretch"), TEXT("metadata"), TEXT("section_metadata"), TEXT("asset_user_data")}))
   return Invalid(InvalidIntent, TEXT("Montage settings require a sparse object of known settings."));
  for (const bool bIn : {true, false})
   if (const FValue* Blend = Field(Value, bIn ? TEXT("blend_in") : TEXT("blend_out")))
@@ -227,6 +230,12 @@ FAssetDocumentContractValidationResult ParseIntent(const FValue& Value, FIntent&
   auto R = ParseMetadata(*Metadata, TEXT("/Montage/Settings/metadata"), Rows);
   if (!R.bValid) return R;
   Out.Metadata = MoveTemp(Rows);
+ }
+ if (const FValue* UserData = Field(Value, TEXT("asset_user_data")))
+ {
+  if (UserData->Kind != EAssetDocumentRuntimeValueKind::Array)
+   return Invalid(InvalidIntent, TEXT("Asset user data must be an array."), TEXT("/Montage/Settings/asset_user_data"));
+  Out.AssetUserData = Object({TEXT("AssetUserData")}, {*UserData});
  }
  if (const FValue* Sections = Field(Value, TEXT("section_metadata")))
  {
@@ -352,6 +361,16 @@ FAssetDocumentContractValidationResult Resolve(UAnimMontage& Montage, const FInt
   auto R = ResolveMetadata(Section.Value, TEXT("/Montage/Settings/section_metadata/") + Section.Key.ToString(), Row.Value);
   if (!R.bValid) return R;
  }
+ if (Intent.AssetUserData)
+ {
+  TArray<FAssetDocumentRuntimeDiagnostic> Diagnostics;
+  if (!ValidateAssetDocumentEditorSubobjectProperties(*Montage.GetClass(), *Intent.AssetUserData, Diagnostics))
+  {
+   FAssetDocumentContractValidationResult R; R.Diagnostics = MoveTemp(Diagnostics);
+   for (auto& D : R.Diagnostics) D.Path = TEXT("/Montage/Settings/asset_user_data");
+   return R;
+  }
+ }
  return Valid();
 }
 
@@ -421,6 +440,17 @@ FAssetDocumentContractValidationResult Apply(UAnimMontage& Montage, const FInten
   if (!R.bValid) return R;
   Montage.CompositeSections[Section.Key].MetaData = TArray<TObjectPtr<UAnimMetaData>>(Next);
  }
+ if (Intent.AssetUserData)
+ {
+  // The whole list as the Details panel edits it: same-class entries at the same
+  // index are edited in place, others are new instanced objects of the Montage.
+  TArray<FAssetDocumentRuntimeDiagnostic> Diagnostics;
+  if (!WriteAssetDocumentEditorSubobjectProperties(Montage, *Intent.AssetUserData, Primitive, Diagnostics))
+  {
+   FAssetDocumentContractValidationResult Failure; Failure.Diagnostics = MoveTemp(Diagnostics);
+   return Failure;
+  }
+ }
  // Derived state the details panel refreshes after any of these edits.
  AssetDocumentMontageSettingsRaw::RefreshDerivedSyncState(Montage);
  AssetDocumentMontageSettingsRaw::BakeTimeStretchCurve(Montage);
@@ -469,21 +499,40 @@ bool CaptureAnimationMontageSettings(UAnimMontage& Montage, FAssetDocumentRuntim
   if (!CaptureMetadata(Montage, Section.GetMetaData(), Rows, OutDiagnostics)) return false;
   Sections.Elements.Add(Object({TEXT("section"), TEXT("metadata")}, {String(Section.SectionName.ToString()), MoveTemp(Rows)}));
  }
- // Every other plain admitted reflected field (e.g. RateScale), for the
- // document Properties region. Aggregates are owned by dedicated regions; hard
- // references (blend profiles, preview base pose, ...) by the settings regions,
- // and text / text-form structs are not part of this profile's Properties.
+ // Every other plain admitted reflected field (e.g. RateScale, PreviewPoseAsset),
+ // for the document Properties region. Aggregates are owned by dedicated regions,
+ // except a Details list of instanced objects no region owns (AssetUserData; the
+ // MetaData list is the Metadata region); the hard references the settings regions
+ // show (blend profiles, preview base pose) are not repeated, and other hard
+ // references than plain object ones, text and text-form structs are not part of
+ // this profile's Properties.
  FValue AllProperties, Properties = Object({}, {});
  if (!ReadAssetDocumentEditorSubobjectProperties(Montage, AllProperties, OutDiagnostics)) return false;
+ const FName RegionReferences[] = {TEXT("BlendProfileIn"), TEXT("BlendProfileOut"), TEXT("PreviewBasePose")};
+ auto IsInstancedList = [](const FProperty* Candidate)
+ {
+  const FArrayProperty* List = CastField<FArrayProperty>(Candidate);
+  const FObjectProperty* Inner = List != nullptr ? CastField<FObjectProperty>(List->Inner) : nullptr;
+  return Inner != nullptr && List->HasAnyPropertyFlags(CPF_Edit) && !List->HasAnyPropertyFlags(CPF_EditConst)
+   && (Inner->HasAnyPropertyFlags(CPF_InstancedReference | CPF_PersistentInstance) || List->HasAnyPropertyFlags(CPF_ContainsInstancedReference))
+   && List->GetFName() != FName(TEXT("MetaData"));
+ };
  for (int32 Index = 0; Index < AllProperties.ObjectKeys.Num(); ++Index)
  {
   const auto Kind = AllProperties.Elements[Index].Kind;
-  if (Kind == EAssetDocumentRuntimeValueKind::Array || Kind == EAssetDocumentRuntimeValueKind::Object
-   || Kind == EAssetDocumentRuntimeValueKind::Bytes) continue;
   const FProperty* Field = FindFProperty<FProperty>(Montage.GetClass(), FName(*AllProperties.ObjectKeys[Index]));
-  if (Field == nullptr || (CastField<FObjectPropertyBase>(Field) != nullptr && CastField<FSoftObjectProperty>(Field) == nullptr)
-   || CastField<FInterfaceProperty>(Field) != nullptr || CastField<FTextProperty>(Field) != nullptr
+  if ((Kind == EAssetDocumentRuntimeValueKind::Array && !IsInstancedList(Field)) || Kind == EAssetDocumentRuntimeValueKind::Object
+   || Kind == EAssetDocumentRuntimeValueKind::Bytes) continue;
+  if (Field == nullptr || CastField<FInterfaceProperty>(Field) != nullptr || CastField<FTextProperty>(Field) != nullptr
    || CastField<FStructProperty>(Field) != nullptr) continue;
+  if (CastField<FObjectPropertyBase>(Field) != nullptr && CastField<FSoftObjectProperty>(Field) == nullptr)
+  {
+   // Only references picked in Details: not an instanced or read-only one (the thumbnail info).
+   bool bNotListed = CastField<FObjectProperty>(Field) == nullptr || CastField<FClassProperty>(Field) != nullptr
+    || !Field->HasAnyPropertyFlags(CPF_Edit) || Field->HasAnyPropertyFlags(CPF_EditConst | CPF_InstancedReference | CPF_PersistentInstance);
+   for (const FName& Name : RegionReferences) bNotListed |= Field->GetFName() == Name;
+   if (bNotListed) continue;
+  }
   Properties.ObjectKeys.Add(AllProperties.ObjectKeys[Index]);
   Properties.Elements.Add(MoveTemp(AllProperties.Elements[Index]));
  }

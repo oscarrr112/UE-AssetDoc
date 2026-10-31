@@ -14,6 +14,7 @@ A document the query already holds changes nothing (no finalize either).
 """
 from __future__ import annotations
 
+from asset_document import markers
 from asset_document.diagnostics import (
     AssetDocumentContractError, DiagnosticContext, DiagnosticSeverity, RuntimeDiagnostic, with_diagnostics,
 )
@@ -71,22 +72,59 @@ class _Apply:
 
     # -- checks ----------------------------------------------------------
     def check(self, live):
+        """Classes, Details names and markers, before any change. A marked option or test (its class does not load)
+        must be the query's as extracted; a plain entry may not stand for one (it replaces it only with another
+        class)."""
         options = self.body.get("Options", ())
+        matched = model.match_options(options, live.options)
+        tests = model.match_tests(options, matched, live)
         for index, option in enumerate(options):
             path = _option_path(index)
-            self.check_properties(live, "generator", option["Generator"], f"{path}/Generator")
+            current = live.option_by_name.get(matched[index]) if matched[index] is not None else None
+            if markers.is_marker(option):
+                _check_marked(path, option, model.option_entry(live, current) if current is not None and current.missing
+                              else None)
+                continue
+            if current is not None and current.missing and current.label == option["Generator"]["Class"]:
+                raise error(path, f"Option '{current.name}' has a generator whose class does not load; it reads as a "
+                            "marker. Leave it as extracted, omit it to delete the option, or give another generator "
+                            "class.", f"{PREFIX}.UnrepresentedValue")
+            stored = current.properties if current is not None and current.label == option["Generator"]["Class"] else {}
+            self.check_properties(live, "generator", option["Generator"], f"{path}/Generator", stored)
             for position, test in enumerate(option.get("Tests", ())):
-                self.check_properties(live, "test", test, _test_path(index, position))
+                test_path = _test_path(index, position)
+                name = tests[index][position]
+                live_test = live.tests.get(name) if name is not None else None
+                if markers.is_marker(test):
+                    _check_marked(test_path, test, model.test_entry(live_test)
+                                  if live_test is not None and live_test.missing else None)
+                    continue
+                if live_test is not None and live_test.missing and live_test.label == test["Class"]:
+                    raise error(test_path, f"Test '{live_test.name}' has a class that does not load; it reads as a "
+                                "marker. Leave it as extracted, omit it to delete the test, or give another test class.",
+                                f"{PREFIX}.UnrepresentedValue")
+                stored = live_test.properties if live_test is not None and live_test.label == test["Class"] else {}
+                self.check_properties(live, "test", test, test_path, stored)
 
-    def check_properties(self, live, kind, entry, path):
+    def check_properties(self, live, kind, entry, path, stored):
         defaults = live.defaults.get((kind, entry["Class"]))
         if defaults is None:
             raise error(f"{path}/Class", f"'{entry['Class']}' is not a {kind} class of the Environment Query editor.",
                         f"{PREFIX}.UnknownClass")
-        for name in entry.get("Properties", {}):
-            if name not in defaults:
-                raise error(f"{path}/Properties/{escape(name)}", f"{entry['Class']} has no Details property '{name}'. "
-                            f"Properties: {', '.join(sorted(defaults)) or 'none'}.", f"{PREFIX}.UnknownProperty")
+        unrepresented = live.unrepresented.get((kind, entry["Class"]), frozenset())
+        for name, value in entry.get("Properties", {}).items():
+            where = f"{path}/Properties/{escape(name)}"
+            if markers.is_marker(value):
+                markers.require_unchanged(where, value, stored.get(name), PREFIX)
+                continue
+            if name in defaults:
+                continue
+            if name in unrepresented:
+                raise error(where, f"{entry['Class']} property '{name}' has no document form (AssetDoc cannot write "
+                            "its type); omit it to keep the current value, or leave its marker as extracted.",
+                            f"{PREFIX}.UnrepresentedValue")
+            raise error(where, f"{entry['Class']} has no Details property '{name}'. "
+                        f"Properties: {', '.join(sorted(defaults)) or 'none'}.", f"{PREFIX}.UnknownProperty")
 
     # -- layout ------------------------------------------------------------
     def positions(self, live, matched):
@@ -95,7 +133,9 @@ class _Apply:
         options = self.body["Options"]
         root = self.body.get("Root", {}).get("Position", live.root)
         out = [None] * len(options)
-        connected = [index for index, option in enumerate(options) if option.get("Connected", True)]
+        # A marked option stays where it is (it is not edited).
+        connected = [index for index, option in enumerate(options)
+                     if option.get("Connected", True) and not markers.is_marker(option)]
         fixed = {index: options[index]["Position"] for index in connected if "Position" in options[index]}
         previous = None
         for index in connected:
@@ -196,14 +236,15 @@ class _Apply:
         replaced = set()
         for index, option in enumerate(options):
             name = matched[index]
-            if name is not None and live.option_by_name[name].label != option["Generator"]["Class"]:
+            if name is not None and not markers.is_marker(option) \
+                    and live.option_by_name[name].label != option["Generator"]["Class"]:
                 replaced.add(index)  # a generator class change: the editor deletes the node and places a new one
         tests = model.match_tests(options, matched, live)
         swapped = set()  # tests whose class changes: the editor deletes the node and adds a new one
         for index, option in enumerate(options):
             for position, test in enumerate(option.get("Tests", ())):
                 name = tests[index][position]
-                if name is not None and live.tests[name].label != test["Class"]:
+                if name is not None and not markers.is_marker(test) and live.tests[name].label != test["Class"]:
                     swapped.add(name)
                     tests[index][position] = None
         self.option_positions = self.positions(live, matched)
@@ -250,6 +291,10 @@ class _Apply:
                 if name is not None:
                     if where.get(name) == target and layout[target].index(name) == position:
                         continue
+                    if name in live.tests and live.tests[name].missing:
+                        raise error(path, f"Test '{name}' has a class that does not load; AssetDoc does not move it. "
+                                    "Keep it where it is in Tests, or omit it to delete it.",
+                                    f"{PREFIX}.UnrepresentedValue")
                     self.op({"op": "move_test", "name": name, "option": target, "index": position}, path)
                     layout[where[name]].remove(name)
                     layout[target].insert(min(position, len(layout[target])), name)
@@ -307,7 +352,10 @@ class _Apply:
     def details(self, live, kind, name, entry, current, path):
         defaults = live.defaults.get((kind, entry["Class"]), {})
         have = {**defaults, **(current or {})}
-        for property_name, value in {**defaults, **entry.get("Properties", {})}.items():
+        authored = entry.get("Properties", {})
+        for property_name, value in {**defaults, **authored}.items():
+            if markers.is_marker(value) or (property_name not in authored and markers.is_marker(have.get(property_name))):
+                continue  # a marker is never written (check refused an edited one): the stored value stays
             if property_name in have and common.same(value, common.struct_as_authored(value, have[property_name]), False):
                 continue
             where = f"{path}/Properties/{escape(property_name)}"
@@ -328,6 +376,8 @@ class _Apply:
     def run_values(self, live, targets, tests):
         """Connections, Details, test toggles and node layout of the authored options."""
         for index, option in enumerate(self.body["Options"]):
+            if markers.is_marker(option):
+                continue  # kept as it is
             name = targets[index]
             current = live.option_by_name.get(name)
             path = _option_path(index)
@@ -337,6 +387,8 @@ class _Apply:
                          f"{path}/Generator")
             self.node_layout(name, option, current, path, self.option_positions[index])
             for position, test in enumerate(option.get("Tests", ())):
+                if markers.is_marker(test):
+                    continue  # kept as it is
                 test_name = tests[index][position]
                 live_test = live.tests.get(test_name)
                 test_path = _test_path(index, position)
@@ -465,6 +517,16 @@ class _Apply:
         if self.changed:
             self.finalize(before, names)
         return with_diagnostics(self.calls.changes, self.diagnostics)
+
+
+def _check_marked(path, authored, live_entry):
+    """A marked option or test must be the query's marked entry as extracted (it cannot be written or created)."""
+    if live_entry is None:
+        raise error(path, "This entry is marked (\"Unsupported\"), but the query has no such entry here; a marked "
+                    "entry cannot be created. Give a class, or remove the entry.", f"{PREFIX}.UnrepresentedValue")
+    if authored != live_entry:
+        raise error(path, f"The marked entry was edited; AssetDoc cannot write it ({live_entry[markers.KEY]}). Leave it "
+                    "as extracted, or omit it to delete it.", f"{PREFIX}.UnrepresentedValue")
 
 
 def _params_text(params):

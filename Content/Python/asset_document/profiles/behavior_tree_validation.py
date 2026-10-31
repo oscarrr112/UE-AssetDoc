@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 from asset_document.diagnostics import contract_error
+from asset_document.markers import is_marker
+from asset_document.tolerance import authored_rule
 from asset_document.dto import PrimitiveRequirement
 from asset_document.profiles import behavior_tree_execution as native
 from asset_document.profiles.data_table_common import describe_candidates
@@ -29,8 +31,12 @@ def _token(value):
 
 
 def validate_tree_bindings(tree, *, context, blackboard, class_evidence,
-                           target=None, read_handle=None, retained=False, authored_tree=None):
+                           target=None, read_handle=None, retained=False, authored_tree=None,
+                           kept_detached=frozenset()):
     """Full replacement uses class defaults; an overlay reads exact live nodes.
+
+    A node of a detached branch named in ``kept_detached`` (the asset holds it as written) is unfinished editor work:
+    its policy findings are authored rules, so it re-applies; any other node is judged as new input.
 
     Tree values are already lowered through the inspected property schema. No
     native address, handle or evidence is retained after this phase returns.
@@ -48,19 +54,29 @@ def validate_tree_bindings(tree, *, context, blackboard, class_evidence,
         for index, child in enumerate(node.get("Children", [])):
             authored_paths(child, path + "/Children/" + str(index))
 
+    detached_paths = {}
     if authored_tree is not None and authored_tree.get("Root"):
         authored_paths(authored_tree["Root"], "/Body/Tree/Root")
+    if authored_tree is not None:
+        for index, branch in enumerate(authored_tree.get("Detached", [])):
+            detached_paths[branch["Id"].upper()] = "/Body/Tree/Detached/" + str(index)
+            authored_paths(branch, detached_paths[branch["Id"].upper()])
 
-    def inspect_node(node, path, class_key="node_class_path", families=None):
+    def inspect_node(node, path, class_key="node_class_path", families=None, rule=_fail):
+        if "unsupported" in node:
+            # Its class is missing: there is no class evidence and no property holds a binding.
+            return {}
         class_path = node[class_key]
         evidence = class_evidence(class_path)
         if families is not None and evidence.get("node_family") is not None and evidence["node_family"] not in families:
-            _fail(path + "/Class", "InvalidBehaviorTreeNodeClass", "The exact node class does not belong to this graph role.")
+            rule(path + "/Class", "InvalidBehaviorTreeNodeClass", "The exact node class does not belong to this graph role.")
         properties = node["authored_properties"]
         queries, policies = [], []
 
         def scan(value, shape, locator, wire_path, structs):
             kind = shape["kind"]
+            if is_marker(value):
+                return
             if kind == "selector":
                 queries.append({"kind": "selector", "locator": locator, "selected_key": value["Key"]})
                 policies.append(("selector", wire_path, value, properties))
@@ -126,75 +142,82 @@ def validate_tree_bindings(tree, *, context, blackboard, class_evidence,
                 key = value["Key"]
                 if _none(key):
                     if not retained and not flag("none_allowed"):
-                        _fail(wire_path + "/Key", "MissingBlackboardKey", "The node requires an authored Blackboard key.")
+                        rule(wire_path + "/Key", "MissingBlackboardKey", "The node requires an authored Blackboard key.")
                     continue
                 if blackboard is None:
-                    _fail("/Body/BlackboardAsset", "MissingBehaviorTreeBlackboard", "A bound selector requires an effective BlackboardAsset.")
+                    rule("/Body/BlackboardAsset", "MissingBehaviorTreeBlackboard", "A bound selector requires an effective BlackboardAsset.")
                 if not flag("key_exists"):
-                    _fail(wire_path + "/Key", "UnknownBlackboardKey", f"The key '{key}' does not exist in the effective "
+                    rule(wire_path + "/Key", "UnknownBlackboardKey", f"The key '{key}' does not exist in the effective "
                           f"BlackboardAsset.{describe_candidates(key, keys, 'Keys')}")
                 if not flag("filter_passes"):
-                    _fail(wire_path + "/Key", "IncompatibleBlackboardKeyType", "The key does not satisfy the node's actual selector filter.")
+                    rule(wire_path + "/Key", "IncompatibleBlackboardKeyType", "The key does not satisfy the node's actual selector filter.")
                 enum_values = item.get("enum_values_or_null")
                 # Exact Blackboard decorator policy, including subclasses, is
                 # identified by the declared selector metadata from the provider.
                 if item.get("blackboard_decorator_selector", False) and enum_values is not None and node_properties.get("StringValue"):
                     token = node_properties["StringValue"]
                     if type(enum_values) is not dict or token not in enum_values:
-                        _fail(path + "/Properties/StringValue", "UnknownBehaviorTreeEnumDecoratorValue", "The retained enum token is absent from the effective Blackboard enum.")
-                    if node_properties["IntValue"] != enum_values[token]:
-                        _fail(path + "/Properties/IntValue", "BehaviorTreeEnumDecoratorValueOutOfSync", "The authored enum integer disagrees with its token in the effective Blackboard enum.")
+                        rule(path + "/Properties/StringValue", "UnknownBehaviorTreeEnumDecoratorValue", "The retained enum token is absent from the effective Blackboard enum.")
+                    elif node_properties["IntValue"] != enum_values[token]:
+                        rule(path + "/Properties/IntValue", "BehaviorTreeEnumDecoratorValueOutOfSync", "The authored enum integer disagrees with its token in the effective Blackboard enum.")
             elif kind == "value_or":
                 if _none(value["Key"]):
                     continue
                 if blackboard is None:
-                    _fail("/Body/BlackboardAsset", "MissingBehaviorTreeBlackboard", "A bound ValueOr value requires an effective BlackboardAsset.")
+                    rule("/Body/BlackboardAsset", "MissingBehaviorTreeBlackboard", "A bound ValueOr value requires an effective BlackboardAsset.")
                 if not flag("key_exists"):
-                    _fail(wire_path + "/Key", "UnknownValueOrBlackboardKey", f"The ValueOr key '{value['Key']}' does not exist in "
+                    rule(wire_path + "/Key", "UnknownValueOrBlackboardKey", f"The ValueOr key '{value['Key']}' does not exist in "
                           f"the effective BlackboardAsset.{describe_candidates(value['Key'], keys, 'Keys')}")
                 if not flag("compatible"):
-                    _fail(wire_path + "/Key", "IncompatibleValueOrBlackboardKeyType", "The key is incompatible with the actual authored ValueOr parameters.")
+                    rule(wire_path + "/Key", "IncompatibleValueOrBlackboardKeyType", "The key is incompatible with the actual authored ValueOr parameters.")
             else:
                 if value is None:
                     if kind == "static_subtree":
-                        _fail(wire_path, "IncompatibleBehaviorTreeBlackboard", "A static subtree requires a BehaviorAsset with a BlackboardAsset.")
+                        rule(wire_path, "IncompatibleBehaviorTreeBlackboard", "A static subtree requires a BehaviorAsset with a BlackboardAsset.")
                     continue
                 if blackboard is None:
-                    _fail("/Body/BlackboardAsset", "MissingBehaviorTreeBlackboard", "A subtree reference requires an effective BlackboardAsset.")
+                    rule("/Body/BlackboardAsset", "MissingBehaviorTreeBlackboard", "A subtree reference requires an effective BlackboardAsset.")
                 if not flag("exists") or not flag("effective_blackboard_compatible"):
-                    _fail(wire_path, "IncompatibleBehaviorTreeBlackboard", "The effective Blackboard must equal or derive from the subtree Blackboard.")
+                    rule(wire_path, "IncompatibleBehaviorTreeBlackboard", "The effective Blackboard must equal or derive from the subtree Blackboard.")
                 if kind == "dynamic_subtree" and flag("has_root_decorators"):
-                    _fail(wire_path, "DynamicSubtreeRootDecoratorsUnsupported", "Dynamic subtree defaults cannot contain root decorators.")
+                    rule(wire_path, "DynamicSubtreeRootDecoratorsUnsupported", "Dynamic subtree defaults cannot contain root decorators.")
         return evidence
 
-    def bound(graph, path):
+    def rule_for(node, detached):
+        return authored_rule if detached and node["stable_node_id"] in kept_detached else _fail
+
+    def bound(graph, path, detached):
         for index, node in enumerate(graph["nodes"]):
             if node["kind"] == "test":
                 node_path = bound_node_paths.get(node["stable_node_id"], path + "/Nodes/" + str(index))
-                inspect_node(node, node_path, "node_class_path_or_null", {"decorator"})
+                inspect_node(node, node_path, "node_class_path_or_null", {"decorator"}, rule_for(node, detached))
 
-    def main(node, path):
-        evidence = inspect_node(node, path, families={"composite"} if path == "/Body/Tree/Root" else {"composite", "task"})
+    def main(node, path, detached=False, families=None):
+        rule = rule_for(node, detached)
+        evidence = inspect_node(node, path, families=families or {"composite", "task"}, rule=rule)
         if evidence.get("node_family") == "task" and node["children"]:
-            _fail(path + "/Children", "InvalidBehaviorTreeParentClass", "A task cannot own graph children.")
+            rule(path + "/Children", "InvalidBehaviorTreeParentClass", "A task cannot own graph children.")
         if not evidence.get("pin_semantic_children", False):
+            # The editor orders children by X, then Y; children at the same position keep their link order.
             for index in range(1, len(node["children"])):
-                before = node["children"][index - 1]["editor"]["position"]["x"]
-                after = node["children"][index]["editor"]["position"]["x"]
-                if after <= before:
-                    _fail(path + "/Children/" + str(index) + "/Editor/Position/X",
-                          "DuplicateBehaviorTreeSiblingCoordinate" if after == before else "BehaviorTreeLayoutOrderConflict",
-                          "Children must follow strictly increasing editor X order.")
+                before = node["children"][index - 1]["editor"]["position"]
+                after = node["children"][index]["editor"]["position"]
+                if (after["x"], after["y"]) < (before["x"], before["y"]):
+                    rule(path + "/Children/" + str(index) + "/Editor/Position/X", "BehaviorTreeLayoutOrderConflict",
+                         "Children must follow the editor's order: increasing X, then increasing Y at the same X.")
         for index, decorator in enumerate(node["decorators"]):
             child_path = path + "/Decorators/" + str(index)
             if decorator["kind"] == "composite":
-                bound(decorator["bound_graph"], child_path + "/BoundGraph")
+                bound(decorator["bound_graph"], child_path + "/BoundGraph", detached)
             else:
-                inspect_node(decorator, child_path, families={"decorator"})
+                inspect_node(decorator, child_path, families={"decorator"}, rule=rule_for(decorator, detached))
         for index, service in enumerate(node["services"]):
-            inspect_node(service, path + "/Services/" + str(index), families={"service"})
+            inspect_node(service, path + "/Services/" + str(index), families={"service"},
+                         rule=rule_for(service, detached))
         for index, child in enumerate(node["children"]):
-            main(child, path + "/Children/" + str(index))
+            main(child, path + "/Children/" + str(index), detached)
 
     if tree["root"] is not None:
-        main(tree["root"], "/Body/Tree/Root")
+        main(tree["root"], "/Body/Tree/Root", families={"composite"})
+    for index, branch in enumerate(tree.get("detached", [])):
+        main(branch, detached_paths.get(branch["stable_node_id"], "/Body/Tree/Detached/" + str(index)), True)

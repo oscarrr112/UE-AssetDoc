@@ -95,8 +95,54 @@ bool EncodeField(const FProperty& Property, const void* Container, FValue& OutVa
 	return true;
 }
 
-bool EncodeSparse(const UStruct& Struct, const void* Value, const void* Defaults, FValue& OutObject, FString& OutError,
-	TFunctionRef<bool(const FProperty&)> Skip)
+FValue MakeUnrepresentedMarker(const FProperty& Property, const void* ValuePtr)
+{
+	FString Text;
+	if (ValuePtr != nullptr)
+	{
+		Property.ExportText_Direct(Text, ValuePtr, nullptr, nullptr, PPF_None);
+	}
+	FObjectBuilder Marker;
+	Marker.AddString(TEXT("Unsupported"), FString::Printf(TEXT("%s has no document form; AssetDoc keeps the value."),
+		*Property.GetCPPType()));
+	Marker.AddString(TEXT("Text"), Text);
+	return Marker.Build();
+}
+
+FValue EncodeFieldOrMarker(const FProperty& Property, const void* Container)
+{
+	FValue Value;
+	FString Error;
+	return EncodeField(Property, Container, Value, Error) ? Value
+		: MakeUnrepresentedMarker(Property, Property.ContainerPtrToValuePtr<void>(Container));
+}
+
+bool IsMarker(const FValue& Value)
+{
+	const FValue* Reason = Value.Kind == EAssetDocumentRuntimeValueKind::Object ? FindField(Value, TEXT("Unsupported")) : nullptr;
+	return Reason != nullptr && Reason->Kind == EAssetDocumentRuntimeValueKind::String;
+}
+
+bool HoldsMarker(const FValue& Value)
+{
+	if (IsMarker(Value))
+	{
+		return true;
+	}
+	if (Value.Kind == EAssetDocumentRuntimeValueKind::Object || Value.Kind == EAssetDocumentRuntimeValueKind::Array)
+	{
+		for (const FValue& Element : Value.Elements)
+		{
+			if (HoldsMarker(Element))
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+FValue EncodeSparse(const UStruct& Struct, const void* Value, const void* Defaults, TFunctionRef<bool(const FProperty&)> Skip)
 {
 	FObjectBuilder Object;
 	for (TFieldIterator<FProperty> It(&Struct); It; ++It)
@@ -110,20 +156,14 @@ bool EncodeSparse(const UStruct& Struct, const void* Value, const void* Defaults
 		{
 			continue;
 		}
-		FValue Field;
-		if (!EncodeField(Property, Value, Field, OutError))
-		{
-			return false;
-		}
-		Object.Add(Property.GetName(), MoveTemp(Field));
+		Object.Add(Property.GetName(), EncodeFieldOrMarker(Property, Value));
 	}
-	OutObject = Object.Build();
-	return true;
+	return Object.Build();
 }
 
-bool EncodeSparse(const UStruct& Struct, const void* Value, const void* Defaults, FValue& OutObject, FString& OutError)
+FValue EncodeSparse(const UStruct& Struct, const void* Value, const void* Defaults)
 {
-	return EncodeSparse(Struct, Value, Defaults, OutObject, OutError, [](const FProperty&) { return false; });
+	return EncodeSparse(Struct, Value, Defaults, [](const FProperty&) { return false; });
 }
 
 TArray<TSharedPtr<FJsonValue>> DescribeFields(const UStruct& Struct, const void* Defaults, TFunctionRef<bool(const FProperty&)> Skip)

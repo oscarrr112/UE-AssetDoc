@@ -13,7 +13,8 @@ The Body is planned against one read of the sequence and written in ``seq.edit.v
   2. content: binding kinds and content (locators, spawnable templates, custom bindings, tags) -> binding order ->
      track order -> per track: Details, then sections (deletes from the end, in-place edits, appends; header before
      channels); tracks that reference bindings inside sub-sequences last (their sub sections exist by then)
-  3. the rest of dense channels (columnar chunks) -> section groups -> folders -> markers -> node groups -> MetaData
+  3. the rest of dense channels (columnar chunks) -> section groups -> folders -> markers -> node groups -> binding tags
+     -> MetaData
   4. the Director removed when the document says "Director": null
   5. the top-level Properties (the generic Details write); repair compiles the Director when it is not up to date
 
@@ -44,7 +45,7 @@ KEY_NODE_BUDGET = 1500
 ENTRY_NODE_BUDGET = 1400
 # A binding's kind and content as binding.set writes it (Root / Component: the root and the component bindings of a
 # Template Sequence, template_sequence.py).
-ENTRY_KEYS = ("Class", "Bind", "Spawnable", "CustomBinding", "References", "Root", "Component", "Tags")
+ENTRY_KEYS = ("Class", "Bind", "Spawnable", "CustomBinding", "References", "SpawnedBy", "Root", "Component", "Tags")
 TRACK_HEADER_KEYS = ("Property", "Name", "Muted", "MutedRows", "RowConditions", "Properties")
 GUID = re.compile(r"^[0-9A-Fa-f]{32}$")
 
@@ -401,6 +402,7 @@ class BindingNode:
         self.path = path
         self.children = []
         self.tracks = []
+        self.kept = set()                 # entry keys the document leaves out, copied from live for the comparison
 
 
 class Plan:
@@ -475,6 +477,34 @@ class Plan:
         if "Tracks" in body:
             tracks = [seq.normalize_track(track) for track in body["Tracks"]]
             self.global_tracks = self._tracks(tracks, live.get("Tracks", []), "/Body/Tracks", "")
+        self._settle_markers()
+
+    def _settle_markers(self):
+        """Markers (content the document has no form for) against the matched live entries: one left as extracted, or
+        omitted from its object, keeps that content; an edited one, or one where the entry has none (a new entry
+        included), is refused (Sequencer.UnrepresentedValue). Settings: settings_op."""
+        for node in self.binding_order():
+            for key in seq.BINDING_KEPT:
+                if key not in node.authored and node.live is not None and key in node.live:
+                    node.authored[key] = node.live[key]
+                    node.kept.add(key)
+            for key in ENTRY_KEYS:
+                if key in node.authored:
+                    # A template's root fields are Body.Root's own.
+                    where = node.path if key == "Root" and self.root_path else f"{node.path}/{key}"
+                    node.authored[key] = seq.kept_markers(node.authored[key], (node.live or {}).get(key), where, check=True)
+        for track in self.all_tracks():
+            live = track.live or {}
+            for key in TRACK_HEADER_KEYS:
+                if key in track.authored:
+                    track.authored[key] = seq.kept_markers(track.authored[key], live.get(key), f"{track.path}/{key}",
+                                                           check=True)
+            sections = track.authored.get("Sections", [])
+            current = live.get("Sections", [])
+            keep = _kept_sections(track, sections)
+            for index, section in enumerate(sections):
+                sections[index] = seq.kept_markers(section, current[index] if index < keep else None,
+                                                   f"{track.path}/Sections/{index}", check=True)
 
     def _tracks(self, authored, live, base, binding):
         pairs, unmatched = match_tracks(authored, live)
@@ -520,6 +550,11 @@ class Plan:
         for track, base in self.removed_tracks:
             ops.append(Op({"op": "track.remove", "track": track.get("_Object", "")}, base))
         for track in self.all_tracks():
+            if track.live is None and _is_control_rig(track.authored):
+                raise error(f"{track.path}/Type", "A Control Rig track needs its rig set up (Sequencer's \"+ Track > Control "
+                            "Rig\" with a rig class), which AssetDoc cannot do, so it cannot add one: add it in Sequencer. "
+                            "An existing Control Rig track is kept when it is listed as extracted.",
+                            "Sequencer.TrackNotSupported")
             if track.live is None:
                 op = {"op": "track.add", "type": track.authored.get("Type", "")}
                 if track.binding:
@@ -545,11 +580,17 @@ class Plan:
             have = {key: node.live[key] for key in ENTRY_KEYS if node.live is not None and key in node.live}
             if node.live is None:
                 have = {"Bind": []}
+            for key in seq.BINDING_KEPT:
+                if key in wanted and wanted[key] is None and key not in have:
+                    del wanted[key]
             if _differs(_entry_form(wanted), _entry_form(have)):
                 values = {"entry": node.path}
                 if "Root" in wanted:
                     values["entry/Root"] = node.path  # the root's fields are Body.Root's own
-                ops.append(Op({"op": "binding.set", "guid": node.guid, "entry": wanted}, node.path, values=values))
+                # A key the document leaves out is not written: the binding keeps its stored value (a path read
+                # before a rename in this apply, or a spawnable deleted since, would no longer name it).
+                entry = {key: value for key, value in wanted.items() if key not in node.kept}
+                ops.append(Op({"op": "binding.set", "guid": node.guid, "entry": entry}, node.path, values=values))
         if "Bindings" in self.body:
             order = [node.guid for node in self.binding_order()]
             live_order = [guid.upper() for guid in _guids(self.live.get("Bindings", []))]
@@ -578,10 +619,7 @@ class Plan:
                           track.path, values={"entry": track.path}))
         authored = track.authored.get("Sections", [])
         live = [section for section in (track.live or {}).get("Sections", [])]
-        keep = 0
-        if track.live is not None:
-            while keep < min(len(authored), len(live)) and authored[keep].get("Class") == live[keep].get("Class"):
-                keep += 1
+        keep = _kept_sections(track, authored)
         for index in reversed(range(keep, len(live))):
             ops.append(Op({"op": "section.remove", "track": track.object, "section": live[index].get("_Object", "")},
                           f"{track.path}/Sections"))
@@ -640,9 +678,16 @@ class Plan:
                                               seq.normalize_region("Groups", self.live.get("Groups", []))):
             ops.append(Op({"op": "groups.set", "groups": self.body["Groups"]}, "/Body/Groups",
                           values={"groups": "/Body/Groups"}))
-        metadata = self.body.get("MetaData", {})
+        if "BindingTags" in self.body and _differs(seq.normalize_region("BindingTags", self.body["BindingTags"]),
+                                                   seq.normalize_region("BindingTags", self.live.get("BindingTags", {}))):
+            ops.append(Op({"op": "binding_tags.set", "tags": self.body["BindingTags"]}, "/Body/BindingTags",
+                          values={"tags": "/Body/BindingTags"}))
         live_metadata = self.live.get("MetaData", {})
-        changed = {name: value for name, value in metadata.items() if value != live_metadata.get(name, "")}
+        metadata = (seq.kept_metadata(self.body["MetaData"], live_metadata, check=True) if "MetaData" in self.body
+                    else {})
+        changed = {name: value for name, value in metadata.items()
+                   if _differs(seq.metadata_objects(value) if name == "Objects" else value,
+                               seq.metadata_objects(live_metadata.get(name, seq.METADATA_DEFAULTS.get(name, ""))))}
         if "MetaData" in self.body:
             # A listed MetaData is complete: a field it leaves out is cleared.
             changed.update(seq.omitted_values("MetaData", metadata, live_metadata))
@@ -715,6 +760,20 @@ class Plan:
             return None
         return Op({"op": "folders.set", "folders": folders, "bindings": binding_rows, "tracks": track_rows}, "/Body/Folders",
                   values={"folders": "/Body/Folders"})
+
+
+def _kept_sections(track, authored):
+    """How many leading sections are edited in place (paired with the live section at the same position): those up to
+    the first whose Class differs; the later live ones are deleted and the authored ones added."""
+    live = (track.live or {}).get("Sections", []) if track.live is not None else []
+    keep = 0
+    while keep < min(len(authored), len(live)) and authored[keep].get("Class") == live[keep].get("Class"):
+        keep += 1
+    return keep
+
+
+def _is_control_rig(track):
+    return "controlrig" in str(track.get("Type", "")).lower()
 
 
 def _has_remote_reference(value):
@@ -826,10 +885,12 @@ def dependents_warnings(dependents):
 # ---------------------------------------------------------------------------
 def settings_op(body, live):
     """The Settings fields that differ, or None. A listed Settings resets the fields it leaves out to a new
-    sequence's (null: CustomClock / SelectionRange none), but the kept timing fields (seq.SETTINGS_KEPT)."""
+    sequence's (null: CustomClock / SelectionRange none), but the kept timing fields (seq.SETTINGS_KEPT); its markers
+    are settled against the current ones (seq.kept_markers)."""
     if "Settings" not in body:
         return None
-    settings, have = body["Settings"], live.get("Settings", {})
+    have = live.get("Settings", {})
+    settings = seq.kept_markers(body["Settings"], have, "/Body/Settings", check=True)
     changed = {name: value for name, value in settings.items() if not common.same(value, have.get(name), False)}
     changed.update(seq.omitted_values("Settings", settings, have))
     return Op({"op": "settings", "values": changed}, "/Body/Settings", values={"values": "/Body/Settings"}) if changed else None

@@ -515,7 +515,7 @@ bool OpSettings(FEdit& Edit, FReader& Op)
 	const FName OpName = RetargetOp->GetName();
 	FStructWriteResult Written;
 	if (!WriteSettingsStruct(Op, TEXT("settings"), *SettingsType, Settings, Defaults.GetMutable<FIKRetargetOpBase>().GetSettings(),
-		Edit.Retargeter, [](const FProperty& Property) { return IsOpOwnedField(Property); }, Written))
+		Edit.Retargeter, TEXT("IKRetargeter"), [](const FProperty& Property) { return IsOpOwnedField(Property); }, Written))
 	{
 		return false;
 	}
@@ -636,7 +636,7 @@ bool OpChainSettings(FEdit& Edit, FReader& Op)
 	const FStructInstance Defaults(RowType);
 	const FName OpName = RetargetOp->GetName();
 	FStructWriteResult Written;
-	if (!WriteSettingsStruct(Op, TEXT("settings"), *RowType, Row, Defaults.Get(), Edit.Retargeter,
+	if (!WriteSettingsStruct(Op, TEXT("settings"), *RowType, Row, Defaults.Get(), Edit.Retargeter, TEXT("IKRetargeter"),
 		[NameField](const FProperty& Property) { return &Property == NameField; }, Written))
 	{
 		return false;

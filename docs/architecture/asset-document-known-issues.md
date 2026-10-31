@@ -26,6 +26,12 @@ Open issues that are known but not yet fixed. Each item has its impact, the curr
 - **Workaround:** duplicate rigs with `duplicate_asset`. A copy made in the Content Browser that lost reroutes is repaired by an apply of its own extract with the source's `Graphs`, `GraphOrder` and `Functions` (`Action: Update`; the restored nodes come last in the graph's node order, reported as `ControlRig.OrderKept`, and the rig compiles as the source); one that only compiles without its links is right after a reload (`reload_assets`) or an editor restart.
 - **Fix:** None on our side for the editor's own Duplicate without changing the engine.
 
+### KI-21 The Content Browser's Duplicate of a Blueprint keeps no document node Ids
+- **What:** A node's document `Id` and authored `Action` are package metadata about the node. The editor's Duplicate copies the objects, not that metadata, and there is no editor delegate that names both the source and the copy (the Asset Registry's added-asset event has no source). A Blueprint duplicated in the Content Browser extracts with generated Ids (`BeginPlay`, `PrintString`), and the source's document names its nodes only by a unique `Action`. NodeGuids of the copy are new in both duplicates (engine `PostDuplicate`).
+- **Our side:** `duplicate_asset` copies the `AssetDocument.*` metadata of the source's subobjects to the copy (test `UEAssetDoc.Blueprint.Authoring.DuplicateKeepsIds`); the Blueprint guide says to extract a Content Browser copy before editing it by Id.
+- **Workaround:** duplicate with `duplicate_asset`, or extract the copy and edit that document.
+- **Fix:** A hook on the editor's Duplicate that carries the source, if one appears.
+
 ## Quality and noise
 
 ### KI-4 Large extracts (Control Rig)
@@ -44,3 +50,8 @@ Inspect is summarized by default (the shared `inspect_summary.py`: a large `Body
 - **What:** After PIE, the next apply of the hero Blueprint was refused as an unsaved target. One cause is fixed: saving a custom event with a struct input (`Key`) re-ran the pin default fixup after the apply's compile, leaving the Blueprint Dirty, so PIE recompiled it (fixed: the fixup runs before the compile).
 - **Status:** Not reproduced after that fix. `Level.Play.BlueprintCompileState` plays the hero, also with its status forced to Dirty, and the PIE compile leaves the package clean (the compilation manager restores the dirty flag); the apply after play succeeds.
 - **Next:** If it happens again, record the Blueprint's status before play and what was open (a Blueprint editor tab), and extend that test.
+
+### KI-20 Unconfirmed: a Blueprint left unsaved by opening graph tabs in its editor
+- **What:** After the Blueprint editor was opened and graph tabs were opened or switched, the next apply was refused with `DirtyExistingAssetTransactionUnsupported`.
+- **Status:** Not reproduced on UE 5.7. `Blueprint.OpenEditorGraphTabs` opens the editor, opens a function graph's tab, switches tabs, selects every node of both graphs (the Details panel shows each) and clears the selection, ticking the editor UI after each step: no object is modified and the package stays saved; the apply after it succeeds. The refusal now names the first unsaved change (the object, whether it is transactional, whether it was made inside an editor transaction), and the test checks that for a real unsaved edit, which is still refused.
+- **Next:** If it happens again, the refusal message names what dirtied the package; reproduce that step in that test.

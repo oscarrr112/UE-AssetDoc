@@ -47,7 +47,7 @@ const TCHAR* MetadataClass = TEXT("/Script/AssetDocumentTests.AssetDocumentSeque
 const TCHAR* UserDataClass = TEXT("/Script/AssetDocumentTests.AssetDocumentSequenceLifecycleUserDataTest");
 const TCHAR* BodyKeys[] = {TEXT("References"), TEXT("Preview"), TEXT("Playback"), TEXT("Additive"), TEXT("RootMotion"),
 	TEXT("Compression"), TEXT("Curves"), TEXT("NotifyTracks"), TEXT("Notifies"), TEXT("NotifyStates"), TEXT("SyncMarkers"),
-	TEXT("Metadata"), TEXT("AssetUserData"), TEXT("BoneTracks")};
+	TEXT("Metadata"), TEXT("AssetUserData"), TEXT("BoneTracks"), TEXT("TransformCurves"), TEXT("Attributes")};
 
 FAssetDocumentService& Service() { return FAssetDocumentModule::Get().GetService(); }
 

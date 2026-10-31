@@ -11,6 +11,8 @@
 #include "AssetDocumentNiagaraProvider.h"
 
 #include "NiagaraEmitter.h"
+#include "NiagaraParameterDefinitionsBase.h"
+#include "NiagaraParameterDefinitionsSubscriber.h"
 #include "NiagaraParameterCollection.h"
 #include "NiagaraScript.h"
 #include "NiagaraSystem.h"
@@ -186,6 +188,70 @@ bool Fail(FCall& Call, FStringView Code, FStringView Message, FStringView Path)
 	return false;
 }
 
+// The Parameter Definitions libraries the asset subscribes to: a system's own and its emitters' (Owner is the
+// emitter's name), an emitter's, and a script's (every version), as {"Owner", "Definitions"} sorted by owner
+// then path. The document has no form for them; the profile warns when any exist.
+void AddParameterDefinitionsEntries(const INiagaraParameterDefinitionsSubscriber& Subscriber, const FString& Owner,
+	TArray<TPair<FString, FString>>& Out)
+{
+#if WITH_EDITORONLY_DATA
+	for (const FParameterDefinitionsSubscription& Subscription : Subscriber.GetParameterDefinitionsSubscriptions())
+	{
+		const FString Path = Subscription.Definitions != nullptr ? Subscription.Definitions->GetPathName() : FString();
+		Out.AddUnique(TPair<FString, FString>(Owner, Path));
+	}
+#endif
+}
+
+FValue ReadParameterDefinitions(const UObject& Asset)
+{
+	TArray<TPair<FString, FString>> Entries;
+#if WITH_EDITORONLY_DATA
+	if (const UNiagaraSystem* System = Cast<UNiagaraSystem>(&Asset))
+	{
+		AddParameterDefinitionsEntries(*System, FString(), Entries);
+		for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
+		{
+			if (const UNiagaraEmitter* HandleEmitter = Handle.GetInstance().Emitter)
+			{
+				AddParameterDefinitionsEntries(*HandleEmitter, Handle.GetName().ToString(), Entries);
+			}
+		}
+	}
+	else if (const UNiagaraEmitter* Emitter = Cast<UNiagaraEmitter>(&Asset))
+	{
+		AddParameterDefinitionsEntries(*Emitter, FString(), Entries);
+	}
+	else if (const UNiagaraScript* Script = Cast<UNiagaraScript>(&Asset))
+	{
+		for (const FNiagaraAssetVersion& Version : Script->GetAllAvailableVersions())
+		{
+			if (const FVersionedNiagaraScriptData* Data = Script->GetScriptData(Version.VersionGuid))
+			{
+				for (const FParameterDefinitionsSubscription& Subscription : Data->ParameterDefinitionsSubscriptions)
+				{
+					Entries.AddUnique(TPair<FString, FString>(FString(),
+						Subscription.Definitions != nullptr ? Subscription.Definitions->GetPathName() : FString()));
+				}
+			}
+		}
+	}
+#endif
+	Entries.Sort([](const TPair<FString, FString>& A, const TPair<FString, FString>& B)
+	{
+		return A.Key != B.Key ? A.Key < B.Key : A.Value < B.Value;
+	});
+	TArray<FValue> Out;
+	for (const TPair<FString, FString>& Entry : Entries)
+	{
+		FObjectBuilder Item;
+		Item.AddString(TEXT("Owner"), Entry.Key);
+		Item.AddString(TEXT("Definitions"), Entry.Value);
+		Out.Add(Item.Build());
+	}
+	return Graph::MakeArray(MoveTemp(Out));
+}
+
 bool HandleRead(FCall& Call, FObjectBuilder& Result)
 {
 	FCall& C = Call;
@@ -358,9 +424,10 @@ bool HandleRead(FCall& Call, FObjectBuilder& Result)
 	if (Offset == 0)
 	{
 		TArray<FString> Unsupported;
-		FValue Properties = SparseObjectProperties(C.Asset, {}, &Unsupported);
+		FValue Properties = SparseObjectProperties(C.Asset, {}, &Unsupported, EUnencodable::Mark);
 		UsedNodes += Graph::CountValueNodes(Properties);
 		Result.Add(TEXT("properties"), MoveTemp(Properties));
+		Result.Add(TEXT("parameter_definitions"), ReadParameterDefinitions(C.Asset));
 		if (Options.bInspect)
 		{
 			Unsupported.Sort();

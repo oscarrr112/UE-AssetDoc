@@ -93,7 +93,7 @@ def canonical_body(body):
             names.add(item["Name"].lower())
             if "RenamedFrom" in row:
                 source = types.validate_label(row["RenamedFrom"], f"{path}/RenamedFrom",
-                                              "UserDefinedEnum.InvalidEnumeratorName", "enumerator")
+                                              "UserDefinedEnum.InvalidEnumeratorName", "enumerator", reference=True)
                 if source.lower() == item["Name"].lower() or source.lower() in sources:
                     raise _error(f"{path}/RenamedFrom", "RenamedFrom names another enumerator, once.",
                                  "UserDefinedEnum.InvalidRename")

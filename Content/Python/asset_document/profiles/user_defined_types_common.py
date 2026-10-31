@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from asset_document.diagnostics import DiagnosticSeverity, RuntimeDiagnostic
 from asset_document.profiles import data_table_common as common
+from asset_document.tolerance import authored_rule
 from asset_document.regions.primitive_catalog import NamedOpaqueHandleArgument
 
 USER_STRUCT_READ = "data.user_struct.read.v1"
@@ -20,12 +21,17 @@ USER_ENUM_EDIT = "data.user_enum.edit.v1"
 _NAME_LIMIT = 100
 
 
-def validate_label(value, path, code, what):
-    """A member / enumerator name as the editors accept it: one line, no outer spaces."""
-    if type(value) is not str or not value or value.strip() != value or len(value) > _NAME_LIMIT \
-            or "\n" in value or "\r" in value:
-        raise common.error(path, f"A {what} name is 1 to {_NAME_LIMIT} characters on one line without leading or "
-                                 f"trailing spaces (got {value!r}).", code)
+def validate_label(value, path, code, what, reference=False):
+    """A member / enumerator name as AssetDoc writes new ones: one line, no outer spaces. The editors also accept
+    outer spaces and longer names, so a name the asset already holds is read as it is (the rule judges new and
+    changed names only: ``tolerance.authored_rule``). ``reference``: a name that refers to an existing one
+    (``RenamedFrom``), never judged."""
+    message = (f"A {what} name is 1 to {_NAME_LIMIT} characters on one line without leading or trailing spaces "
+               f"(got {value!r}).")
+    if type(value) is not str or not value.strip():
+        raise common.error(path, message, code)
+    if not reference and (value.strip() != value or len(value) > _NAME_LIMIT or "\n" in value or "\r" in value):
+        authored_rule(path, code, message)
     return value
 
 

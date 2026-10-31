@@ -189,9 +189,18 @@ bool FAssetDocumentMutationIntentProjectionShapeTest::RunTest(const FString& Par
 	for (const TCHAR* Reserved : {TEXT("Body"), TEXT("OpaqueHandle"), TEXT("Address"), TEXT("RollbackCode"), TEXT("Slot")})
 	{
 		FFixture Intent;
-		Field(Intent.Step(), TEXT("Intent")) = Object({TEXT("Nested")}, {Object({Reserved}, {Text(TEXT("forbidden"))})});
+		Field(Intent.Step(), TEXT("Intent")) = Object({Reserved}, {Text(TEXT("forbidden"))});
 		ExpectRejected(*this, Reserved, Intent);
+		// An authored value (a property or variable named like an envelope field) is not an envelope.
+		FFixture Authored;
+		Field(Authored.Step(), TEXT("Intent")) = Object({TEXT("Nested")}, {Object({Reserved}, {Text(TEXT("authored"))})});
+		FAssetDocumentMutationIntentProjection AuthoredOutput;
+		TestTrue(FString::Printf(TEXT("a nested %s is an authored name"), Reserved), Authored.Parse(AuthoredOutput).bValid);
 	}
+	FFixture Spelling;
+	Field(Spelling.Step(), TEXT("Intent")) = Object({TEXT("slot")}, {Text(TEXT("authored"))});
+	FAssetDocumentMutationIntentProjection SpellingOutput;
+	TestTrue(TEXT("reserved names are exact"), Spelling.Parse(SpellingOutput).bValid);
 	// A valid earlier step must not leak into output when a later step fails.
 	FFixture Later;
 	FValue InvalidStep = Later.Step();

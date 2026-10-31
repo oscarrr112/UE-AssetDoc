@@ -293,7 +293,9 @@ _EDITOR_FIELDS = {
     ("Sync", "SyncSlotIndex"): "SyncSlotIndex",
     ("TimeStretch", "TimeStretchCurveName"): "TimeStretchCurveName",
 }
-MANAGED_PROPERTY_NAMES = frozenset(_EDITOR_FIELDS.values())
+# Hard references a settings region shows: Blend (BlendProfileIn/Out) and Preview (PreviewBasePose).
+REGION_REFERENCE_NAMES = frozenset(("BlendProfileIn", "BlendProfileOut", "PreviewBasePose"))
+MANAGED_PROPERTY_NAMES = frozenset(_EDITOR_FIELDS.values()) | REGION_REFERENCE_NAMES
 
 
 def validate_properties(properties: object) -> dict:

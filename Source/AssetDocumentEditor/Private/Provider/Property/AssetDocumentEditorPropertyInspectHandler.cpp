@@ -188,7 +188,8 @@ FAssetDocumentPrimitiveOutcome HandleLiveAssetInspection(
 	const FAssetDocumentPrimitiveInvocation& Invocation,
 	IAssetDocumentHandleResolver& Handles,
 	UClass& ExactClass,
-	TConstArrayView<FString> DeclaredNames)
+	TConstArrayView<FString> DeclaredNames,
+	bool bOmittedSavedState)
 {
 	if (!HasLiveAssetArgument(Invocation))
 	{
@@ -214,6 +215,11 @@ FAssetDocumentPrimitiveOutcome HandleLiveAssetInspection(
 			TEXT("/HandleArguments/asset"),
 			TEXT("PropertyInspection.ClassMismatch"),
 			TEXT("The live asset does not have the exact requested class."));
+	}
+	if (bOmittedSavedState)
+	{
+		return MakeInspectionOutcome(
+			InspectAssetDocumentEditorOmittedSavedState(ExactClass, *LiveAsset, DeclaredNames));
 	}
 	return MakeInspectionOutcome(
 		InspectAssetDocumentEditorProperties(ExactClass, LiveAsset, DeclaredNames));
@@ -252,12 +258,14 @@ HandleAssetDocumentEditorPropertyInspectEvidence(
 	{
 		return HandleClassDefaultInspection(Invocation, *ExactClass, DeclaredNames);
 	}
-	if (Mode != TEXT("live_asset"))
+	// "omitted_saved_state": only the live asset's saved non-editable properties that differ from the class default.
+	const bool bOmittedSavedState = Mode == TEXT("omitted_saved_state");
+	if (Mode != TEXT("live_asset") && !bOmittedSavedState)
 	{
 		return MakeFailure(
 			TEXT("/ValueArguments/mode"),
 			TEXT("PrimitiveInvocation.InvalidValueShape"),
 			TEXT("Live property inspection requires exactly one read-only asset handle."));
 	}
-	return HandleLiveAssetInspection(Invocation, Handles, *ExactClass, DeclaredNames);
+	return HandleLiveAssetInspection(Invocation, Handles, *ExactClass, DeclaredNames, bOmittedSavedState);
 }

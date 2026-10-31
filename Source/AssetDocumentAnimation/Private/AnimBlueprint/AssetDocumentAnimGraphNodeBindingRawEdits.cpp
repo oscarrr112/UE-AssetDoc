@@ -4,6 +4,8 @@
 #include "AnimBlueprint/AssetDocumentAnimGraphNodeBindingRawEdits.h"
 
 #include "AnimBlueprint/AssetDocumentAnimBlueprintAdapters.h"
+#include "Algo/AllOf.h"
+#include "AnimBlueprintExtension_PropertyAccess.h"
 #include "AnimGraphNode_Base.h"
 #include "AnimationGraphSchema.h"
 #include "Animation/AnimBlueprint.h"
@@ -89,10 +91,66 @@ UFunction* LeafFunction(IPropertyAccessEditor& Access, const UStruct* Struct, co
 	return Access.ResolvePropertyAccess(Struct, Path, Args).Result == EPropertyAccessResolveResult::Succeeded ? Leaf : nullptr;
 }
 
-int32 OptionalPinIndex(const UAnimGraphNode_Base& Node, FName PropertyName)
+// The node property a binding name binds: an array element's pin ("BlendWeights_0", FName number 1) binds its array;
+// any other name is the property of that whole name (a property may itself be named "Weight_1").
+FProperty* BindingProperty(const UAnimGraphNode_Base& Node, FName PropertyName)
 {
+	FProperty* Whole = Node.GetPinProperty(PropertyName);
+	if (PropertyName.GetNumber() > 0 && (Whole == nullptr || !Whole->IsA<FArrayProperty>()))
+	{
+		const UScriptStruct* NodeType = Node.GetFNodeType();
+		return NodeType != nullptr ? NodeType->FindPropertyByName(PropertyName) : nullptr;
+	}
+	return Whole;
+}
+
+// The optional pin of a binding name: an array element's pin shows with its array.
+int32 OptionalPinIndex(const UAnimGraphNode_Base& Node, FName PropertyName, bool bElement)
+{
+	const FName Shown = bElement ? FName(PropertyName, 0) : PropertyName;
 	return Node.ShowPinForProperties.IndexOfByPredicate(
-		[PropertyName](const FOptionalPinFromProperty& Pin) { return Pin.PropertyName == PropertyName; });
+		[Shown](const FOptionalPinFromProperty& Pin) { return Pin.PropertyName == Shown; });
+}
+
+// The binding's Call Site menu (FPropertyAccessAnimBlueprintBinding): None is Automatic.
+const FName* const CallSites[] = {
+	&UAnimBlueprintExtension_PropertyAccess::ContextId_UnBatched_ThreadSafe,
+	&UAnimBlueprintExtension_PropertyAccess::ContextId_Batched_WorkerThreadPreEventGraph,
+	&UAnimBlueprintExtension_PropertyAccess::ContextId_Batched_WorkerThreadPostEventGraph,
+	&UAnimBlueprintExtension_PropertyAccess::ContextId_Batched_GameThreadPreEventGraph,
+	&UAnimBlueprintExtension_PropertyAccess::ContextId_Batched_GameThreadPostEventGraph,
+};
+
+bool ReadContextId(const FValue& Value, FName& OutContext)
+{
+	if (Value.Kind == EAssetDocumentRuntimeValueKind::Null || (Value.Kind == EAssetDocumentRuntimeValueKind::String && Value.StringValue.IsEmpty()))
+	{
+		OutContext = NAME_None;
+		return true;
+	}
+	if (Value.Kind != EAssetDocumentRuntimeValueKind::String)
+	{
+		return false;
+	}
+	for (const FName* Site : CallSites)
+	{
+		if (Site->ToString() == Value.StringValue)
+		{
+			OutContext = *Site;
+			return true;
+		}
+	}
+	return false;
+}
+
+FString CallSiteList()
+{
+	TArray<FString> Names = {TEXT("\"\" (Automatic)")};
+	for (const FName* Site : CallSites)
+	{
+		Names.Add(Site->ToString());
+	}
+	return FString::Join(Names, TEXT(", "));
 }
 } // namespace BindingDetail
 
@@ -115,6 +173,10 @@ FAssetDocumentRuntimeValueDto QueryNodeBindings(const UAnimGraphNode_Base& Node)
 		if (Binding.bOnlyUpdateWhenActive)
 		{
 			SetField(Entry, TEXT("OnlyUpdateWhenActive"), MakeBoolValue(true));
+		}
+		if (!Binding.ContextId.IsNone())
+		{
+			SetField(Entry, TEXT("ContextId"), MakeStringValue(Binding.ContextId.ToString()));
 		}
 		SetField(Out, Name.ToString(), MoveTemp(Entry));
 	}
@@ -147,6 +209,10 @@ bool SetNodeBindings(UAnimGraphNode_Base& Node, const FAssetDocumentRuntimeValue
 		bool bOnlyUpdateWhenActive = false;
 		FProperty* Leaf = nullptr;
 		bool bFunction = false;
+		// An array element's binding ("BlendWeights_0"): the element index, and the element property it binds.
+		int32 ArrayIndex = INDEX_NONE;
+		FProperty* Target = nullptr;
+		TOptional<FName> ContextId;
 	};
 	TArray<FWanted> Wanted;
 	for (int32 Index = 0; Index < Value.ObjectKeys.Num(); ++Index)
@@ -157,8 +223,9 @@ bool SetNodeBindings(UAnimGraphNode_Base& Node, const FAssetDocumentRuntimeValue
 		Item.Name = FName(Key);
 		const FValue* Path = FindValueField(Entry, TEXT("Path"));
 		const FValue* Only = FindValueField(Entry, TEXT("OnlyUpdateWhenActive"));
+		const FValue* Context = FindValueField(Entry, TEXT("ContextId"));
 		const bool bKnownFields = Entry.Kind == EAssetDocumentRuntimeValueKind::Object && !Entry.ObjectKeys.ContainsByPredicate(
-			[](const FString& Field) { return Field != TEXT("Path") && Field != TEXT("OnlyUpdateWhenActive"); });
+			[](const FString& Field) { return Field != TEXT("Path") && Field != TEXT("OnlyUpdateWhenActive") && Field != TEXT("ContextId"); });
 		if (!bKnownFields || Path == nullptr || !ReadPath(*Path, Item.Path)
 			|| (Only != nullptr && Only->Kind != EAssetDocumentRuntimeValueKind::Boolean))
 		{
@@ -167,18 +234,35 @@ bool SetNodeBindings(UAnimGraphNode_Base& Node, const FAssetDocumentRuntimeValue
 			return false;
 		}
 		Item.bOnlyUpdateWhenActive = Only != nullptr && Only->BooleanValue;
-		FProperty* PinProperty = Node.GetPinProperty(Item.Name);
-		if (PinProperty == nullptr || OptionalPinIndex(Node, Item.Name) == INDEX_NONE)
+		if (Context != nullptr)
+		{
+			FName ContextId;
+			if (!ReadContextId(*Context, ContextId))
+			{
+				OutError.Set(TEXT("Graph.InvalidArgument"), FString::Printf(
+					TEXT("Binding '%s': ContextId is the binding's call site: %s."), *Key, *CallSiteList()), TEXT("/value"));
+				return false;
+			}
+			Item.ContextId = ContextId;
+		}
+		FProperty* PinProperty = BindingProperty(Node, Item.Name);
+		const bool bElement = Item.Name.GetNumber() > 0 && PinProperty != nullptr && PinProperty->IsA<FArrayProperty>()
+			&& PinProperty->GetFName() != Item.Name;
+		if (PinProperty == nullptr || OptionalPinIndex(Node, Item.Name, bElement) == INDEX_NONE
+			|| (bElement && Node.FindPin(Item.Name) == nullptr))
 		{
 			OutError.Set(TEXT("Graph.InvalidArgument"), FString::Printf(
 				TEXT("%s has no bindable property '%s'."), *Node.GetClass()->GetName(), *Key), TEXT("/value"));
 			return false;
 		}
+		// MakePropertyBindingWidget: an array element pin binds the array's element type at its index.
+		Item.ArrayIndex = bElement ? Item.Name.GetNumber() - 1 : INDEX_NONE;
+		Item.Target = bElement ? CastField<FArrayProperty>(PinProperty)->Inner : PinProperty;
 		int32 ArrayIndex = INDEX_NONE;
 		const FPropertyAccessResolveResult Resolved = Access->ResolvePropertyAccess(
 			Blueprint->SkeletonGeneratedClass, Item.Path, Item.Leaf, ArrayIndex);
 		if (Resolved.Result != EPropertyAccessResolveResult::Succeeded || Item.Leaf == nullptr
-			|| Access->GetPropertyCompatibility(Item.Leaf, PinProperty) == EPropertyAccessCompatibility::Incompatible)
+			|| Access->GetPropertyCompatibility(Item.Leaf, Item.Target) == EPropertyAccessCompatibility::Incompatible)
 		{
 			OutError.Set(TEXT("Graph.InvalidArgument"), FString::Printf(
 				TEXT("Binding '%s': '%s' is not a property or pure function of %s compatible with the pin."), *Key,
@@ -198,12 +282,27 @@ bool SetNodeBindings(UAnimGraphNode_Base& Node, const FAssetDocumentRuntimeValue
 		}
 	}
 
+	// Nothing to change: the node and its Blueprint are left untouched (not dirtied, not reconstructed).
+	TArray<FName> Existing;
+	Map->GetKeys(Existing);
+	const auto Unchanged = [Map](const FWanted& Item)
+	{
+		const FAnimGraphNodePropertyBinding* Current = Map->Find(Item.Name);
+		const EAnimGraphNodePropertyBindingType Type = Item.bFunction ? EAnimGraphNodePropertyBindingType::Function
+			: EAnimGraphNodePropertyBindingType::Property;
+		return Current != nullptr && Current->PropertyPath == Item.Path && Current->bOnlyUpdateWhenActive == Item.bOnlyUpdateWhenActive
+			&& Current->Type == Type && Current->ArrayIndex == Item.ArrayIndex
+			&& (!Item.ContextId.IsSet() || Current->ContextId == Item.ContextId.GetValue());
+	};
+	if (Existing.Num() == Wanted.Num() && Algo::AllOf(Wanted, Unchanged))
+	{
+		return true;
+	}
+
 	// OnRemoveBinding / OnAddBinding of the details-panel binding widget.
 	UObject* BindingObject = FindBindingObject(Node);
 	Node.Modify();
 	BindingObject->Modify();
-	TArray<FName> Existing;
-	Map->GetKeys(Existing);
 	for (const FName Name : Existing)
 	{
 		if (!Wanted.ContainsByPredicate([Name](const FWanted& Item) { return Item.Name == Name; }))
@@ -217,20 +316,46 @@ bool SetNodeBindings(UAnimGraphNode_Base& Node, const FAssetDocumentRuntimeValue
 		const FAnimGraphNodePropertyBinding* Current = Map->Find(Item.Name);
 		const EAnimGraphNodePropertyBindingType Type = Item.bFunction ? EAnimGraphNodePropertyBindingType::Function
 			: EAnimGraphNodePropertyBindingType::Property;
+		// A binding written without ContextId keeps the call site the binding has.
+		const FName ContextId = Item.ContextId.IsSet() ? Item.ContextId.GetValue() : (Current != nullptr ? Current->ContextId : NAME_None);
 		if (Current != nullptr && Current->PropertyPath == Item.Path && Current->bOnlyUpdateWhenActive == Item.bOnlyUpdateWhenActive
-			&& Current->Type == Type)
+			&& Current->Type == Type && Current->ArrayIndex == Item.ArrayIndex)
 		{
+			if (Current->ContextId != ContextId)
+			{
+				// The binding's Call Site menu (OnSetPropertyAccessContextId).
+				Map->FindChecked(Item.Name).ContextId = ContextId;
+			}
 			continue;
 		}
 		// Pins are exposed when bound; a bound pin keeps no links.
-		const int32 PinIndex = OptionalPinIndex(Node, Item.Name);
+		const int32 PinIndex = OptionalPinIndex(Node, Item.Name, Item.ArrayIndex != INDEX_NONE);
 		Node.SetPinVisibility(true, PinIndex);
 		if (UEdGraphPin* Pin = Node.FindPin(Item.Name))
 		{
 			Pin->BreakAllPinLinks();
 		}
+		if (Item.ArrayIndex == INDEX_NONE && Item.Target != nullptr && Item.Target->IsA<FArrayProperty>())
+		{
+			// A whole-array binding replaces the bindings of its elements.
+			const FName Whole(Item.Name, 0);
+			for (auto It = Map->CreateIterator(); It; ++It)
+			{
+				if (It.Key() != Item.Name && FName(It.Key(), 0) == Whole)
+				{
+					It.RemoveCurrent();
+				}
+			}
+		}
+		else if (Item.ArrayIndex != INDEX_NONE)
+		{
+			// An element binding replaces a binding of the whole array.
+			Map->Remove(FName(Item.Name, 0));
+		}
 		FAnimGraphNodePropertyBinding Binding;
 		Binding.PropertyName = Item.Name;
+		Binding.ArrayIndex = Item.ArrayIndex;
+		Binding.ContextId = ContextId;
 		Binding.PropertyPath = Item.Path;
 		Binding.PathAsText = Access->MakeTextPath(Item.Path, Blueprint->SkeletonGeneratedClass);
 		// OnAddBinding: a binding chain ending in a function is a function binding.
@@ -239,8 +364,7 @@ bool SetNodeBindings(UAnimGraphNode_Base& Node, const FAssetDocumentRuntimeValue
 		Binding.bOnlyUpdateWhenActive = Item.bOnlyUpdateWhenActive;
 		// UAnimGraphNodeBinding_Base::RecalculateBindingType.
 		Schema->ConvertPropertyToPinType(Item.Leaf, Binding.PinType);
-		FProperty* PinProperty = Node.GetPinProperty(Item.Name);
-		if (PinProperty != nullptr && Access->GetPropertyCompatibility(Item.Leaf, PinProperty) == EPropertyAccessCompatibility::Promotable)
+		if (Item.Target != nullptr && Access->GetPropertyCompatibility(Item.Leaf, Item.Target) == EPropertyAccessCompatibility::Promotable)
 		{
 			Binding.bIsPromotion = true;
 			Schema->ConvertPropertyToPinType(Item.Leaf, Binding.PromotedPinType);

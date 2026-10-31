@@ -161,6 +161,11 @@ TArray<int32> BodyOrder(const UPhysicsAsset& Asset);
 TArray<int32> ConstraintOrder(const UPhysicsAsset& Asset);
 // Document keys of the constraints (joint names; a repeated joint name gets "~2", "~3" in array order).
 TArray<FString> ConstraintKeys(const UPhysicsAsset& Asset);
+// Document keys of the bodies, by body index (bone names; a second or later body on a bone gets "~2", "~3" in array
+// order). An empty key: no body at that index.
+TArray<FString> BodyKeys(const UPhysicsAsset& Asset);
+// The body a document key names (a bone name; "<bone>~N" is the Nth body on that bone), or INDEX_NONE.
+int32 FindBodyByKey(const UPhysicsAsset& Asset, const FString& Key);
 
 // ---- structural edits with the editor's results (AssetDocumentPhysicsEditorEquivalent.cpp) ------------------------
 
@@ -175,7 +180,8 @@ namespace EditorEquivalent
 int32 AddBody(UPhysicsAsset& Asset, USkeletalMesh& Mesh, FName Bone, const FPhysAssetCreateParams& Params, const FBoneVertInfo* FitInfo,
 	TConstArrayView<int32> BoneIndicesInCreation);
 // Delete Body: the nearest bodies below get copies of their joints hanging from the body above, then the body and its
-// joints go (FPhysicsAssetUtils::DestroyBody).
+// joints go (FPhysicsAssetUtils::DestroyBody). When another body is on the same bone only this body (and its collision
+// table rows) goes: joints name bones, so the bone's joints stay with its other body and nothing is re-hung.
 void RemoveBody(UPhysicsAsset& Asset, int32 BodyIndex);
 // A new joint named JointName between ChildBody and ParentBody (ConnectJoint). INDEX_NONE when joints cannot be created.
 int32 AddJoint(UPhysicsAsset& Asset, FName JointName, int32 ChildBody, int32 ParentBody);

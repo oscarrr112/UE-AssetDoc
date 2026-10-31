@@ -10,14 +10,15 @@ void PublishMontageNotifyTracks(UAnimMontage& Target, const TArray<FAnimNotifyTr
  Target.AnimNotifyTracks = Tracks;
 }
 void PublishMontageNotifyEvents(UAnimMontage& Target, const TArray<FAnimNotifyEvent>& Events,
- TConstArrayView<FLinkPlacement> Starts, TConstArrayView<FLinkPlacement> Ends, int32 RetainedPrefix)
+ TConstArrayView<FLinkPlacement> Starts, TConstArrayView<FLinkPlacement> Ends, TConstArrayView<bool> Relink)
 {
- check(Events.Num() == Starts.Num() && Events.Num() == Ends.Num() && RetainedPrefix >= 0 && RetainedPrefix <= Events.Num());
+ check(Events.Num() == Starts.Num() && Events.Num() == Ends.Num() && (Relink.IsEmpty() || Relink.Num() == Events.Num()));
  // AD.ANIMATION.MONTAGE.NOTIFIES-PUBLISH.v1: exact full mixed preimage-derived sequence only.
  Target.Notifies = Events;
- // Replacement retains existing rows byte-for-byte; only newly authored rows need link/offset initialization.
- for (int32 Index = RetainedPrefix; Index < Events.Num(); ++Index)
+ // Unchanged notifies keep their link byte-for-byte; moved and new ones are linked as the notify panel places them.
+ for (int32 Index = 0; Index < Events.Num(); ++Index)
  {
+  if (!Relink.IsEmpty() && !Relink[Index]) continue;
   auto& Event = Target.Notifies[Index];
   SetLinkPlacement(Event, Target, Starts[Index]);
   if (Event.NotifyStateClass)

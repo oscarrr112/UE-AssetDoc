@@ -11,6 +11,8 @@
 //                      without one the caller writes the document's shapes afterwards. Physical bodies below the bone
 //                      are re-hung from the new body and the new body hangs from the body that controlled the bone.
 //   RemoveBody         Delete Body: the nearest bodies below get copies of their joints hanging from the body above.
+//                      A body whose bone has another body (tool-made content) goes alone: joints name bones, so the
+//                      bone's joints stay with its other body and nothing is re-hung.
 //   AddJoint           a joint between two bodies, named by the document instead of the editor's UserConstraint[_N].
 //   ConnectJoint       points a joint at a child and a parent body, at the child bone's origin, with the default
 //                      profile, and turns collision between the two bodies off.
@@ -26,6 +28,7 @@
 #include "PhysicsEngine/ConstraintInstance.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "PhysicsEngine/PhysicsConstraintTemplate.h"
+#include "PhysicsEngine/RigidBodyIndexPair.h"
 #include "PhysicsEngine/SkeletalBodySetup.h"
 #include "ReferenceSkeleton.h"
 
@@ -130,6 +133,52 @@ void RehangBodiesBelow(UPhysicsAsset& Asset, USkeletalMesh& Mesh, int32 BodyInde
 			}
 		}
 	}
+}
+
+// Whether another body is on the bone of the body at BodyIndex.
+bool PhysicsBoneHasOtherBody(const UPhysicsAsset& Asset, int32 BodyIndex)
+{
+	const FName Bone = Asset.SkeletalBodySetups[BodyIndex] != nullptr ? Asset.SkeletalBodySetups[BodyIndex]->BoneName : FName();
+	for (int32 Other = 0; Other < Asset.SkeletalBodySetups.Num(); ++Other)
+	{
+		if (Other != BodyIndex && Asset.SkeletalBodySetups[Other] != nullptr && Asset.SkeletalBodySetups[Other]->BoneName == Bone)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+// Removes the body at BodyIndex and nothing else: its collision table rows go and the rows of later bodies move down
+// one index (as FPhysicsAssetUtils::DestroyBody does), its editor flags go; joints are not touched.
+void RemovePhysicsBodyEntryOnly(UPhysicsAsset& Asset, int32 BodyIndex)
+{
+	Asset.Modify();
+	if (USkeletalBodySetup* Removed = Asset.SkeletalBodySetups[BodyIndex])
+	{
+		Removed->Modify();
+	}
+	TMap<FRigidBodyIndexPair, bool> Table;
+	for (const TPair<FRigidBodyIndexPair, bool>& Row : Asset.CollisionDisableTable)
+	{
+		const int32 First = Row.Key.Indices[0];
+		const int32 Second = Row.Key.Indices[1];
+		if (First == BodyIndex || Second == BodyIndex)
+		{
+			continue;
+		}
+		Table.Add(FRigidBodyIndexPair(First > BodyIndex ? First - 1 : First, Second > BodyIndex ? Second - 1 : Second), Row.Value);
+	}
+	Asset.CollisionDisableTable = MoveTemp(Table);
+#if WITH_EDITORONLY_DATA
+	if (Asset.EditorBodyFlags.IsValidIndex(BodyIndex))
+	{
+		Asset.EditorBodyFlags.RemoveAt(BodyIndex);
+	}
+#endif
+	Asset.SkeletalBodySetups.RemoveAt(BodyIndex);
+	Asset.UpdateBodySetupIndexMap();
+	Asset.UpdateBoundsBodiesArray();
 }
 } // namespace
 
@@ -250,6 +299,12 @@ void RemoveBody(UPhysicsAsset& Asset, int32 BodyIndex)
 		return;
 	}
 	Asset.Modify();
+	// Another body on the bone keeps the bone's joints: only this body goes.
+	if (PhysicsBoneHasOtherBody(Asset, BodyIndex))
+	{
+		RemovePhysicsBodyEntryOnly(Asset, BodyIndex);
+		return;
+	}
 	// Joints are re-hung only with a preview mesh to read the bone hierarchy from; without one the body still goes.
 	if (USkeletalMesh* Mesh = Asset.GetPreviewMesh())
 	{

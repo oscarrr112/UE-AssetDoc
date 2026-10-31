@@ -9,20 +9,26 @@ and op chunking.  See docs/architecture/asset-document-datatable-matrix.md.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 import math
 import re
 import struct
 
 from asset_document.canonical.document_codec import DocumentCodec
 from asset_document.diagnostics import contract_error, primitive_error
+from asset_document.diff.canonical_diff import canonical_diff
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.dto import PrimitiveRequirement, RuntimePhase
+from asset_document import markers, text_forms
 from asset_document.meta import DocumentAction
 from asset_document.regions.primitive_catalog import (
     NamedOpaqueHandleArgument, PrimitiveOutcome, PrimitiveOutcomeStatus,
 )
-from asset_document.regions.property_semantics import PropertySemanticAdapter
+from asset_document.regions.property_semantics import (
+    GenericPropertyComponent, PropertySemanticAdapter, admit_properties,
+)
 from asset_document.read_only_extract import admits_read_only
+from asset_document.tolerance import authored_rule, key as judged_key
 
 
 ROUTE = "data_profile"
@@ -148,11 +154,28 @@ def validate_header(document, class_paths, prefix, body_keys, extra_keys=()):
     return body
 
 
+def _name_breaks_rules(value):
+    return (not value or len(value) >= 1024 or value.strip() != value
+            or any(char in value for char in "\"' ,\n\r\t") or value.lower() == "none")
+
+
 def validate_name(value, path, prefix, what="row"):
-    if type(value) is not str or not value or len(value) >= 1024 or value.strip() != value \
-            or any(char in value for char in "\"' ,\n\r\t") or value.lower() == "none":
+    if type(value) is not str or _name_breaks_rules(value):
         raise error(path, f"A {what} name is a non-empty name without spaces, quotes, commas or line breaks "
                           f"(got {value!r}).", f"{prefix}.InvalidRowName")
+    return value
+
+
+def name_rule(value, path, prefix, what="row", as_key=True):
+    """``validate_name`` for a name the engine may already hold (an import, a rename in the editor): the
+    character rules judge only new or changed names (``tolerance.authored_rule``); the asset's own are read as they
+    are. ``as_key``: the name is the object member key at ``path`` (judged by its presence, not its value)."""
+    if type(value) is not str:
+        raise error(path, f"A {what} name is a string (got {value!r}).", f"{prefix}.InvalidRowName")
+    if _name_breaks_rules(value):
+        authored_rule(path, f"{prefix}.InvalidRowName", f"A {what} name is a non-empty name without spaces, quotes, "
+                                                        f"commas or line breaks (got {value!r}).",
+                      judged=(judged_key(path),) if as_key else None)
     return value
 
 
@@ -168,8 +191,13 @@ def _is_number(value):
 
 
 def same(left, right, exact=True):
-    """Value equality for row values: numbers compare numerically (1 == 1.0); the lenient
-    form also accepts values that store as the same float32."""
+    """Value equality of an authored value (``left``) with a live one (``right``): numbers compare numerically
+    (1 == 1.0); the lenient form also accepts values that store as the same float32. An authored plain string
+    names a live text read in its localization form when it is that form's display string; an authored text
+    form never matches a live plain string, so writing one is a change. The marker of a value read before its type had
+    a document form keeps the live value (``markers.is_former``)."""
+    if markers.is_former(left, right):
+        return True
     if _is_number(left) and _is_number(right):
         if left == right:
             return True
@@ -184,6 +212,8 @@ def same(left, right, exact=True):
         return left.keys() == right.keys() and all(same(left[key], right[key], exact) for key in left)
     if type(left) in (list, tuple) and type(right) in (list, tuple):
         return len(left) == len(right) and all(same(a, b, exact) for a, b in zip(left, right))
+    if type(left) is str and type(right) is str:
+        return text_forms.same_text(left, right)
     return type(left) is type(right) and left == right
 
 
@@ -302,13 +332,16 @@ NOT_EXTRACTED = ("ThumbnailInfo",)
 class PropertiesRegion:
     """Top-level Properties of a table asset; Body-owned names are refused."""
 
-    def __init__(self, class_path, body_owned, prefix, editor_state=()):
+    def __init__(self, class_path, body_owned, prefix, editor_state=(), admitted=()):
         self.class_path = class_path
         self.body_owned = dict(body_owned)
         self.prefix = prefix
         # Editor state (for example the asset's ThumbnailInfo) is neither extracted nor authored.
         self.editor_state = tuple(editor_state)
-        self.adapter = PropertySemanticAdapter()
+        # admitted: serialized properties without CPF_Edit that the asset's editor still shows (a details
+        # customization), read and written as Properties too.
+        self.adapter = PropertySemanticAdapter(
+            GenericPropertyComponent(admit_properties(class_path, tuple(admitted))) if admitted else None)
 
     def check_owned(self, properties):
         for name in sorted(properties):
@@ -360,11 +393,12 @@ def properties_diff(authored, live, exact):
 def struct_as_authored(authored, live):
     """``live`` in the shape of ``authored`` for a value codec whose objects are always structs (the graph property
     codec: a map or set is export text): struct members the authored value omits are left out (an edit keeps them),
-    arrays of the same length compare element by element; anything else is returned as it is."""
+    array elements are shaped by the authored element of the same index (live elements past the authored array are
+    kept whole); anything else is returned as it is."""
     if type(authored) is dict and type(live) is dict:
         return {key: struct_as_authored(value, live[key]) for key, value in authored.items() if key in live}
-    if type(authored) is list and type(live) is list and len(authored) == len(live):
-        return [struct_as_authored(mine, theirs) for mine, theirs in zip(authored, live)]
+    if type(authored) is list and type(live) is list:
+        return [struct_as_authored(mine, theirs) for mine, theirs in zip(authored, live)] + live[len(authored):]
     return live
 
 
@@ -392,25 +426,41 @@ def properties_as_authored(differences, document, read, context, exact):
     and instanced ``Properties`` it omits keep their value, as on the generic route). A difference at
     ``/Properties/<name>`` (or under it) whose authored value is an object or array is compared again with the live
     value read in the authored shape (the generic property codec's as-authored read: struct members it omits left
-    out, map keys and array lengths kept); when they match, its differences are dropped."""
+    out, map keys kept, array elements shaped by the authored element of the same index and live elements past
+    the authored array read in full); when they match, its differences are dropped. When they do not and the
+    differences under it are itemized (not one replacement of the whole value), they are itemized again against
+    that read, so an appended array element is one addition, not every default field of the elements before it."""
     flagged = structured_property_differences(differences, document)
     if not flagged:
         return differences
     properties = document["Properties"]
     adapter = PropertySemanticAdapter()
     admitted = {item.name: item for item in adapter.enumerate(document["Class"], context)}
-    explained = set()
+    replaced = {}
     for prefix, name in flagged.items():
         item = admitted.get(name)
         if item is None or not item.readable or not item.writable:
             continue
-        live = adapter.extract(read, (item,), context, include_defaults=True, authored={name: properties[name]})
-        if name in live and same(properties[name], live[name], exact):
-            explained.add(prefix)
-    if not explained:
+        live = markers.rebase(adapter.extract(read, (item,), context, include_defaults=True,
+                                              authored={name: properties[name]}), markers.current_target())
+        if name not in live:
+            continue
+        if same(properties[name], live[name], exact):
+            replaced[prefix] = ()
+        elif not any(change.path == prefix for change in differences):
+            replaced[prefix] = _itemized(prefix, properties[name], live[name], exact)
+    if not replaced:
         return differences
-    return tuple(item for item in differences
-                 if not any(item.path == prefix or item.path.startswith(prefix + "/") for prefix in explained))
+    kept = tuple(change for change in differences
+                 if not any(change.path == prefix or change.path.startswith(prefix + "/") for prefix in replaced))
+    return kept + tuple(change for changes in replaced.values() for change in changes)
+
+
+def _itemized(prefix, authored, live, exact):
+    """The differences of an authored structured value (before) and the live value read in its shape (after), at
+    ``prefix``; leaf values ``same`` holds equal are not differences."""
+    return tuple(replace(change, path=prefix + change.path) for change in canonical_diff(authored, live)
+                 if not (change.before_present and change.after_present and same(change.before, change.after, exact)))
 
 
 def header_diff(authored, extracted):

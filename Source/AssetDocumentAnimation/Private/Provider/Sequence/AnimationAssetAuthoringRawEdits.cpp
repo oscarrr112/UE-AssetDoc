@@ -67,6 +67,12 @@ void SetAuthoredSyncMarkers(UAnimSequence& Sequence, const TArray<FSyncMarkerRow
 void SetObjectReference(UObject& Owner, FProperty& Property, UObject* Value)
 {
  FObjectPropertyBase* Reference = CastFieldChecked<FObjectPropertyBase>(&Property);
+ // The Details panel sends no change for an identical value (PropertyAccessUtil::EmitPostChangeNotify); a
+ // notification would let UAnimSequence::PostEditChangeProperty clear a RefPoseSeq the asset holds.
+ if (Reference->GetObjectPropertyValue_InContainer(&Owner) == Value)
+ {
+  return;
+ }
  Owner.Modify();
  Owner.PreEditChange(&Property);
  Reference->SetObjectPropertyValue_InContainer(&Owner, Value);

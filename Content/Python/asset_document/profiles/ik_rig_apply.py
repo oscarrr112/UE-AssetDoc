@@ -20,6 +20,7 @@ and warnings come back as warnings. Renamed or removed chains report the IK Reta
 """
 from __future__ import annotations
 
+from asset_document import markers
 from asset_document.diagnostics import DiagnosticSeverity, RuntimeDiagnostic, with_diagnostics
 from asset_document.profiles import data_table_common as common
 from asset_document.profiles import ik_common as ik
@@ -266,10 +267,35 @@ def plan_solver_stack(live_types, authored_types):
     return removes, adds, moves
 
 
+def check_markers(body, live):
+    """A marked solver (its type does not load) pairs with the asset's unloadable solvers in order: it must be one of
+    them, as extracted; it cannot be added. A marked settings field (no document form) must be the one the solver it
+    pairs with reads at that place, as extracted; the same for goal Details."""
+    for name, entry in body.get("Goals", {}).items():
+        have = live.get("Goals", {})
+        current = have.get(name) or have.get(entry.get("RenamedFrom") or "") or {}
+        ik.require_markers_unchanged(f"/Body/Goals/{escape(name)}", {key: entry[key] for key in GOAL_FIELDS if key in entry},
+                                     current, rig.PREFIX)
+    if "Solvers" not in body:
+        return
+    authored, have = body["Solvers"], live.get("Solvers", [])
+    paired = {j: i for i, j in match_solvers([item.get("Type", "") for item in have],
+                                             [item["Type"] for item in authored]).items()}
+    for j, entry in enumerate(authored):
+        current = have[paired[j]] if j in paired else None
+        if markers.is_marker(entry):
+            markers.require_unchanged(f"/Body/Solvers/{j}", entry, current, rig.PREFIX)
+            continue
+        for key in ("Settings", "Goals", "Bones"):
+            if key in entry:
+                ik.require_markers_unchanged(f"/Body/Solvers/{j}/{key}", entry[key], (current or {}).get(key), rig.PREFIX)
+
+
 def phase_solver_stack(body, live):
     if "Solvers" not in body:
         return []
     authored, have = body["Solvers"], live.get("Solvers", [])
+    check_markers(body, live)
     removes, adds, moves = plan_solver_stack([item.get("Type", "") for item in have],
                                              [item["Type"] for item in authored])
     ops = [Op({"op": "solver.remove", "index": index}, "/Body/Solvers") for index in removes]
@@ -425,7 +451,7 @@ def check_solver_types(body, calls):
     by_path = {row.get("Path"): row.get("Name") for row in rows}
     for index, entry in enumerate(body["Solvers"]):
         kind = entry["Type"]
-        if kind in names:
+        if kind in names or markers.is_marker(entry):
             continue
         where = f"/Body/Solvers/{index}/Type"
         if kind in by_path:
@@ -520,9 +546,11 @@ def preflight(canonical, read, context):
     """Refusals that need no write (an existing rig: read; a new one: the document alone)."""
     body = canonical.get("Body", {})
     if read is None:
+        check_markers(body, {})
         refuse(body, {})
         return
     live = _live(ik.RigCalls(context, read, prefix=rig.PREFIX))
+    check_markers(body, live)
     if rig.body_diff(body, live, exact=False):
         refuse(body, live)
 

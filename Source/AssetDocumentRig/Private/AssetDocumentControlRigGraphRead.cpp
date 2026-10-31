@@ -28,6 +28,8 @@
 #include "RigVMModel/RigVMLink.h"
 #include "RigVMModel/RigVMPin.h"
 #include "RigVMCore/RigVMDispatchFactory.h"
+#include "RigVMCore/RigVMNodeLayout.h"
+#include "RigVMCore/RigVMVariant.h"
 
 namespace UE::AssetDocument::Graph::Rig::ControlRig
 {
@@ -169,7 +171,7 @@ private:
 		return MakeString(Text);
 	}
 
-	FValue PinDescription(const URigVMPin& Pin, bool bWithDefault)
+	FValue PinDescription(const URigVMPin& Pin, bool bWithDefault, const FString* DisplayName = nullptr)
 	{
 		FObjectBuilder Entry;
 		Entry.AddString(TEXT("Name"), Pin.GetName());
@@ -177,6 +179,10 @@ private:
 		if (Pin.GetDirection() == ERigVMPinDirection::IO)
 		{
 			Entry.AddString(TEXT("Direction"), TEXT("IO"));
+		}
+		if (DisplayName != nullptr && !DisplayName->IsEmpty())
+		{
+			Entry.AddString(TEXT("DisplayName"), *DisplayName);
 		}
 		if (bWithDefault && !Pin.IsExecuteContext() && !IsValuelessType(Pin.GetCPPType(), Pin.GetCPPTypeObject()))
 		{
@@ -193,8 +199,13 @@ private:
 	// IO (a mutable function's ExecuteContext, or the pin a collapse kept the collapsed execute pin's name for). With
 	// bWithDefaults (functions) each pin's default value: what the function's details panel shows and its references
 	// start with (a collapse node's input values are its node Defaults).
+	//
+	// The Details panel's pin layout: each exposed pin's label (DisplayName, unless it is the pin's name) and the node's
+	// pin categories in order,
+	// empty ones included: PinCategories [{Name, Pins? (pin paths in the category's order), Expanded?}].
 	void AddInterface(const URigVMNode& Node, FObjectBuilder& Entry, bool bWithDefaults)
 	{
+		const FRigVMNodeLayout Layout = Node.GetNodeLayout(true);
 		TArray<FValue> Inputs;
 		TArray<FValue> Outputs;
 		for (const URigVMPin* Pin : Node.GetPins())
@@ -203,17 +214,43 @@ private:
 			{
 				continue;
 			}
+			// A label equal to the pin's own name is no label (the editor stores one when it rebuilds a node's pins).
+			const FString* DisplayName = Layout.DisplayNames.Find(Pin->GetName());
+			if (DisplayName != nullptr && DisplayName->Equals(Pin->GetName(), ESearchCase::CaseSensitive))
+			{
+				DisplayName = nullptr;
+			}
 			if (Pin->GetDirection() == ERigVMPinDirection::Output)
 			{
-				Outputs.Add(PinDescription(*Pin, bWithDefaults));
+				Outputs.Add(PinDescription(*Pin, bWithDefaults, DisplayName));
 			}
 			else if (Pin->GetDirection() == ERigVMPinDirection::Input || Pin->GetDirection() == ERigVMPinDirection::IO)
 			{
-				Inputs.Add(PinDescription(*Pin, bWithDefaults));
+				Inputs.Add(PinDescription(*Pin, bWithDefaults, DisplayName));
 			}
 		}
 		Entry.Add(TEXT("Inputs"), MakeArray(MoveTemp(Inputs)));
 		Entry.Add(TEXT("Outputs"), MakeArray(MoveTemp(Outputs)));
+		TArray<FValue> Categories;
+		for (const FRigVMPinCategory& Category : Layout.Categories)
+		{
+			FObjectBuilder Item;
+			Item.AddString(TEXT("Name"), Category.Path);
+			if (!Category.Elements.IsEmpty())
+			{
+				Item.Add(TEXT("Pins"), MakeStringArray(Category.Elements));
+			}
+			// The default category always shows expanded.
+			if (Category.bExpandedByDefault && !Category.Path.Equals(FRigVMPinCategory::GetDefaultCategoryName(), ESearchCase::IgnoreCase))
+			{
+				Item.AddBool(TEXT("Expanded"), true);
+			}
+			Categories.Add(Item.Build());
+		}
+		if (!Categories.IsEmpty())
+		{
+			Entry.Add(TEXT("PinCategories"), MakeArray(MoveTemp(Categories)));
+		}
 	}
 
 	// Category, keywords and description of a function or collapse node (the graph's details panel).
@@ -274,6 +311,19 @@ private:
 		if (GetUserColor(Function, UserColor))
 		{
 			Entry.Add(TEXT("Color"), Color(UserColor));
+		}
+		// The Details panel's Variant tags, by name (the tag's label, colour and tooltip come from the project's tag list).
+		const FRigVMVariant Variant = Function.GetFunctionVariant();
+		if (!Variant.Tags.IsEmpty())
+		{
+			TArray<FString> Tags;
+			for (const FRigVMTag& Tag : Variant.Tags)
+			{
+				Tags.Add(Tag.Name.ToString());
+			}
+			FObjectBuilder VariantEntry;
+			VariantEntry.Add(TEXT("Tags"), MakeStringArray(Tags));
+			Entry.Add(TEXT("Variant"), VariantEntry.Build());
 		}
 		AddInterface(Function, Entry, true);
 		const URigVMGraph* Body = Function.GetContainedGraph();

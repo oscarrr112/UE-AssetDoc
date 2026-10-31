@@ -273,6 +273,16 @@ bool Decode(FProperty& Property, const FAssetDocumentRuntimeValueDto& Value, voi
 
 bool Decode(FProperty& Property, const FAssetDocumentRuntimeValueDto& Value, void* ValuePtr, FString& OutDiagnosticCode, UObject* Owner)
 {
+	FString Message;
+	FString ValuePath;
+	return Decode(Property, Value, ValuePtr, OutDiagnosticCode, Owner, Message, ValuePath);
+}
+
+bool Decode(FProperty& Property, const FAssetDocumentRuntimeValueDto& Value, void* ValuePtr, FString& OutDiagnosticCode, UObject* Owner,
+	FString& OutMessage, FString& OutValuePath)
+{
+	OutMessage.Reset();
+	OutValuePath.Reset();
 	if (ValuePtr == nullptr)
 	{
 		OutDiagnosticCode = TEXT("TypedValueCodec.InvalidNativeValue");
@@ -286,6 +296,8 @@ bool Decode(FProperty& Property, const FAssetDocumentRuntimeValueDto& Value, voi
 	if (!Result.bSucceeded || !Decoded.IsValid() || !Decoded->IsValid())
 	{
 		OutDiagnosticCode = Result.bSucceeded ? FString(TEXT("TypedValueCodec.ConversionFailed")) : Result.DiagnosticCode;
+		OutMessage = Result.Message;
+		OutValuePath = Result.ValuePath;
 		return false;
 	}
 	if (Decoded->HasStagedObjects())

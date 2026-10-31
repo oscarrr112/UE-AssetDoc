@@ -26,6 +26,26 @@
 
 namespace UE::AssetDocumentAI::BehaviorTreeAuthoredReadback
 {
+bool IsMissingClassNode(const UAIGraphNode& Node)
+{
+	if (Node.NodeInstance != nullptr) return false;
+	const FString Name = Node.ClassData.GetClassName();
+	if (Name.IsEmpty()) return false;
+	// Only a class no loaded class answers to; a node of a loaded class without an instance stays malformed. Nothing
+	// is loaded to find out.
+	const FString Package = Node.ClassData.GetPackageName();
+	return Package.IsEmpty()
+		? FindFirstObject<UClass>(*Name, EFindFirstObjectOptions::None) == nullptr
+		: FindObject<UClass>(nullptr, *(Package + TEXT(".") + Name)) == nullptr;
+}
+
+FString MissingNodeClassPath(const UAIGraphNode& Node)
+{
+	const FString Package = Node.ClassData.GetPackageName();
+	const FString Name = Node.ClassData.GetClassName();
+	return Package.IsEmpty() || Name.IsEmpty() ? Name : Package + TEXT(".") + Name;
+}
+
 namespace AIBehaviorTreeAuthoredGraphValidationLocal
 {
 struct FMainGraphConnection
@@ -170,8 +190,26 @@ struct FInventory
 		if (!RootOutput->LinkedTo.IsEmpty())
 		{
 			const UEdGraphPin* Input = RootOutput->LinkedTo[0];
+			// The runtime tree hangs from the root composite's instance; without its class there is no tree to keep.
+			if (const auto* RootChild = Cast<UAIGraphNode>(Input->GetOwningNode()); RootChild && IsMissingClassNode(*RootChild))
+			{ Diagnostic = TEXT("AIProvider.BehaviorTree.GraphReadbackUnsupportedNode"); return false; }
 			if (!ReachMainV2(*Input->GetOwningNode(), TEXT("/Body/Tree/Root"), Visited, Active, Connections, 1)) return false;
 			Connections.Add({RootOutput, Input, TEXT("/Body/Tree/Root")});
+		}
+		// Main nodes without an incoming link are detached branch roots. They
+		// project in NodeGuid order and get the same cycle and cardinality
+		// checks as the rooted tree; only nodes no walk reaches are refused.
+		TArray<const UEdGraphNode*> DetachedRoots;
+		for (const UEdGraphNode* N : MainNodes)
+			if (N != &Root && !Visited.Contains(N) && N->Pins[0]->LinkedTo.IsEmpty()) DetachedRoots.Add(N);
+		DetachedRoots.Sort([](const UEdGraphNode& A, const UEdGraphNode& B)
+		{
+			return A.NodeGuid.ToString(EGuidFormats::Digits) < B.NodeGuid.ToString(EGuidFormats::Digits);
+		});
+		for (int32 Index = 0; Index < DetachedRoots.Num(); ++Index)
+		{
+			const FString DetachedPath = FString::Printf(TEXT("/Body/Tree/Detached/%d"), Index);
+			if (!ReachMainV2(*DetachedRoots[Index], DetachedPath, Visited, Active, Connections, 1)) return false;
 		}
 		if (Visited.Num() != MainNodes.Num())
 			return MainFault(EAuthoredGraphValidationFault::Unreachable, TEXT("/Body/Tree/Nodes"));
@@ -259,6 +297,13 @@ struct FInventory
 		if (Processed != Members.Num()) return false;
 		return true;
 	}
+	// A V2 read keeps a node of its graph role whose class does not load; its class data stands for the instance.
+	bool MissingClass(const UAIGraphNode& N, bool bRoleNode)
+	{
+		if (Version != EAuthoredGraphReadbackVersion::V2 || !bRoleNode || !IsMissingClassNode(N)) return false;
+		Identity += TEXT("missing:") + MissingNodeClassPath(N) + TEXT(";");
+		return true;
+	}
 	bool Subnode(const UBehaviorTreeGraphNode* N, const UBehaviorTreeGraphNode& Parent,
 		const UEdGraph& Graph, bool bDecorator)
 	{
@@ -307,9 +352,11 @@ struct FInventory
 		{
 			if (const auto* Composite = Cast<UBehaviorTreeGraphNode_CompositeDecorator>(N))
 				return Composite->BoundGraph && Bound(*Composite->BoundGraph, *Composite);
+			if (MissingClass(*N, Cast<UBehaviorTreeGraphNode_Decorator>(N) != nullptr)) return true;
 			return Cast<UBehaviorTreeGraphNode_Decorator>(N) && Cast<UBTDecorator>(N->NodeInstance)
 				&& Object(N->NodeInstance);
 		}
+		if (MissingClass(*N, Cast<UBehaviorTreeGraphNode_Service>(N) != nullptr)) return true;
 		return Cast<UBehaviorTreeGraphNode_Service>(N) && Cast<UBTService>(N->NodeInstance)
 			&& Object(N->NodeInstance);
 	}
@@ -327,10 +374,14 @@ struct FInventory
 		}
 		if (!Cast<UBehaviorTreeGraphNode_Root>(&N))
 		{
-			if (!((Cast<UBehaviorTreeGraphNode_Composite>(&N) && Cast<UBTCompositeNode>(N.NodeInstance))
+			if (MissingClass(N, Cast<UBehaviorTreeGraphNode_Composite>(&N) || Cast<UBehaviorTreeGraphNode_Task>(&N)))
+			{
+				// Kept as it is: identified by the class data it names.
+			}
+			else if (!((Cast<UBehaviorTreeGraphNode_Composite>(&N) && Cast<UBTCompositeNode>(N.NodeInstance))
 				|| (Cast<UBehaviorTreeGraphNode_Task>(&N) && Cast<UBTTaskNode>(N.NodeInstance))))
 			{ Diagnostic = TEXT("AIProvider.BehaviorTree.GraphReadbackUnsupportedNode"); return false; }
-			if (!Object(N.NodeInstance)) return false;
+			else if (!Object(N.NodeInstance)) return false;
 		}
 		TSet<const UAIGraphNode*> Subs;
 		for (const auto& D : N.Decorators) { if (!Subnode(D, N, Graph, true)) return false; Subs.Add(D); }

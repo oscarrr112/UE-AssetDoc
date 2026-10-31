@@ -23,7 +23,10 @@ Document (MCP/schemas/assetdocument/PhysicsAsset.md)::
     }
 
 * Body regions are complete state when present and kept when omitted. Bodies are keyed by bone, constraints by
-  joint name (``RenamedFrom`` renames). Inside an entry every key is sparse: an omitted ``Properties`` /
+  joint name (``RenamedFrom`` renames). Older or tool-made content can repeat a name: extract keys the second and
+  later constraint of a joint name, and body of a bone, ``<name>~2``, ``~3`` with a warning; such an entry is kept and
+  edited by that key while the asset has it. Removing an earlier body of a bone gives the later ones the earlier keys
+  (``keys_after_removals``; Diff compares such a document in order, ``keys_in_order``). Inside an entry every key is sparse: an omitted ``Properties`` /
   ``PhysicalAnimation`` / ``Profiles`` field has the value of a new body / constraint, omitted ``Frames`` are the
   editor's "Snap" frames; ``Shapes`` omitted keeps a body's shapes.
 * Extract reads the asset as stored (constraint profile values from the default profile a save writes).
@@ -36,7 +39,10 @@ Document (MCP/schemas/assetdocument/PhysicsAsset.md)::
 """
 from __future__ import annotations
 
-from asset_document.diagnostics import AssetDocumentContractError
+import re
+
+from asset_document import markers
+from asset_document.diagnostics import AssetDocumentContractError, read_warning
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.dto import PrimitiveRequirement
 from asset_document.meta import (
@@ -49,6 +55,7 @@ from asset_document.profiles import data_table_common as common
 from asset_document.profiles import ik_common as ik
 from asset_document.regions.primitive_catalog import NamedOpaqueHandleArgument, _single_handle
 from asset_document.regions.target_lifecycle import generic_factory_lifecycle, lifecycle_requirements
+from asset_document.tolerance import authored_rule, key as judged_key
 
 PROFILE_ID = "profile.physics_asset.v1"
 CLASS = "/Script/Engine.PhysicsAsset"
@@ -68,7 +75,7 @@ BODY_ENTRY_KEYS = ("Properties", "Shapes", "PhysicalAnimation", "Fit")
 CONSTRAINT_KEYS = ("Child", "Parent", "Frames", "Properties", "Profiles", "RenamedFrom")
 FRAME_KEYS = ("Position", "PriAxis", "SecAxis")
 # Authored shape types (document key -> the editor's auto name suffix); the experimental level set / skinned
-# triangle mesh types are read only (Inspect lists them, apply keeps them).
+# triangle mesh types are read only: extract shows them as a marker (``{"Unsupported": ...}``), apply keeps them.
 SHAPE_TYPES = {"Spheres": "sphere", "Boxes": "box", "Capsules": "capsule", "TaperedCapsules": "tapered_capsule",
                "Convexes": "convex"}
 READ_ONLY_SHAPE_TYPES = ("LevelSets", "SkinnedLevelSets", "MLLevelSets", "SkinnedTriangleMeshes")
@@ -82,6 +89,74 @@ BODY_OWNED = {"SkeletalBodySetups": "Body/Bodies", "ConstraintSetup": "Body/Cons
               "PreviewSkeletalMesh": "Body/PreviewMesh"}
 NOT_AUTHORED = ("BoundsBodies", "ThumbnailInfo", "SolverIterations", "EditorBodyFlags", "CurrentPhysicalAnimationProfileName",
                 "CurrentConstraintProfileName", "DefaultSkelMesh_DEPRECATED", "BodySetup_DEPRECATED")
+
+
+# The occurrence suffix of a repeated name: "~2", "~3", ...
+_REPEAT = re.compile(r"~(?:[2-9]|[1-9][0-9]+)\Z")
+
+
+def bone_of(key):
+    """The bone of a body key: ``pelvis~2`` (the second body on pelvis) is on ``pelvis``."""
+    return _REPEAT.sub("", key)
+
+
+def _occurrence(key):
+    match = _REPEAT.search(key)
+    return int(match.group(0)[1:]) if match else 1
+
+
+def _keys_by_bone(keys):
+    groups = {}
+    for key in keys:
+        groups.setdefault(bone_of(key), []).append(key)
+    return {bone: sorted(group, key=_occurrence) for bone, group in groups.items()}
+
+
+def keys_after_removals(authored, live):
+    """{authored body key: its key once the removals ran}. Bodies on one bone are keyed in array order (<bone>,
+    <bone>~2, ...), so removing an earlier one renumbers the later ones: the bodies a document keeps take the keys in
+    order, and its new ones follow."""
+    mapping = {}
+    have = _keys_by_bone(live)
+    for bone, mine in _keys_by_bone(authored).items():
+        kept = [key for key in have.get(bone, []) if key in mine]
+        added = [key for key in mine if key not in have.get(bone, [])]
+        for index, key in enumerate(kept + added):
+            renamed = bone if index == 0 else f"{bone}~{index + 1}"
+            if renamed != key:
+                mapping[key] = renamed
+    return mapping
+
+
+def keys_in_order(authored, live):
+    """{authored body key: live key} for a bone with as many authored as live bodies keyed differently: a document read
+    before an earlier body of the bone was removed names the later ones by their former keys."""
+    mapping = {}
+    have = _keys_by_bone(live)
+    for bone, mine in _keys_by_bone(authored).items():
+        theirs = have.get(bone, [])
+        if len(mine) == len(theirs) and mine != theirs:
+            mapping.update({key: other for key, other in zip(mine, theirs) if key != other})
+    return mapping
+
+
+def in_order(body, live):
+    """``body`` with the bodies of a bone keyed as the asset keys them when the counts agree (``keys_in_order``)."""
+    if "Bodies" not in body:
+        return body
+    return rekey_bodies(body, keys_in_order(body["Bodies"], live.get("Bodies", {})))
+
+
+def rekey_bodies(body, mapping):
+    """``body`` with its body keys renamed by ``mapping`` (Bodies and CollisionDisabled)."""
+    if not mapping:
+        return body
+    out = dict(body)
+    if "Bodies" in out:
+        out["Bodies"] = {mapping.get(key, key): entry for key, entry in out["Bodies"].items()}
+    if "CollisionDisabled" in out:
+        out["CollisionDisabled"] = [[mapping.get(side, side) for side in pair] for pair in out["CollisionDisabled"]]
+    return out
 
 
 def _requirements(*primitives):
@@ -152,6 +227,8 @@ def validate_body(body):
         ik.path_or_null(body["PreviewMesh"], f"{path}/PreviewMesh", "PreviewMesh", PREFIX)
     for name, entry in _object(body.get("Bodies", {}), f"{path}/Bodies", "Bodies").items():
         where = f"{path}/Bodies/{escape(name)}"
+        # A <bone>~N key (a second body on one bone, as extract keys it) is judged against the asset on apply
+        # (``physics_asset_apply.refuse``): removing an earlier body of the bone renumbers it.
         _name(name, where, "A body key (its bone)")
         _keys(_object(entry, where, "A body"), BODY_ENTRY_KEYS, where, "body")
         for key in ("Properties", "PhysicalAnimation"):
@@ -167,6 +244,8 @@ def validate_body(body):
             for kind, elements in shapes.items():
                 at = f"{where}/Shapes/{escape(kind)}"
                 if kind in READ_ONLY_SHAPE_TYPES:
+                    if markers.is_marker(elements):
+                        continue
                     raise error(at, f"{kind} are experimental shapes the editor only makes through its fit tools; they "
                                 "are kept as they are and cannot be written.", "PhysicsAsset.ShapeTypeNotAuthored")
                 if kind not in SHAPE_TYPES:
@@ -178,14 +257,20 @@ def validate_body(body):
                     _object(element, f"{at}/{index}", "A shape")
     for name, entry in _object(body.get("Constraints", {}), f"{path}/Constraints", "Constraints").items():
         where = f"{path}/Constraints/{escape(name)}"
-        if not name or "~" in name:
-            raise error(where, "A constraint key is its joint name (no '~'; extract keys repeated joint names <name>~N: "
-                        "rename one with RenamedFrom).", "PhysicsAsset.InvalidBody")
+        if not name:
+            raise error(where, "A constraint key is its joint name.", "PhysicsAsset.InvalidBody")
+        if "~" in name:
+            # Extract keys a repeated joint name of older content <name>~N; such a constraint is kept and edited by
+            # that key while the asset has it.
+            authored_rule(where, "PhysicsAsset.InvalidBody", "A constraint key is its joint name (no '~'; extract keys "
+                          "repeated joint names <name>~N: rename one with RenamedFrom).", judged=(judged_key(where),))
         _keys(_object(entry, where, "A constraint"), CONSTRAINT_KEYS, where, "constraint")
         for key in ("Child", "Parent"):
             _name(entry.get(key), f"{where}/{key}", f"A constraint's {key} (a bone with a body)")
         if entry["Child"] == entry["Parent"]:
-            raise error(f"{where}/Parent", "A constraint joins two different bodies.", "PhysicsAsset.InvalidBody")
+            # A bone rename or reimport can leave a constraint on one body; the status reports it.
+            authored_rule(f"{where}/Parent", "PhysicsAsset.InvalidBody", "A constraint joins two different bodies.",
+                          judged=(f"{where}/Child", f"{where}/Parent"))
         if "RenamedFrom" in entry:
             _name(entry["RenamedFrom"], f"{where}/RenamedFrom", "RenamedFrom")
         if "Frames" in entry:
@@ -221,11 +306,14 @@ def validate_body(body):
 
 def _normalize(body):
     """Canonical form: shape Names equal to the editor's auto name are dropped (the auto name is the default)."""
-    for bone, entry in body.get("Bodies", {}).items():
+    for key, entry in body.get("Bodies", {}).items():
+        bone = bone_of(key)
         for kind, elements in entry.get("Shapes", {}).items():
             suffix = SHAPE_TYPES.get(kind)
+            if suffix is None:
+                continue
             for element in elements:
-                if suffix is not None and element.get("Name") == f"{bone}_{suffix}":
+                if element.get("Name") == f"{bone}_{suffix}":
                     del element["Name"]
 
 
@@ -290,10 +378,12 @@ def assemble(records):
     bodies, constraints, pairs = {}, {}, []
     for record in records[1:]:
         kind = record.get("kind")
+        # A body's key: its bone, "<bone>~N" for a second or later body on one bone.
+        key = record.get("key", record.get("bone"))
         if kind == "body":
-            bodies[record["bone"]] = record["entry"]
+            bodies[key] = record["entry"]
         elif kind == "convex_vertices":
-            element = bodies[record["bone"]]["Shapes"]["Convexes"][record["index"]]
+            element = bodies[key]["Shapes"]["Convexes"][record["index"]]
             element.setdefault("VertexData", []).extend(record["vertices"])
         elif kind == "constraint":
             constraints[record["key"]] = record["entry"]
@@ -304,7 +394,7 @@ def assemble(records):
         elif kind == "skeleton":
             facts["skeleton"] += record["bones"]
         elif kind == "body_facts":
-            facts["bodies"][record["bone"]] = record
+            facts["bodies"][key] = record
         elif kind == "mesh_users":
             facts["mesh_users"] = record["meshes"]
     body["Bodies"] = bodies
@@ -318,7 +408,10 @@ def read_body(calls, detail="document"):
 
 
 def extract(target, read, context, include_defaults=True):
-    body, _ = read_body(PhysicsCalls(context, read))
+    body, facts = read_body(PhysicsCalls(context, read))
+    for item in facts["warnings"]:
+        read_warning(item.get("path") or "/Body", item.get("code", "PhysicsAsset.ReadWarning"), item.get("message", ""))
+    markers.warn_all(body.get("Bodies", {}), PREFIX, "/Body/Bodies")
     return common.document(target, CLASS, _properties().extract(read, context, include_defaults), body)
 
 
@@ -341,6 +434,11 @@ def shape_defaults(kind, bone):
 def shapes_diff(path, authored, live, exact, changes, bone=None):
     """A present Shapes object is complete over the authored types (a type it does not name is empty). Elements are
     sparse over a new element of their type (``bone``: the body's, for the auto name)."""
+    for kind in READ_ONLY_SHAPE_TYPES:
+        # A marker left out keeps the shapes; one listed must be the asset's (apply refuses an edited one).
+        if kind in authored and authored[kind] != live.get(kind):
+            changes.append(Difference(f"{path}/{kind}", DiffKind.REPLACE, True, authored[kind], kind in live,
+                                      live.get(kind)))
     for kind in SHAPE_TYPES:
         mine, theirs = authored.get(kind, []), live.get(kind, [])
         where = f"{path}/{kind}"
@@ -433,7 +531,7 @@ def body_diff(authored, live, exact):
             elif bone not in mine:
                 changes.append(Difference(where, DiffKind.REMOVE, False, None, True, theirs[bone]))
             else:
-                body_entry_diff(where, mine[bone], theirs[bone], exact, changes, bone)
+                body_entry_diff(where, mine[bone], theirs[bone], exact, changes, bone_of(bone))
     if "Constraints" in authored:
         mine, theirs = authored["Constraints"], live.get("Constraints", {})
         for name in list(mine) + [name for name in theirs if name not in mine]:
@@ -455,7 +553,8 @@ def body_diff(authored, live, exact):
 
 def diff(authored, extracted, exact):
     changes = common.header_diff(authored, extracted)
-    changes.extend(body_diff(authored.get("Body", {}), extracted.get("Body", {}), exact))
+    body, live = authored.get("Body", {}), extracted.get("Body", {})
+    changes.extend(body_diff(in_order(body, live), live, exact))
     changes.extend(common.properties_diff(authored.get("Properties", {}), extracted.get("Properties", {}), exact))
     return tuple(changes)
 

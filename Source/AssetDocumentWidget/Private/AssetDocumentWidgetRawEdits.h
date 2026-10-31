@@ -23,7 +23,8 @@ namespace UE::AssetDocument::Graph::Widget::Raw
 // moves them to the transient package and drops their variable GUIDs.
 // bKeepReferences keeps bindings, graph nodes and the variable GUID of Widget itself
 // (the document re-creates a widget of another class under the same name) and does not
-// compile: the caller adds the replacement before anything compiles.
+// compile: the caller adds the replacement before anything compiles. A widget that is
+// already detached is deleted the same way and leaves the compile to the caller.
 void DeleteWidget(UWidgetBlueprint& Blueprint, UWidget& Widget, bool bKeepReferences);
 
 // Same result as renaming in the Hierarchy / Details name box: the variable GUID moves to the new
@@ -56,6 +57,18 @@ struct FPlacement
 	bool bRoot = false;
 };
 FPlacement GetPlacement(UWidgetBlueprint& Blueprint, UWidget& Widget);
+
+// Source widgets of the Blueprint that are out of the tree (detached and not placed again), each
+// with its own children, which are not listed; sorted by name.
+TArray<UWidget*> GetDetachedWidgets(UWidgetBlueprint& Blueprint);
+
+// FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified once the widget tree is whole. While
+// one restructuring is between its steps (a widget is detached to be placed again, or a variable
+// GUID is kept for the widget that replaces one of the same name) the Blueprint is only marked
+// modified: every widget compile, the skeleton one included, moves the widgets that are not in
+// the tree out of the Blueprint and drops the GUIDs without a widget. The edit that makes the
+// tree whole again compiles.
+void MarkStructurallyModified(UWidgetBlueprint& Blueprint);
 
 // Attaches a detached widget (hierarchy drop / palette drop target semantics):
 // root, inherited named slot, a host's named slot, a panel at Index (InsertChildAt,

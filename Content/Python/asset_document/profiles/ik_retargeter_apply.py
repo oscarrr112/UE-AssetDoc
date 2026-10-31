@@ -17,6 +17,7 @@ rolled back by Core); errors the retargeter already had and warnings come back a
 """
 from __future__ import annotations
 
+from asset_document import markers
 from asset_document.diagnostics import DiagnosticSeverity, RuntimeDiagnostic, with_diagnostics
 from asset_document.profiles import data_table_common as common
 from asset_document.profiles import ik_common as ik
@@ -124,6 +125,29 @@ def _differs(authored, live):
     return not common.same(authored, live, exact=False)
 
 
+def _settings_differ(authored, live):
+    """An op's settings or chain row differ from the live read (a live marker the document omits is kept)."""
+    return _differs(authored, ik.without_omitted_markers(authored, live))
+
+
+def check_markers(body, live):
+    """A marked op (its type does not load) must be the asset's, as extracted. A marked settings or chain-row field
+    (no document form) must be the one the op (matched by name, or ``RenamedFrom``) reads at that place."""
+    if "Ops" not in body:
+        return
+    held = {entry["Name"].lower(): entry for entry, _ in flatten(live.get("Ops", []))}
+    for entry, _, where in _doc_ops(body):
+        current = held.get(entry["Name"].lower())
+        if markers.is_marker(entry):
+            markers.require_unchanged(where, entry, current, rtg.PREFIX)
+            continue
+        if current is None and entry.get("RenamedFrom"):
+            current = held.get(entry["RenamedFrom"].lower())
+        for key in ("Settings", "Chains"):
+            if key in entry:
+                ik.require_markers_unchanged(f"{where}/{key}", entry[key], (current or {}).get(key), rtg.PREFIX)
+
+
 # ---------------------------------------------------------------------------
 # Phases (each: (body, live) -> [Op])
 # ---------------------------------------------------------------------------
@@ -177,6 +201,9 @@ def phase_op_removals(body, live):
     wanted = {entry["Name"].lower(): entry for entry, _, _ in _doc_ops(body)}
 
     def dropped(entry):
+        if markers.is_marker(entry):
+            # The op stack cannot name an op whose type does not load: it stays.
+            return False
         keep = wanted.get(entry["Name"].lower())
         return keep is None or keep["Type"] != entry.get("Type")
     # Removing an op removes its children (UIKRetargeterController::RemoveRetargetOp).
@@ -258,7 +285,7 @@ def phase_op_settings(body, live):
     ops = []
     for entry, _, where in _doc_ops(body):
         have = live.by_name.get(entry["Name"].lower())
-        if have is not None and _differs(entry.get("Settings", {}), have[0].get("Settings", {})):
+        if have is not None and _settings_differ(entry.get("Settings", {}), have[0].get("Settings", {})):
             ops.append(Op({"op": "op.settings", "name": have[0]["Name"], "settings": entry.get("Settings", {})},
                           f"{where}/Settings", nested=f"{where}/Settings"))
     return ops
@@ -276,7 +303,7 @@ def phase_op_chains(body, live):
                           nested=f"{where}/ChainMapping"))
         chains, live_chains = entry.get("Chains", {}), current.get("Chains", {})
         for chain in list(chains) + [chain for chain in live_chains if chain not in chains]:
-            if _differs(chains.get(chain, {}), live_chains.get(chain, {})):
+            if _settings_differ(chains.get(chain, {}), live_chains.get(chain, {})):
                 at = f"{where}/Chains/{escape(chain)}"
                 ops.append(Op({"op": "op.chain_settings", "name": name, "chain": chain, "settings": chains.get(chain, {})},
                               at, {"chain": at}, nested=at))
@@ -362,6 +389,8 @@ def check_op_types(body, calls):
     singletons = {}
     for entry, parent, where in _doc_ops(body):
         kind = entry["Type"]
+        if markers.is_marker(entry):
+            continue
         if kind not in by_name:
             if kind in by_path:
                 raise error(f"{where}/Type", f"Op types are named as list_types kind ikretarget_op names them: "
@@ -454,6 +483,7 @@ def apply(canonical, read, mutable, context):
     region.check_owned(properties)
     calls = ik.RigCalls(context, read, mutable, prefix=rtg.PREFIX)
     live, _ = rtg.read_body(calls)
+    check_markers(body, live)
     changed = []
     warnings = []
     if rtg.body_diff(body, live, exact=False):
@@ -477,6 +507,7 @@ def preflight(canonical, read, context):
         return
     calls = ik.RigCalls(context, read, prefix=rtg.PREFIX)
     live, _ = rtg.read_body(calls)
+    check_markers(body, live)
     if rtg.body_diff(body, live, exact=False):
         check_op_types(body, calls)
 

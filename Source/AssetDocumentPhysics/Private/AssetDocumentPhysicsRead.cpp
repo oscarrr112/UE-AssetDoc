@@ -10,13 +10,15 @@
 //    defaults: {body, constraint, physical_animation, shapes: {<type key>: new element}}}  (the complete values the
 //                                                       sparse entries are read against, so a diff compares an
 //                                                       explicitly authored default as equal)
-//   {kind: "body", bone, entry: {Properties?, Shapes, PhysicalAnimation?}}      (convex VertexData in convex_vertices)
-//   {kind: "convex_vertices", bone, index, vertices[]}                          (chunked; Python appends to VertexData)
+//   {kind: "body", bone, key, entry: {Properties?, Shapes, PhysicalAnimation?}} (convex VertexData in convex_vertices)
+//   {kind: "convex_vertices", bone, key, index, vertices[]}                     (chunked; Python appends to VertexData)
 //   {kind: "constraint", key, entry: {Child, Parent, Frames?, Properties?, Profiles?}}
-//   {kind: "collision", pairs: [[boneA, boneB], ...]}                           (chunked; disabled pairs)
-//   {kind: "warning", code, message, path}                                      (duplicate joint names, stale table entries)
-// detail "inspect" adds {kind: "skeleton", offset, bones[{Name, Parent, Body?}]}, {kind: "body_facts", bone, mass,
-// in_mesh, read_only_shapes{}} and {kind: "mesh_users", meshes[{Path, Loaded, UsesAsset?}]}.
+//   {kind: "collision", pairs: [[keyA, keyB], ...]}                             (chunked; disabled pairs)
+//   {kind: "warning", code, message, path}                                      (duplicate joint names, bones with two
+//                                                                                bodies, stale table entries)
+// A body's key is its bone name; a second or later body on one bone is keyed "<bone>~2", "~3" (BodyKeys).
+// detail "inspect" adds {kind: "skeleton", offset, bones[{Name, Parent, Body?}]}, {kind: "body_facts", bone, key,
+// mass, in_mesh, read_only_shapes{}} and {kind: "mesh_users", meshes[{Path, Loaded, UsesAsset?}]}.
 // detail "generation" (Inspect's Generation suggestion) reads instead what the editor's generation with the project's
 // settings makes for the preview mesh: {kind: "generation", available, settings?, reason?} and then the document
 // records of that generated (transient, discarded) asset.
@@ -96,7 +98,8 @@ bool EncodeFrame(const UScriptStruct& InstanceStruct, const FConstraintInstance&
 	return true;
 }
 
-bool AddBody(const UPhysicsAsset& Asset, const USkeletalBodySetup& Body, const USkeletalBodySetup& Defaults, FCall& Call, TArray<FValue>& Records)
+bool AddBody(const UPhysicsAsset& Asset, const USkeletalBodySetup& Body, const FString& Key, const USkeletalBodySetup& Defaults, FCall& Call,
+	TArray<FValue>& Records)
 {
 	FString Error;
 	FObjectBuilder Entry;
@@ -118,13 +121,22 @@ bool AddBody(const UPhysicsAsset& Asset, const USkeletalBodySetup& Body, const U
 	{
 		const FArrayProperty* ArrayProperty = GetShapeArrayProperty(Type);
 		const FStructProperty* Inner = ArrayProperty != nullptr ? CastField<FStructProperty>(ArrayProperty->Inner) : nullptr;
-		if (!Type.bAuthored || Inner == nullptr)
+		if (Inner == nullptr)
 		{
 			continue;
 		}
 		FScriptArrayHelper Elements(ArrayProperty, ArrayProperty->ContainerPtrToValuePtr<void>(&Body.AggGeom));
 		if (Elements.Num() == 0)
 		{
+			continue;
+		}
+		if (!Type.bAuthored)
+		{
+			// Shapes the editor only makes with its fit tools: shown as a marker, kept on apply.
+			FObjectBuilder Marker;
+			Marker.AddString(TEXT("Unsupported"), FString::Printf(TEXT("%d %s shape%s, made by the editor's fit tools: AssetDoc does not read or "
+				"write them and keeps them as they are."), Elements.Num(), Type.Key, Elements.Num() == 1 ? TEXT("") : TEXT("s")));
+			Shapes.Add(Type.Key, Marker.Build());
 			continue;
 		}
 		TArray<FValue> Values;
@@ -159,6 +171,7 @@ bool AddBody(const UPhysicsAsset& Asset, const USkeletalBodySetup& Body, const U
 			FObjectBuilder Record;
 			Record.AddString(TEXT("kind"), TEXT("convex_vertices"));
 			Record.Add(TEXT("bone"), MakeName(Body.BoneName));
+			Record.AddString(TEXT("key"), Key);
 			Record.AddInt(TEXT("index"), Index);
 			Record.Add(TEXT("vertices"), MakeArray(MoveTemp(Chunk)));
 			VertexRecords.Add(Record.Build());
@@ -193,6 +206,7 @@ bool AddBody(const UPhysicsAsset& Asset, const USkeletalBodySetup& Body, const U
 	FObjectBuilder Record;
 	Record.AddString(TEXT("kind"), TEXT("body"));
 	Record.Add(TEXT("bone"), MakeName(Body.BoneName));
+	Record.AddString(TEXT("key"), Key);
 	Record.Add(TEXT("entry"), Entry.Build());
 	Records.Add(Record.Build());
 	Records.Append(MoveTemp(VertexRecords));
@@ -280,7 +294,7 @@ void AddWarning(TArray<FValue>& Records, const TCHAR* Code, const FString& Messa
 	Records.Add(Record.Build());
 }
 
-void AddCollision(const UPhysicsAsset& Asset, const TArray<int32>& BodyOrderIndices, TArray<FValue>& Records)
+void AddCollision(const UPhysicsAsset& Asset, const TArray<int32>& BodyOrderIndices, const TArray<FString>& BodyKeyList, TArray<FValue>& Records)
 {
 	TMap<int32, int32> Position;
 	for (int32 Index = 0; Index < BodyOrderIndices.Num(); ++Index)
@@ -306,9 +320,8 @@ void AddCollision(const UPhysicsAsset& Asset, const TArray<int32>& BodyOrderIndi
 		TArray<FValue> Chunk;
 		for (int32 Index = Start; Index < FMath::Min(Start + PairsPerRecord, Pairs.Num()); ++Index)
 		{
-			const FName A = Asset.SkeletalBodySetups[BodyOrderIndices[Pairs[Index].Key]]->BoneName;
-			const FName B = Asset.SkeletalBodySetups[BodyOrderIndices[Pairs[Index].Value]]->BoneName;
-			Chunk.Add(MakeArray({MakeName(A), MakeName(B)}));
+			Chunk.Add(MakeArray({MakeString(BodyKeyList[BodyOrderIndices[Pairs[Index].Key]]),
+				MakeString(BodyKeyList[BodyOrderIndices[Pairs[Index].Value]])}));
 		}
 		FObjectBuilder Record;
 		Record.AddString(TEXT("kind"), TEXT("collision"));
@@ -352,12 +365,14 @@ void AddInspect(const UPhysicsAsset& Asset, const TArray<int32>& Order, TArray<F
 			Records.Add(Record.Build());
 		}
 	}
+	const TArray<FString> BodyKeyList = BodyKeys(Asset);
 	for (const int32 Index : Order)
 	{
 		const USkeletalBodySetup& Body = *Asset.SkeletalBodySetups[Index];
 		FObjectBuilder Record;
 		Record.AddString(TEXT("kind"), TEXT("body_facts"));
 		Record.Add(TEXT("bone"), MakeName(Body.BoneName));
+		Record.AddString(TEXT("key"), BodyKeyList[Index]);
 		Record.Add(TEXT("mass"), MakeNumber(ShortestFloat(Body.CalculateMass())));
 		Record.AddBool(TEXT("in_mesh"), Mesh != nullptr && Mesh->GetRefSkeleton().FindBoneIndex(Body.BoneName) != INDEX_NONE);
 		FObjectBuilder ReadOnly;
@@ -505,12 +520,22 @@ bool AddDocumentRecords(FCall& Call, const UPhysicsAsset& Asset, int64 Offset, T
 		Records.Add(Header.Build());
 	}
 	OutBodies = BodyOrder(Asset);
+	const TArray<FString> BodyKeyList = BodyKeys(Asset);
 	const USkeletalBodySetup* Defaults = MakeNewBodyDefaults();
 	for (const int32 Index : OutBodies)
 	{
-		if (!AddBody(Asset, *Asset.SkeletalBodySetups[Index], *Defaults, Call, Records))
+		const USkeletalBodySetup& Body = *Asset.SkeletalBodySetups[Index];
+		if (!AddBody(Asset, Body, BodyKeyList[Index], *Defaults, Call, Records))
 		{
 			return false;
+		}
+		if (BodyKeyList[Index] != (Body.BoneName.IsNone() ? FString() : Body.BoneName.ToString()))
+		{
+			AddWarning(Records, TEXT("PhysicsAsset.DuplicateBoneBody"), FString::Printf(TEXT("Bone '%s' has more than one body; this one "
+				"is keyed '%s' and is kept and edited under that key (a bone has one body in the editor). Removing '%s' removes only "
+				"that body: the bone's constraints and its other bodies stay. Keys follow array order: once an earlier body of the "
+				"bone is removed, the later ones take the earlier keys."), *Body.BoneName.ToString(),
+				*BodyKeyList[Index], *BodyKeyList[Index]), FString::Printf(TEXT("/Body/Bodies/%s"), *Escape(BodyKeyList[Index])));
 		}
 	}
 	const TArray<FString> Keys = ConstraintKeys(Asset);
@@ -527,7 +552,7 @@ bool AddDocumentRecords(FCall& Call, const UPhysicsAsset& Asset, int64 Offset, T
 				*Keys[Index]), FString::Printf(TEXT("/Body/Constraints/%s"), *Escape(Keys[Index])));
 		}
 	}
-	AddCollision(Asset, OutBodies, Records);
+	AddCollision(Asset, OutBodies, BodyKeyList, Records);
 	return true;
 }
 

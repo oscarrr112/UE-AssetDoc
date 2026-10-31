@@ -61,6 +61,7 @@ FAssetDocumentPrimitiveDescriptor MakeDescriptor(const TCHAR* PrimitiveId, bool 
 		TEXT("Sequencer.TrackNotSupported"), TEXT("Sequencer.UnknownTrack"), TEXT("Sequencer.UnknownSection"),
 		TEXT("Sequencer.InvalidSectionClass"), TEXT("Sequencer.SectionClassChanged"), TEXT("Sequencer.SectionRangeRequired"),
 		TEXT("Sequencer.CircularSubsequence"), TEXT("Sequencer.UnknownChannel"), TEXT("Sequencer.InvalidKey"), TEXT("Sequencer.InvalidFolder"),
+		TEXT("Sequencer.UnrepresentedValue"),
 		// director, events, groups, remote references
 		TEXT("Sequencer.DirectorRequired"), TEXT("Sequencer.UnknownEventEndpoint"), TEXT("Sequencer.UnknownEventPin"),
 		TEXT("Sequencer.DirectorInUse"), TEXT("Sequencer.DirectorUnsupported"), TEXT("Sequencer.DirectorCreateFailed"),

@@ -305,6 +305,11 @@ TSharedPtr<FJsonObject> FAssetDocumentResult::ToJson() const
 		Json->SetObjectField(TEXT("compile"), Compile);
 	}
 
+	if (Layout.IsValid())
+	{
+		Json->SetObjectField(TEXT("layout"), Layout);
+	}
+
 	if (Payload.IsValid())
 	{
 		Json->SetObjectField(TEXT("payload"), Payload);

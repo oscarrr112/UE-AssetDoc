@@ -36,6 +36,7 @@ already had and warnings come back as warnings.  The compile's operator build ch
 """
 from __future__ import annotations
 
+from asset_document import markers
 from asset_document.diagnostics import DiagnosticSeverity, RuntimeDiagnostic, with_diagnostics
 from asset_document.profiles import data_table_common as common
 from asset_document.profiles import metasound as ms
@@ -424,7 +425,7 @@ def _variable_ops(graph, live, page=DEFAULT):
             op["default"] = entry["Default"]
         for key, field in (("DisplayName", "display_name"), ("Description", "description")):
             wanted = entry.get(key, "")
-            if wanted != record.get(field, ""):
+            if not common.same(wanted, record.get(field, "")):
                 op[field] = wanted
         if len(op) > (3 if "page" in op else 2):
             ops.append((op, path))
@@ -467,16 +468,29 @@ def phase_node_classes(body, live):
                 ops.append((on_page({"op": "node.update", "id": before["Id"], "major": entry.get("Version", 1)}, page),
                             f"{path}/Version"))
             config_defaults = facts.get("configuration_defaults", {}).get(before.get("Id"))
-            if not common.same(ms.configuration_properties(entry, config_defaults),
+            if not common.same(ms.configuration_properties(entry, config_defaults, before),
                                ms.configuration_properties(before, config_defaults), exact=False):
-                ops.append((on_page({"op": "node.set", "id": before["Id"], "configuration": _configuration_arg(entry)}, page),
+                ops.append((on_page({"op": "node.set", "id": before["Id"],
+                                     "configuration": _configuration_arg(entry, before, path)}, page),
                             f"{path}/Configuration"))
     return ops
 
 
-def _configuration_arg(entry):
+def _configuration_arg(entry, before, path):
+    """The node.set configuration: the settings to write. A marker is checked against the live node's (left as read
+    it keeps the stored value, which the edit never resets; an edited one is refused) and left out. A value with
+    markers inside is sent as it is: the editor decodes it over the setting's current value and checks its markers
+    there; a setting left out whose current value holds markers keeps it."""
     value = entry.get("Configuration")
-    arg = {"properties": ms.configuration_properties(entry)}
+    live = ms.configuration_properties(before) if before is not None else {}
+    properties = {}
+    for name, item in ms.configuration_properties(entry).items():
+        if markers.is_marker(item):
+            markers.require_unchanged(f"{path}/Configuration/Properties/{common.escape(name)}", item, live.get(name),
+                                      ms.PREFIX)
+        else:
+            properties[name] = item
+    arg = {"properties": properties}
     if type(value) is dict and type(value.get("Type")) is str:
         arg["type"] = value["Type"]
     return arg
@@ -508,6 +522,12 @@ def _parse_source(source, path):
                     f"(Class \"Input\", Member \"{source[6:]}\") and connect from its key.", "MetaSound.InvalidSource")
     key, _, pin = source.partition(".")
     return key, (pin or None)
+
+
+def _direct_input(source):
+    """A source ``Input:<member>``: an edge from a member's hidden input node on a page the editor shows without
+    input nodes (read only)."""
+    return type(source) is str and source.startswith("Input:")
 
 
 def _depths(nodes):
@@ -730,7 +750,7 @@ def _node_ops(nodes, live, removed_outputs, page=DEFAULT):
         else:
             if ms.configuration_properties(entry) or type(entry.get("Configuration")) is dict:
                 # A new node's configuration (node Details) before its defaults: it can change the pins.
-                op["configuration"] = _configuration_arg(entry)
+                op["configuration"] = _configuration_arg(entry, None, path)
             if entry.get("Defaults"):
                 op["defaults"] = entry["Defaults"]
         if before is None and entry.get("Class") == "Set" and "defaults" not in op:
@@ -749,9 +769,14 @@ def _node_ops(nodes, live, removed_outputs, page=DEFAULT):
         theirs = before.get("Inputs", {}) if before is not None else {}
         for pin in sorted(set(mine) | set(theirs)):
             pin_path = f"{path}/Inputs/{common.escape(pin)}"
+            if pin in mine and pin in theirs and mine[pin] == theirs[pin] and _direct_input(theirs[pin]):
+                # A member read without an input node, as the MetaSound holds it: kept (only a new one is refused).
+                continue
             wanted = source_ref(mine[pin], pin_path) if pin in mine else None
             current = None
-            if pin in theirs:
+            if pin in theirs and _direct_input(theirs[pin]):
+                current = (theirs[pin], None)
+            elif pin in theirs:
                 source_key, _, source_pin = theirs[pin].partition(".")
                 source_entry = live_nodes.get(source_key)
                 if source_entry is not None and source_entry.get("Id") not in gone:

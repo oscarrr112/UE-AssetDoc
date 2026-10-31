@@ -7,7 +7,8 @@ from pathlib import Path
 import unittest
 
 import asset_document.profiles.blackboard_data as blackboard_module
-from asset_document.diagnostics import AssetDocumentContractError, RuntimeDiagnostic
+from asset_document import tolerance
+from asset_document.diagnostics import AssetDocumentContractError, RuntimeDiagnostic, collecting_read_warnings
 from asset_document.dto import ChangedRecord, PrimitiveRequirement, RuntimePhase
 from asset_document.profiles.blackboard_data import (
     BLACKBOARD_DATA_CLASS,
@@ -450,6 +451,49 @@ class BlackboardDataProfileContractTests(unittest.TestCase):
         )
         context.assert_drained(self)
 
+    def test_preflight_reads_the_current_asset_to_settle_authored_rules(self) -> None:
+        current = entry("Current")
+        context = PrimitiveContext(
+            RuntimePhase.PREFLIGHT,
+            [
+                ("ai.blackboard.parent.readback.v2", outcome({"parent_path_or_null": None})),
+                ("ai.blackboard.local_keys.readback.v2", outcome({"ordered_local_key_names": ["Current"]})),
+                ("ai.blackboard.entry.readback.v2", outcome({"entry": current})),
+            ],
+        )
+        profile = BlackboardDataProfileCandidate()
+        self.assertEqual(profile.observe_current_snapshot(target=TARGET, context=context),
+                         BlackboardSnapshot(None, (current,), ("Current",)))
+        context.assert_drained(self)
+        with self.assertRaises(AssetDocumentContractError) as caught:
+            profile.observe_current_snapshot(target=TARGET, context=PrimitiveContext(RuntimePhase.APPLY, []))
+        self.assertEqual(caught.exception.diagnostic.code, "BlackboardData.InvalidReadOnlyPhase")
+
+    def test_a_shadow_the_asset_holds_reads_with_a_warning_and_only_new_shadows_are_refused(self) -> None:
+        def chain(phase, *entries):
+            return PrimitiveContext(phase, [
+                ("ai.blackboard.parent.readback.v2", outcome({"parent_path_or_null": PARENT_OBJECT})),
+                ("ai.blackboard.local_keys.readback.v2", outcome({"ordered_local_key_names": ["Target"]})),
+                ("ai.blackboard.parent.readback.v2", outcome({"parent_path_or_null": None})),
+                ("ai.blackboard.local_keys.readback.v2", outcome({"ordered_local_key_names": ["Target", "Home"]})),
+                *(("ai.blackboard.entry.readback.v2", outcome({"entry": item})) for item in entries),
+            ])
+
+        profile = BlackboardDataProfileCandidate()
+        context = chain(RuntimePhase.VERIFY, entry("Target"))
+        with collecting_read_warnings() as warnings, tolerance.reading_live():
+            snapshot = profile.observe_current_snapshot(target=TARGET, context=context)
+        self.assertEqual(snapshot.entries, (entry("Target"),))
+        self.assertEqual([(item.path, item.code) for item in warnings], [("/Body/Keys/0/Name", "BlackboardData.InheritedShadow")])
+
+        with tolerance.settled():
+            context = chain(RuntimePhase.PREFLIGHT, entry("Target"))
+            profile.preflight(document(entry("Target"), parent=asset_ref(PARENT_OBJECT)), context=context)
+            context.assert_drained(self)
+            assert_error(self, "BlackboardData.InheritedShadow", "/Body/Keys/1/Name", lambda: profile.preflight(
+                document(entry("Target"), entry("Home"), parent=asset_ref(PARENT_OBJECT)),
+                context=chain(RuntimePhase.PREFLIGHT)))
+
     def test_read_only_observer_excludes_the_exact_engine_derived_self_actor(self) -> None:
         current = entry("Current")
         self_actor = entry(
@@ -475,6 +519,95 @@ class BlackboardDataProfileContractTests(unittest.TestCase):
             BlackboardSnapshot(None, (current,), ("Current",)),
         )
         context.assert_drained(self)
+
+    def test_anomalous_entries_read_with_warnings_and_only_new_or_changed_values_are_refused(self) -> None:
+        custom_key_type = "/Script/Project.BlackboardKeyType_Tagged"
+        struct_key_type = "/Script/AIModule.BlackboardKeyType_Struct"
+        native_enum = asset_ref("/Script/Engine.EMovementMode")
+        self_actor = entry("SelfActor", properties={"BaseClass": {"Kind": "ClassRef", "Path": "/Script/Engine.Actor"}, "DefaultValue": None})
+        loose_enum = entry("LooseEnum", key_type=ENUM_KEY_TYPE, properties={"DefaultValue": "Set", "EnumName": "", "EnumType": None})
+        raw_default = entry("RawDefault", key_type=ENUM_KEY_TYPE, properties={"DefaultValue": 18})
+        short_name = entry("ShortName", key_type=ENUM_KEY_TYPE, properties={"DefaultValue": "MOVE_Walking", "EnumName": "EMovementMode", "EnumType": native_enum})
+        mismatched = entry("Mismatched", properties={"DefaultValue": asset_ref("/Game/Data/BP_Actor.Default__BP_Actor_C")})
+        unbased = entry("Unbased", key_type=CLASS_KEY_TYPE, properties={"BaseClass": None, "DefaultValue": None})
+        tagged = entry("Tagged", key_type=custom_key_type, properties={"Tags": {"GameplayTags": ["AI.Alert"]}, "Count": 2})
+        unreadable = {"Unsupported": "Struct DefaultValue has no document form: a text member is localized; AssetDoc keeps the value.",
+                      "Text": "(/Script/Project.Labelled)(Label=NSLOCTEXT(\"Ns\", \"Key\", \"Hello\"))"}
+        labelled = entry("Labelled", key_type=struct_key_type, properties={"DefaultValue": unreadable})
+        entries = [self_actor, loose_enum, raw_default, short_name, mismatched, unbased, tagged, labelled]
+        native_warning = {"code": "BlackboardData.DefaultValueNotOfBaseClass", "message": "not an Actor", "path": "/KeyTypeProperties/DefaultValue"}
+        results = [{"entry": item} for item in entries]
+        results[4] = {"entry": mismatched, "warnings": [native_warning]}
+        context = PrimitiveContext(RuntimePhase.VERIFY, [
+            ("ai.blackboard.parent.readback.v2", outcome({"parent_path_or_null": None})),
+            ("ai.blackboard.local_keys.readback.v2", outcome({"ordered_local_key_names": [item["Name"] for item in entries]})),
+            *(("ai.blackboard.entry.readback.v2", outcome(result)) for result in results),
+        ])
+        profile = BlackboardDataProfileCandidate()
+        with collecting_read_warnings() as warnings, tolerance.reading_live():
+            extracted = profile.extract(target=TARGET, current_snapshot=profile.observe_current_snapshot(target=TARGET, context=context))
+        context.assert_drained(self)
+        self.assertEqual(extracted["Body"]["Keys"], entries[1:])
+        self.assertEqual(sorted((item.path, item.code) for item in warnings), sorted([
+            ("/Body/Keys/0/KeyTypeProperties/EnumType", "BlackboardData.MissingEnumType"),
+            ("/Body/Keys/1/KeyTypeProperties/DefaultValue", "BlackboardData.InvalidEnumDefault"),
+            ("/Body/Keys/2/KeyTypeProperties/EnumName", "BlackboardData.InvalidEntryField"),
+            ("/Body/Keys/3/KeyTypeProperties/DefaultValue", "BlackboardData.DefaultValueNotOfBaseClass"),
+            ("/Body/Keys/4/KeyTypeProperties/BaseClass", "BlackboardData.MissingBaseClass"),
+            ("/Body/Keys/6/KeyTypeProperties/DefaultValue", "BlackboardData.Unrepresented"),
+        ]))
+
+        # The unchanged extract re-applies (every finding is waived), an edit elsewhere keeps the anomalies, and the
+        # transitions touch only the edited key.
+        edited = document(*extracted["Body"]["Keys"], entry("Added"))
+        for authored in (extracted, edited):
+            with tolerance.authoring() as findings:
+                profile.canonicalize(authored)
+            self.assertEqual(len(findings), 6)
+            tolerance.settle(findings, authored, extracted)
+        with tolerance.settled():
+            planned = plan_blackboard_transitions(list(extracted["Body"]["Keys"]), edited["Body"]["Keys"])
+        self.assertEqual([item.kind for item in planned], ["unchanged"] * 7 + ["add"])
+
+        # New or changed anomalies are refused by the same rules.
+        changed_cases = (
+            (5, "KeyTypeProperties", {"BaseClass": None, "DefaultValue": None}, None),
+            (6, "KeyTypeProperties", {"Tags": {"GameplayTags": ["AI.Calm"]}, "Count": 2}, "BlackboardData.KeyTypePropertyReadOnly"),
+            (7, "KeyTypeProperties", {"DefaultValue": dict(unreadable, Text="(edited)")}, "BlackboardData.UnrepresentedValue"),
+            (1, "KeyTypeProperties", {"DefaultValue": 19, "EnumName": "", "EnumType": asset_ref("/Game/Data/E_Mode.E_Mode")}, "BlackboardData.InvalidEnumDefault"),
+        )
+        for index, field, value, code in changed_cases:
+            with self.subTest(index=index):
+                authored = document(*(dict(item) for item in extracted["Body"]["Keys"]))
+                authored["Body"]["Keys"][index - 1] = dict(authored["Body"]["Keys"][index - 1], **{field: value})
+                with tolerance.authoring() as findings:
+                    profile.canonicalize(authored)
+                if code is None:
+                    tolerance.settle(findings, authored, extracted)
+                    continue
+                with self.assertRaises(AssetDocumentContractError) as caught:
+                    tolerance.settle(findings, authored, extracted)
+                self.assertIn(code, str(caught.exception))
+        new_key = entry("Fresh", key_type=ENUM_KEY_TYPE, properties={"EnumType": None})
+        with tolerance.authoring() as findings:
+            profile.canonicalize(document(new_key))
+        with self.assertRaises(AssetDocumentContractError):
+            tolerance.settle(findings, document(new_key), extracted)
+
+    def test_entry_read_warnings_have_an_exact_shape(self) -> None:
+        current = entry("Current")
+        for warnings in ([{"code": "X"}], {"code": "X", "message": "", "path": "/A"}, [{"code": "X", "message": "", "path": "A"}]):
+            with self.subTest(warnings=warnings):
+                assert_error(self, "BlackboardData.InvalidCurrentSnapshot", "/Current/Entries/0/warnings", lambda warnings=warnings: parse_blackboard_snapshot(
+                    parent_result={"parent_path_or_null": None},
+                    local_keys_result={"ordered_local_key_names": ["Current"]},
+                    entry_results=[{"entry": current, "warnings": warnings}],
+                ))
+        assert_error(self, "BlackboardData.InvalidCurrentSnapshot", "/Current/Entries/0", lambda: parse_blackboard_snapshot(
+            parent_result={"parent_path_or_null": None},
+            local_keys_result={"ordered_local_key_names": ["Current"]},
+            entry_results=[{"entry": current, "extra": []}],
+        ))
 
     def test_vector_and_rotator_properties_are_sparse_and_replace_in_place_changes(self) -> None:
         vector, rotator = "/Script/AIModule.BlackboardKeyType_Vector", "/Script/AIModule.BlackboardKeyType_Rotator"
@@ -776,7 +909,6 @@ class BlackboardDataProfileContractTests(unittest.TestCase):
     def test_versioned_parent_set_clear_shadow_cycle_sequence(self) -> None:
         profile = BlackboardDataProfileCandidate()
         current = entry("Current")
-        parent_only = entry("ParentOnly")
         grand_key = entry("GrandKey")
         complete_chain_context = PrimitiveContext(
             RuntimePhase.PREFLIGHT,
@@ -788,8 +920,6 @@ class BlackboardDataProfileContractTests(unittest.TestCase):
                 ("ai.blackboard.parent.readback.v2", outcome({"parent_path_or_null": None})),
                 ("ai.blackboard.local_keys.readback.v2", outcome({"ordered_local_key_names": ["GrandKey"]})),
                 ("ai.blackboard.entry.readback.v2", outcome({"entry": current})),
-                ("ai.blackboard.entry.readback.v2", outcome({"entry": parent_only})),
-                ("ai.blackboard.entry.readback.v2", outcome({"entry": grand_key})),
             ],
         )
         self.assertEqual(
@@ -806,16 +936,10 @@ class BlackboardDataProfileContractTests(unittest.TestCase):
                 {"blackboard_path": GRANDPARENT_OBJECT},
                 {"blackboard_path": GRANDPARENT_OBJECT},
                 {"blackboard_path": TARGET_OBJECT, "key_name": "Current"},
-                {"blackboard_path": PARENT_OBJECT, "key_name": "ParentOnly"},
-                {"blackboard_path": GRANDPARENT_OBJECT, "key_name": "GrandKey"},
             ],
         )
         complete_chain_context.assert_drained(self)
 
-        old_key = entry("Old")
-        new_key = entry("New")
-        shared_key = entry("Shared")
-        root_key = entry("Root")
         shared_suffix_context = PrimitiveContext(
             RuntimePhase.PREFLIGHT,
             [
@@ -830,10 +954,6 @@ class BlackboardDataProfileContractTests(unittest.TestCase):
                 ("ai.blackboard.parent.readback.v2", outcome({"parent_path_or_null": SHARED_PARENT_OBJECT})),
                 ("ai.blackboard.local_keys.readback.v2", outcome({"ordered_local_key_names": ["New"]})),
                 ("ai.blackboard.entry.readback.v2", outcome({"entry": current})),
-                ("ai.blackboard.entry.readback.v2", outcome({"entry": old_key})),
-                ("ai.blackboard.entry.readback.v2", outcome({"entry": new_key})),
-                ("ai.blackboard.entry.readback.v2", outcome({"entry": shared_key})),
-                ("ai.blackboard.entry.readback.v2", outcome({"entry": root_key})),
             ],
         )
         self.assertEqual(
@@ -854,10 +974,6 @@ class BlackboardDataProfileContractTests(unittest.TestCase):
                 {"blackboard_path": PARENT_OBJECT},
                 {"blackboard_path": PARENT_OBJECT},
                 {"blackboard_path": TARGET_OBJECT, "key_name": "Current"},
-                {"blackboard_path": OLD_PARENT_OBJECT, "key_name": "Old"},
-                {"blackboard_path": PARENT_OBJECT, "key_name": "New"},
-                {"blackboard_path": SHARED_PARENT_OBJECT, "key_name": "Shared"},
-                {"blackboard_path": ROOT_PARENT_OBJECT, "key_name": "Root"},
             ],
         )
         shared_suffix_context.assert_drained(self)

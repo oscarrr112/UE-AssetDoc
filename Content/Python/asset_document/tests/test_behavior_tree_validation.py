@@ -11,6 +11,7 @@ from asset_document.profiles.behavior_tree_codec import lower_authored_propertie
 from asset_document.profiles.behavior_tree_production import BehaviorTreeProfile
 from asset_document.profiles.behavior_tree_validation import validate_tree_bindings
 from asset_document.regions.primitive_catalog import PrimitiveOutcome, PrimitiveOutcomeStatus
+from asset_document.tolerance import authoring, settle
 
 
 TARGET = "/Game/Tests/BT_BindingPolicy"
@@ -177,6 +178,51 @@ class BehaviorTreeBindingPolicyTests(unittest.TestCase):
                                                 "stable_node_id": TASK_ID})
             self.assertEqual([(item.name, item.handle) for item in handles], [("asset", context.ai_handle)])
         self.assertEqual(current, before)
+
+    def test_a_kept_detached_branch_reports_policy_as_authored_rules_at_its_document_path(self):
+        catalog = EvidenceCatalog({"DirectSelector": {"Key": "None"}}, {"DirectSelector": SELECTOR})
+        detached_id = "77777777888888889999999900000000"
+        source = {"Root": {}, "Detached": [{"Id": detached_id, "Class": TASK_CLASS,
+                                            "Properties": {"DirectSelector": {"Key": "Gone"}}}]}
+        tree = tree_to_semantic_projection(source, property_mapper=lambda name, value: lower_authored_properties(
+            name, value, evidence=catalog, object_evidence=catalog))
+        path = "/Body/Tree/Detached/0/Properties/DirectSelector/Key"
+
+        def check(kept):
+            validate_tree_bindings(tree, context=BindingContext([selector_observation(key_exists=False)]),
+                                   blackboard=BLACKBOARD, class_evidence=catalog, authored_tree=source,
+                                   kept_detached=kept)
+        # A node the asset does not hold as written is new input: refused while a request is canonicalized too.
+        with authoring():
+            self.assert_diagnostic(lambda: check(frozenset()), "UnknownBlackboardKey", path)
+        # A node the asset holds is recorded, so the unchanged branch settles and re-applies.
+        with authoring() as findings:
+            check(frozenset({detached_id}))
+        self.assertEqual([(item.code, item.path) for item in findings], [("UnknownBlackboardKey", path)])
+        settle(findings, {"Body": {"Tree": source}}, {"Body": {"Tree": deepcopy(source)}})
+        # Outside a read or a write the rule raises like a check.
+        self.assert_diagnostic(lambda: check(frozenset({detached_id})), "UnknownBlackboardKey", path)
+
+    def test_a_marked_property_is_not_scanned_for_bindings(self):
+        payload = {"kind": "struct", "struct_path": PAYLOAD, "fields": {"Selector": SELECTOR}}
+        catalog = EvidenceCatalog({"Payload": {"Selector": {"Key": "None"}}}, {"Payload": payload})
+        marker = {"Text": "(Selector=(SelectedKeyName=\"Gone\"),Ratio=nan)", "Unsupported": "reason"}
+        source = {"Root": {"Id": "10101010101010101010101010101010", "Class": ROOT_CLASS,
+                           "Children": [{"Id": TASK_ID, "Class": TASK_CLASS, "Properties": {"Payload": marker}}]}}
+        tree = tree_to_semantic_projection(source, property_mapper=lambda name, value: lower_authored_properties(
+            name, value, evidence=catalog, object_evidence=catalog))
+        context = BindingContext([])
+        validate_tree_bindings(tree, context=context, blackboard=BLACKBOARD, class_evidence=catalog, authored_tree=source)
+        self.assertEqual(context.calls, [])
+
+    def test_kept_detached_names_only_nodes_the_asset_holds_unchanged(self):
+        from asset_document.profiles.behavior_tree_production import _kept_detached
+        source = {"Root": {}, "Detached": [{"Id": TASK_ID, "Class": TASK_CLASS, "Properties": {"A": 1},
+                                            "Children": [{"Id": "11111111222222223333333344444444", "Class": TASK_CLASS}]}]}
+        current = tree_to_semantic_projection(source)
+        edited = deepcopy(source); edited["Detached"][0]["Children"][0]["Properties"] = {"A": 2}
+        self.assertEqual(_kept_detached(tree_to_semantic_projection(edited), current), frozenset({TASK_ID}))
+        self.assertEqual(_kept_detached(current, None), frozenset())
 
     def test_selector_missing_blackboard_unknown_key_and_wrong_type_keep_their_document_paths(self):
         catalog = EvidenceCatalog({"DirectSelector": {"Key": "None"}}, {"DirectSelector": SELECTOR})

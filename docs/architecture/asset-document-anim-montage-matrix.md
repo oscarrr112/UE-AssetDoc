@@ -18,7 +18,7 @@ Every Python row has an in-engine round-trip test in
 | `Curves` | yes | yes | `animation.curve.float.replace.v2` |
 | `SlotAnimTracks` | yes | yes | `animation.montage.slot_tracks.replace.v1` |
 | `CompositeSections` | yes | yes | `animation.montage.sections.mutate.v1` |
-| `Notifies`, `NotifyStates` | yes | yes | `animation.montage.notifies/notify_states.replace.v1` |
+| `Notifies`, `NotifyStates` (every notify, skeleton notifies, trigger settings, links) | managed only | yes | `animation.montage.notifies/notify_states.replace.v1` |
 | `Preview.PreviewBasePose` | yes | yes | `animation.montage.settings.set.v1` |
 | `Blend.BlendInTime`, `BlendOutTime` | yes | yes | settings (`FAlphaBlend::SetBlendTime`) |
 | `Blend.BlendModeIn/Out`, `BlendOutTriggerTime`, `bEnableAutoBlendOut` | yes | yes | `editor.property.write_admitted_batch.v1` |
@@ -31,7 +31,7 @@ Every Python row has an in-engine round-trip test in
 | `TimeStretch.SamplingRate`, `CurveValueMinPrecision` | yes | yes | settings (raw reflection on private EditAnywhere fields, `MontageSettingsRawEdits.cpp`) |
 | `Metadata` (`[{Class, Properties}]`) | yes | yes | settings (instanced `UAnimMetaData`, same-class instances reused) |
 | `SectionMetadata` (`{Section: [{Class, Properties}]}`) | yes | yes | settings |
-| `Properties` (plain reflected Montage fields, e.g. `RateScale`, `bLoop`) | yes | yes | `editor.property.write_admitted_batch.v1` |
+| `Properties` (plain reflected Montage fields, e.g. `RateScale`, `bLoop`, and object references no region shows, e.g. `PreviewPoseAsset`; `BlendProfileIn/Out` and `PreviewBasePose` belong to their regions, `AnimMontage.ManagedPropertyOverlap`) | yes | yes | `editor.property.write_admitted_batch.v1` |
 | `Definitions` / `DefinitionRef` fragments | yes | not supported (see below) | n/a |
 | Create with any of the above in one apply | yes | yes | `editor.asset.create_by_factory.v2` (Skeleton as `factory_context`), then every row above on the new asset |
 | Apply into an open Animation (Montage) editor | — | yes (new) | in place, then the editor's refresh: document tab (timeline, notify, sections) rebuilt, Montage Sections tab, preview montage instance restarted; test `AnimMontage.OpenEditorApply` |
@@ -59,6 +59,15 @@ code is written. Reads all come from the single profile snapshot, which has an e
   default `MontageTimeStretchCurve` usually names no curve, and extract → apply must round-trip it.
   A new Montage owns only the curves its document authors, so on create an omitted `Curves` means
   none. Preflight checks this before anything is created, and `Validate` does too when `Action` is `Create`.
+- Legacy authored only notifies whose objects it had created (`AssetDocumentManaged_*` names, an
+  `AssetDocument.Notify` notify name) and hid the rest. `Notifies` / `NotifyStates` now cover every
+  notify of `UAnimMontage::Notifies`: objects of any class, skeleton notifies (`Name`, no object),
+  trigger settings and the start / end links. A listed family replaces the whole family; a row keeps
+  the matching notify (same class or skeleton notify name, nearest time) with its object and guid,
+  so an editor-placed notify can be moved, edited or deleted. New objects get engine-style names.
+  Notifies the old profile created read back as ordinary notifies. A link to a slot other than the
+  first is refused (`PostLoad` relinks every notify to the first slot track), and Extract fails at
+  `/Montage/Notifies/<i>/<Field>` for a notify it cannot show faithfully.
 
 ## Create (one apply)
 
@@ -100,8 +109,7 @@ package and sidecar bytes are unchanged.
 | `Definitions` / `DefinitionRef` | Document-level reuse was a legacy-only feature with no production consumer. The Python codec has no definition resolver. Fails with `AnimMontage.UnsupportedDefinitions`. |
 | Branching points (`BranchingPointMarkers`) | Derived from notifies with `MontageTickType=BranchingPoint` and refreshed by the engine. Authored indirectly through `Notifies`. |
 | Sync markers (`MarkerData`) | Derived cache. The settings primitive refreshes it the way the details panel does. It is never authored. |
-| `AssetUserData`, `ParentAsset` / child-asset overrides, `PreviewPoseAsset` | Not in legacy either. Object-array and ownership semantics would need their own primitive.  |
-| Hard-object Montage fields outside the named regions | The generic Editor batch does not admit hard object pointers. The ones that matter (`PreviewBasePose`, blend custom curves, blend profiles) are covered by the settings primitive. |
+| `ParentAsset` / child-asset overrides | Not in legacy either. Ownership semantics would need their own primitive. (`AssetUserData` is in `Properties`: the settings snapshot lists the Details list of instanced objects, written whole by the Montage settings primitive through the generic instanced-object codec.) |
 | Properties of shared (non-instanced) metadata pointers, e.g. a class default object in `MetaData` | Observed by class only (`Properties: {}`) and never written. Re-authoring them would mutate a shared object. Abstract classes cannot be instanced. |
 | Aggregate reflected fields (structs, arrays, maps) in `Properties` and in metadata properties | The Editor batch rejects aggregates by design. Scalar metadata properties round-trip. |
 
@@ -124,6 +132,10 @@ package and sidecar bytes are unchanged.
     factory step (slot reference, notify property, settings reference) and a vetoed staging save
     leave no object, package, registry entry or file, and the sidecar bytes are unchanged.
   - `Apply.UnchangedReapplyIsNoOp`
+  - `EditorNotifies.RoundTrip`, `EditorNotifies.EditAndDelete`, `EditorNotifies.Unrepresentable`:
+    notifies placed as the notify panel places them (an object notify, a skeleton notify with every
+    trigger setting changed and a Relative link, a notify state) are extracted, round-trip, are
+    edited in place and deleted; an unrepresentable slot or notify object fails naming the field.
   - `OpenEditorApply`: apply, a rolled-back failed apply and a human edit with Undo / Redo, all with
     the Montage open in its editor, whose panels and preview show each state.
 - Lifecycle: `UEAssetDoc.MontageLifecycle.GenericFactoryContext`;

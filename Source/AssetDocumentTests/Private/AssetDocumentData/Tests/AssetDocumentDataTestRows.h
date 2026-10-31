@@ -7,6 +7,7 @@
 #include "Engine/DataTable.h"
 #include "Internationalization/Text.h"
 #include "Templates/SubclassOf.h"
+#include "UObject/FieldPath.h"
 #include "UObject/SoftObjectPtr.h"
 #include "AssetDocumentDataTestRows.generated.h"
 
@@ -63,9 +64,38 @@ struct FAssetDocumentDataTestRow : public FTableRowBase
 	TObjectPtr<UObject> Source;
 
 	// The row editor cannot create instanced subobjects (no owning object in a struct
-	// view), so this field is not extracted and refused when authored.
+	// view): a set one reads as an "Unsupported" marker, and a written value is refused.
 	UPROPERTY(EditAnywhere, Instanced, Category = "Test")
 	TObjectPtr<UObject> Inline;
+};
+
+// A struct with a member the document codec has no form for (a field path): it reads as {"X": ..., "P": marker}.
+USTRUCT()
+struct FAssetDocumentDataTestMarkedStruct
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, Category = "Test")
+	float X = 0.f;
+
+	UPROPERTY(EditAnywhere, Category = "Test")
+	TFieldPath<FProperty> P;
+};
+
+// A row whose fields hold that struct, alone and in an array (the tolerant Data Table tests).
+USTRUCT()
+struct FAssetDocumentDataTestMarkedRow : public FTableRowBase
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, Category = "Test")
+	int32 Count = 0;
+
+	UPROPERTY(EditAnywhere, Category = "Test")
+	FAssetDocumentDataTestMarkedStruct Settings;
+
+	UPROPERTY(EditAnywhere, Category = "Test")
+	TArray<FAssetDocumentDataTestMarkedStruct> Entries;
 };
 
 // A second row struct: composite parents must share the row struct; RowStruct is immutable.

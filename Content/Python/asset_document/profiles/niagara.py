@@ -43,11 +43,11 @@ from __future__ import annotations
 import dataclasses
 
 from asset_document.diagnostics import (
-    AssetDocumentContractError, DiagnosticSeverity, RuntimeDiagnostic, with_diagnostics,
+    AssetDocumentContractError, DiagnosticSeverity, RuntimeDiagnostic, read_warning, with_diagnostics,
 )
 from asset_document.graphs.executor import graph_requirements
 from asset_document.graphs.schemas.niagara import NiagaraGraphExecutor
-from asset_document import inspect_summary
+from asset_document import inspect_summary, markers
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.meta import (
     ComparisonPolicy, DefaultPolicy, DeletePolicy, IdentityPolicy, OmissionPolicy, OrderPolicy, ProfileMeta,
@@ -138,6 +138,40 @@ def read(context, handle, detail="document"):
         rows += following.get("rows", [])
         offset = following.get("next_offset", -1)
     return first, rows
+
+
+def warn_unrepresented(value, path="/Body"):
+    """A read warning ``Niagara.Unrepresented`` for each marker in a Body ``Properties`` or ``Meta`` object: a Details
+    value (or a member of one) the read has no document form for. Markers elsewhere (an input's ``Unsupported`` mode)
+    are not property values."""
+    if type(value) is dict:
+        for key, item in value.items():
+            where = f"{path}/{common.escape(str(key))}"
+            if key in ("Properties", "Meta") and type(item) is dict:
+                markers.warn_all(item, PREFIX, where)
+            else:
+                warn_unrepresented(item, where)
+    elif type(value) is list:
+        for index, item in enumerate(value):
+            warn_unrepresented(item, f"{path}/{index}")
+
+
+def warn_parameter_definitions(page):
+    """A read warning ``Niagara.UnrepresentedParameterDefinitions`` when the asset (or one of a system's emitters)
+    subscribes to Parameter Definitions libraries: the document has no form for the subscriptions, and an apply
+    leaves them as they are."""
+    entries = page.get("parameter_definitions") if type(page) is dict else None
+    if not entries:
+        return
+    named = []
+    for entry in entries:
+        if type(entry) is dict:
+            owner = entry.get("Owner") or ""
+            named.append(f"{owner}: {entry.get('Definitions') or '(missing)'}" if owner
+                         else str(entry.get("Definitions") or "(missing)"))
+    read_warning("/Body", f"{PREFIX}.UnrepresentedParameterDefinitions", (
+        "Parameter Definitions subscriptions are not part of the document and an apply keeps them as they are: "
+        + ", ".join(named) + "."))
 
 
 def compile_errors(context, handle):
@@ -516,7 +550,11 @@ def _rebase(path):
 
 def plan_emitter_asset(body, name, live_system, defaults):
     """The planner's edits of the working copy's emitter (named by its unique emitter name), at document paths."""
-    plan = planner.plan_system({"Emitters": [_emitter_entry(body, name)]}, live_system, defaults)
+    try:
+        plan = planner.plan_system({"Emitters": [_emitter_entry(body, name)]}, live_system, defaults)
+    except AssetDocumentContractError as error:
+        raise AssetDocumentContractError(dataclasses.replace(error.diagnostic, path=_rebase(error.diagnostic.path))) \
+            from None
     plan.ops = [(op, _rebase(path)) for op, path in plan.ops]
     plan.differences = [dataclasses.replace(item, path=_rebase(item.path)) for item in plan.differences]
     plan.refusals = [AssetDocumentContractError(dataclasses.replace(item.diagnostic, path=_rebase(item.diagnostic.path)))
@@ -852,7 +890,10 @@ class _NiagaraReadProfile:
     def extract(self, *, target, asset_handle, context, include_defaults=False):
         page, rows = read(context, asset_handle)
         with shape.sparse_data_interfaces(not include_defaults):
-            return self.document(common.require_target(target, PREFIX), page, rows)
+            document = self.document(common.require_target(target, PREFIX), page, rows)
+        warn_unrepresented(document.get("Body"))
+        warn_parameter_definitions(page)
+        return document
 
     def summarize_inspect(self, inspected):
         """The inspect over HTTP (unless detail is true): the shared summary with NiagaraDetails summarized
@@ -930,6 +971,8 @@ class NiagaraSystemProfile(_NiagaraReadProfile):
         page, rows = read(context, asset_handle)
         with shape.sparse_data_interfaces(not include_defaults):
             body = self.body(rows)
+        warn_unrepresented(body)
+        warn_parameter_definitions(page)
         class_defaults(context, asset_handle, *planner.defaults_wanted({}, body))
         return common.document(common.require_target(target, PREFIX), SYSTEM_CLASS,
                                system_properties().extract(asset_handle, context, include_defaults), body)
@@ -985,6 +1028,8 @@ class _ApplyingProfile(_NiagaraReadProfile):
         page, rows = read(context, asset_handle)
         with shape.sparse_data_interfaces(not include_defaults):
             body = self.body(rows)
+        warn_unrepresented(body)
+        warn_parameter_definitions(page)
         return common.document(common.require_target(target, PREFIX), self.exact_asset_class_path,
                                self.properties_region().extract(asset_handle, context, include_defaults), body)
 

@@ -9,6 +9,7 @@
 
 #include "Animation/AnimBlueprint.h"
 #include "Engine/Blueprint.h"
+#include "Engine/LevelScriptBlueprint.h"
 #include "Engine/World.h"
 #include "Materials/Material.h"
 #include "UObject/Package.h"
@@ -49,6 +50,29 @@ bool UnregisterAssetDocumentExactBlueprintClass(const FTopLevelAssetPath& Bluepr
 bool IsAssetDocumentExactBlueprintClass(const UClass* BlueprintClass)
 {
 	return BlueprintClass != nullptr && IsExactBlueprintClass(BlueprintClass);
+}
+
+const UClass* FindAssetDocumentBlueprintProfileClass(const UClass* BlueprintClass)
+{
+	if (BlueprintClass == nullptr || !BlueprintClass->IsChildOf(UBlueprint::StaticClass()))
+	{
+		return nullptr;
+	}
+	// The RigVM Blueprint base, by path: this module does not depend on RigVM.
+	static const FString RigVMBlueprintPath(TEXT("/Script/RigVMDeveloper.RigVMBlueprint"));
+	for (const UClass* Class = BlueprintClass; Class != nullptr; Class = Class->GetSuperClass())
+	{
+		if (Class == UBlueprint::StaticClass() || Class == UWidgetBlueprint::StaticClass()
+			|| Class == UAnimBlueprint::StaticClass() || IsExactBlueprintClass(Class))
+		{
+			return Class;
+		}
+		if (Class == ULevelScriptBlueprint::StaticClass() || Class->GetPathName() == RigVMBlueprintPath)
+		{
+			return nullptr;
+		}
+	}
+	return nullptr;
 }
 
 bool FAssetDocumentClassResolver::ResolveClassReference(const FString& ClassName, UClass*& OutClass, FString& OutError)
@@ -142,13 +166,10 @@ bool FAssetDocumentClassResolver::ValidateResolvedClass(UClass* Class, FString& 
 		return false;
 	}
 
-	if (Class->IsChildOf(UBlueprint::StaticClass())
-		&& Class != UBlueprint::StaticClass()
-		&& Class != UWidgetBlueprint::StaticClass()
-		&& Class != UAnimBlueprint::StaticClass()
-		&& !IsExactBlueprintClass(Class))
+	// Other Blueprint-derived classes are read by the profile of their nearest Blueprint ancestor that has one.
+	if (Class->IsChildOf(UBlueprint::StaticClass()) && FindAssetDocumentBlueprintProfileClass(Class) == nullptr)
 	{
-		OutError = FString::Printf(TEXT("Resolved class '%s' is a Blueprint-derived asset class that requires an exact AssetDocument profile"), *Class->GetName());
+		OutError = FString::Printf(TEXT("Resolved class '%s' is a Blueprint class no AssetDocument profile reads (a RigVM Blueprint without its own profile, or a Level Script Blueprint)"), *Class->GetName());
 		OutCode = TEXT("ClassResolve.ProfileRequired");
 		return false;
 	}

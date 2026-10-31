@@ -216,8 +216,10 @@ public:
 		const FString& Key,
 		FAssetDocumentGraphError& OutError) const;
 
-	// graph.function.flags.set.v1: Flags is a partial object of
-	// {pure, const, call_in_editor, access, category, tooltip, keywords};
+	// graph.function.flags.set.v1: Flags is a partial object of a function's
+	// {pure, const, exec, call_in_editor, thread_safe, unsafe_during_actor_construction, deprecated,
+	// deprecation_message, access, category, tooltip, keywords, compact_node_title, instance_color}, or of a
+	// macro's {category, tooltip, keywords, compact_node_title, instance_color};
 	// OutFlags receives the complete resulting flags object.
 	virtual bool SetFunctionFlags(
 		UObject& Asset,

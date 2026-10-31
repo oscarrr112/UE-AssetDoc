@@ -114,6 +114,8 @@ class LiveNode:
     properties: Mapping[str, object] | None = None
     # The comment bubble is pinned open (SCommentBubble's toggle).
     comment_bubble_visible: bool = False
+    # The enabled state was set by the user (Enable / Disable / Development Only), not the one the node was placed with.
+    enabled_state_user_set: bool = False
     # A resizable node's size (a comment box), (width, height).
     box_size: tuple[int, int] | None = None
     # The size the graph editor draws the node at (graph.query.v1 include_sizes), (width, height).
@@ -289,6 +291,7 @@ def decode_node(value: object, path: str) -> LiveNode:
         position=_position(row.get("position"), f"{path}/position"),
         comment=_str(row, "comment", path, optional=True),
         enabled_state=_str(row, "enabled_state", path, optional=True, default="enabled"),
+        enabled_state_user_set=_bool(row, "enabled_state_user_set", path),
         parent_guid=_guid(row.get("parent_node_guid"), f"{path}/parent_node_guid"),
         subnode_index=subnode_index,
         subgraph_guids=tuple(_guid(item, f"{path}/subgraph_guids/{index}") for index, item in

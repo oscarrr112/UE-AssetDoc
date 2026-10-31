@@ -62,6 +62,8 @@ _CODEC_TOKENS = {
     # instanced form, another asset by its path.
     "edit_inline_object.v1": "EditInlineObject",
     "instanced_struct.v1": "InstancedStruct",
+    # TOptional: null when unset, else the value's own form.
+    "optional.v1": "Optional",
 }
 
 # Codecs whose type token is the UE C++ struct type itself.
@@ -89,6 +91,7 @@ _CODEC_VALUE_TYPES = {
     "instanced_object.v1": (type(None), dict),
     "edit_inline_object.v1": (type(None), str, dict),
     "instanced_struct.v1": (type(None), dict),
+    "optional.v1": (type(None), bool, int, float, str, list, dict),
 }
 
 

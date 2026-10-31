@@ -24,7 +24,10 @@ Document (docs/architecture/asset-document-metasound-design.md §3)::
     }
 
 * A node's ``Configuration`` ``{Type, Properties}`` is extracted when it differs from the configuration a new node of
-  its class gets; omitted means that default.
+  its class gets; omitted means that default.  A setting the codec has no form for is a marker (``markers``), warned
+  ``MetaSound.Unrepresented``; left as read or omitted it keeps its value, an edited one is refused.  A setting whose
+  value holds markers inside (a struct with such a member) is edited over its current value, so its markers keep
+  their content; omitted, it keeps its value.
 
 * The read presents the MetaSound as the MetaSound editor shows it after opening: the open-time input template
   injection is simulated on a copy (nodes it would add are listed by Inspect as ``InjectedNodes``).  Reading never
@@ -51,6 +54,7 @@ import hashlib
 import json
 import re
 
+from asset_document import markers
 from asset_document.diagnostics import AssetDocumentContractError
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.dto import PrimitiveRequirement
@@ -604,6 +608,7 @@ def extract(target, class_path, read, context, include_defaults=False):
     that lists a literal equal to the class default compares equal."""
     calls = AudioCalls(context, read)
     body, facts, _ = assemble(read_records(calls, pins=include_defaults), pins=include_defaults)
+    warn_unrepresented(body)
     _LIVE_FACTS[target] = facts
     return common.document(target, class_path, _properties(class_path).extract(read, context, include_defaults), body)
 
@@ -688,12 +693,27 @@ _NODE_DEFAULTS = {"Inputs": {}, "Defaults": {}, "Comment": "", "CommentVisible":
                   "Version": 1}
 
 
-def configuration_properties(entry, defaults=None):
+def configuration_properties(entry, defaults=None, live=None):
     """The configuration a node entry asks for, as its Properties ({} = the class's default configuration); with the
-    class's configuration ``defaults``, every setting (a value equal to the default is the same as leaving it out)."""
+    class's configuration ``defaults``, every setting (a value equal to the default is the same as leaving it out).
+    With the ``live`` node entry, a setting it holds as a marker, or as a value with markers inside, that the entry
+    leaves out is kept (the editor never resets content it cannot write)."""
     value = entry.get("Configuration")
     properties = (value.get("Properties") or {}) if type(value) is dict else {}
+    if live is not None:
+        kept = {name: item for name, item in configuration_properties(live).items() if markers.holds_marker(item)}
+        properties = {**kept, **properties}
     return {**defaults, **properties} if defaults else properties
+
+
+def warn_unrepresented(body):
+    """A read warning ``MetaSound.Unrepresented`` for each node configuration setting read as a marker."""
+    for page, graph in (body.get("Graphs") or {}).items():
+        for key, entry in (graph.get("Nodes") or {}).items():
+            configuration = entry.get("Configuration")
+            if type(configuration) is dict and type(configuration.get("Properties")) is dict:
+                markers.warn_all(configuration["Properties"], PREFIX, f"/Body/Graphs/{common.escape(page)}/Nodes/"
+                                 f"{common.escape(key)}/Configuration/Properties")
 
 
 def is_bare_output(entry):
@@ -750,8 +770,8 @@ def _nodes_diff(authored, live, path, facts, exact, changes, removed_outputs=())
                 _change(changes, f"{where}/Defaults", entry.get("Defaults"), before.get("Defaults"), "Defaults" in entry,
                         "Defaults" in before)
             config_defaults = facts.get("configuration_defaults", {}).get(before.get("Id"))
-            if not common.same(configuration_properties(entry, config_defaults), configuration_properties(before, config_defaults),
-                               exact):
+            if not common.same(configuration_properties(entry, config_defaults, before),
+                               configuration_properties(before, config_defaults), exact):
                 _change(changes, f"{where}/Configuration", entry.get("Configuration"), before.get("Configuration"),
                         "Configuration" in entry, "Configuration" in before)
             for field in ("Comment", "CommentVisible", "HideUnconnectedPins"):

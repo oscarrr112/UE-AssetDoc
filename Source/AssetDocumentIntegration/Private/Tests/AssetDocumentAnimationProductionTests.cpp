@@ -331,10 +331,10 @@ bool HasNonemptyState(const UAnimMontage& Target, int32 Loops, float Volume)
  {
   if (const auto* Notify = Cast<UAnimNotify_PlaySound>(Event.Notify.Get()))
    FoundNotify = Notify->GetOuter() == &Target && Notify->VolumeMultiplier == Volume && Event.GetTime() == 0.125f
-    && Event.NotifyName == TEXT("AssetDocument.Notify");
+    && Event.NotifyName == TEXT("PlaySound");
   if (const auto* State = Cast<UAnimNotifyState_TimedParticleEffect>(Event.NotifyStateClass.Get()))
    FoundState = State->GetOuter() == &Target && State->bDestroyAtEnd == (Loops != 2) && Event.GetTime() == 0.875f
-    && Event.GetDuration() == 0.125f && Event.NotifyName == TEXT("AssetDocument.NotifyState");
+    && Event.GetDuration() == 0.125f && Event.NotifyName == TEXT("TimedParticleEffect");
  }
  return FoundNotify && FoundState;
 }

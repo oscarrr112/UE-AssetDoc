@@ -13,6 +13,7 @@ already holds changes nothing (no finalize either).
 """
 from __future__ import annotations
 
+from asset_document import markers
 from asset_document.diagnostics import (
     AssetDocumentContractError, DiagnosticContext, DiagnosticSeverity, RuntimeDiagnostic, with_diagnostics,
 )
@@ -119,6 +120,7 @@ class _Apply:
                     raise error(f"{path}/Properties/{escape(name)}", f"{node['Class']} has no editable property "
                                 f"'{name}'. Properties: {', '.join(sorted(defaults)) or 'none'}.",
                                 f"{PREFIX}.UnknownProperty")
+            self.check_markers(key, node, existing)
             per_child = model.PER_CHILD.get(node["Class"])
             if per_child is not None and per_child[0] in node.get("Properties", {}):
                 name, offset = per_child
@@ -129,6 +131,22 @@ class _Apply:
                                 f"{' but the last' if offset else ''}: {expected} for {count} input(s) (got "
                                 f"{len(value) if type(value) is list else type(value).__name__}).",
                                 f"{PREFIX}.ChildArrayLength")
+
+    def check_markers(self, key, node, existing):
+        """A node property the document has no form for (a marker) is kept when left as extracted or omitted; an
+        edited marker, a marker the node does not have, or another value than null over a marked one is refused."""
+        stored = {}
+        if existing is not None and existing.extras.get("class") == node["Class"]:
+            stored = model.thaw(existing.extras.get("properties", {}))
+        for name, value in node.get("Properties", {}).items():
+            where = f"{_node_path(key)}/Properties/{escape(name)}"
+            current = stored.get(name)
+            if markers.is_marker(value):
+                markers.require_unchanged(where, value, current, PREFIX)
+            elif markers.is_marker(current) and value is not None:
+                raise error(where, f"'{name}' holds content the document has no form for ({current[markers.KEY]}); "
+                            "leave it as its marker, omit it to keep it, or clear it with null.",
+                            f"{PREFIX}.UnrepresentedValue")
 
     # -- writes ----------------------------------------------------------
     def write(self, primitive, values, path):
@@ -283,11 +301,15 @@ class _Apply:
             defaults = model.node_defaults(node["Class"], count) or {}
             have = {**defaults, **model.thaw(current.extras.get("properties", {}))}
             want = {**defaults, **node.get("Properties", {})}
+            authored = node.get("Properties", {})
             for name, value in want.items():
+                where = f"{path}/Properties/{escape(name)}"
+                stored = have.get(name, _MISSING)
+                if markers.is_marker(value) or (name not in authored and markers.is_marker(stored)):
+                    continue  # a marker is never written (check refused an edited one): the stored value stays
                 # A struct value is an edit (the members it lists): the same when those members are.
                 if name in have and common.same(value, common.struct_as_authored(value, have[name]), False):
                     continue
-                where = f"{path}/Properties/{escape(name)}"
                 try:
                     self.write("graph.node.property.set.v1", {"node_guid": current.guid, "container": "sound_node",
                                                               "property_path": name, "value": value}, where)

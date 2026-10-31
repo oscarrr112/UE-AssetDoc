@@ -8,7 +8,7 @@ import unittest
 
 from asset_document.diagnostics import AssetDocumentContractError
 from asset_document.profiles.anim_montage_codec import (
-    lower_body, normalize_body, snapshot_to_body,
+    TRIGGER_DEFAULTS, lower_body, normalize_body, snapshot_to_body,
 )
 
 
@@ -73,7 +73,7 @@ class MontageCodecTests(unittest.TestCase):
         native = lower_body(dict(reversed(list(authored.items()))))
         self.assertEqual(list(native), ["skeleton", "preview_mesh", "curves", "slots", "sections", "notifies", "notify_states",
                                         "notify_tracks"])
-        self.assertEqual(list(native["notifies"][0]), ["time", "track_index", "object"])
+        self.assertEqual(list(native["notifies"][0]), ["time", "track_index", "object", "trigger", "link"])
         self.assertEqual(list(native["slots"][0]["segments"][0]), ["animation", "start", "source_start", "source_end", "rate", "loops", "previous_slot", "previous_segment"])
 
     def test_actual_correspondence_is_consumed_and_not_persisted(self):
@@ -118,10 +118,65 @@ class MontageCodecTests(unittest.TestCase):
     def test_legacy_incomplete_rows_never_receive_guessed_defaults(self):
         for value in ({"Curves": [{"Name": "Speed", "Keys": []}]},
                       {"CompositeSections": [{"Name": "Start", "NextSectionName": None}]},
-                      {"Notifies": [{"Name": "Swing", "Time": 0}]},
+                      {"Notifies": [{"Name": "Swing"}]},
+                      {"Notifies": [{"Time": 0}]},
                       {"NotifyStates": [{"Time": 0, "TrackIndex": 0, "Object": {"Class": "/Script/Engine.AnimNotifyState", "Properties": {}}}]}):
             with self.assertRaises(AssetDocumentContractError):
                 lower_body(value)
+
+    def test_skeleton_notify_trigger_settings_and_links_round_trip(self):
+        authored = body()
+        authored["Notifies"].append({"Time": 0.5, "TrackIndex": 0, "Name": "Footstep", "LinkMethod": 1,
+                                     "NotifyTriggerChance": 0.5, "MontageTickType": "BranchingPoint",
+                                     "NotifyFilterType": "LOD", "NotifyFilterLOD": 2, "bTriggerOnFollower": True,
+                                     "bTriggerOnDedicatedServer": False, "bCanBeFilteredViaRequest": False,
+                                     "TriggerWeightThreshold": 0.25})
+        authored["NotifyStates"][0].update({"LinkMethod": 2, "EndLinkMethod": 1})
+        native = lower_body(authored)
+        row = native["notifies"][1]
+        self.assertEqual(list(row), ["time", "track_index", "object", "name", "trigger", "link"])
+        self.assertIsNone(row["object"])
+        self.assertEqual(row["name"], "Footstep")
+        self.assertEqual(row["link"], {"method": 1, "slot_name": None})
+        self.assertEqual(row["trigger"]["MontageTickType"], "BranchingPoint")
+        self.assertEqual(native["notify_states"][0]["link"], {"method": 2, "slot_name": None, "end_method": 1, "end_slot_name": None})
+        # The snapshot gives every trigger setting; the document keeps the ones that differ from the UE default.
+        for family in ("notifies", "notify_states"):
+            for native_row in native[family]:
+                native_row["trigger"] = {**TRIGGER_DEFAULTS, **native_row["trigger"]}
+        for slot in native["slots"]:
+            for i, segment in enumerate(slot["segments"]):
+                segment["previous_slot"], segment["previous_segment"] = slot["name"], i
+        self.assertEqual(snapshot_to_body(native), authored)
+
+    def test_notify_link_slots_and_end_link_default_to_the_start(self):
+        authored = body()
+        authored["SlotAnimTracks"].append({"SlotName": "Other", "Segments": [segment()]})
+        authored["NotifyStates"][0]["SlotName"] = "Other"
+        native = lower_body(authored)
+        self.assertEqual(native["notify_states"][0]["link"], {"method": 0, "slot_name": "Other", "end_method": 0, "end_slot_name": "Other"})
+        snap = snapshot(authored)
+        snap["notify_states"][0]["link"]["end_slot_name"] = None  # ends on the first slot track
+        self.assertEqual(snapshot_to_body(snap)["NotifyStates"][0]["EndSlotName"], "DefaultSlot")
+        self.assertNotIn("EndSlotName", snapshot_to_body(snapshot(authored))["NotifyStates"][0])
+
+    def test_invalid_notify_rows_name_the_field(self):
+        sound = {"Class": "/Script/Engine.AnimNotify", "Properties": {}}
+        state = {"Class": "/Script/Engine.AnimNotifyState", "Properties": {}}
+        cases = (
+            ({"Notifies": [{"Time": 0, "Object": sound, "Name": "Both"}]}, "/Body/Notifies/0"),
+            ({"NotifyStates": [{"Time": 0, "Duration": 1, "Name": "Swing"}]}, "/Body/NotifyStates/0/Name"),
+            ({"Notifies": [{"Time": 0, "Name": "A", "NotifyFilterType": "Bogus"}]}, "/Body/Notifies/0/NotifyFilterType"),
+            ({"Notifies": [{"Time": 0, "Name": "A", "NotifyTriggerChance": 2}]}, "/Body/Notifies/0/NotifyTriggerChance"),
+            ({"Notifies": [{"Time": 0, "Name": "A", "LinkMethod": 3}]}, "/Body/Notifies/0/LinkMethod"),
+            ({"Notifies": [{"Time": 0, "Name": "A", "EndLinkMethod": 1}]}, "/Body/Notifies/0"),
+            ({"NotifyStates": [{"Time": 0, "Duration": 1, "Object": state, "MontageTickType": "Sometimes"}]},
+             "/Body/NotifyStates/0/MontageTickType"),
+        )
+        for value, path in cases:
+            with self.subTest(value=value), self.assertRaises(AssetDocumentContractError) as caught:
+                lower_body(value)
+            self.assertEqual(caught.exception.diagnostic.path, path)
 
     def test_invalid_curve_bits_default_and_time_are_rejected(self):
         cases = []

@@ -34,7 +34,7 @@ Document (MCP/schemas/assetdocument/Sequencer.md, "Template Sequence")::
 """
 from __future__ import annotations
 
-from asset_document.diagnostics import AssetDocumentContractError, with_diagnostics
+from asset_document.diagnostics import AssetDocumentContractError, read_warning, with_diagnostics
 from asset_document.meta import (
     ComparisonPolicy, DefaultPolicy, DeletePolicy, IdentityPolicy, OmissionPolicy, OrderPolicy, ProfileMeta,
     RegionMeta, RegionOwnership,
@@ -126,7 +126,7 @@ def canonicalize(document, class_path):
     canonical = common.snapshot(document)
     canonical.setdefault("Definitions", {})
     canonical.setdefault("Properties", {})
-    canonical["Body"] = {key: (seq._drop_defaults(value) if key in ("Root", "Tracks") else value)
+    canonical["Body"] = {key: (seq._drop_defaults(seq.upgrade_markers(value)) if key in ("Root", "Tracks") else value)
                          for key, value in canonical.get("Body", {}).items()}
     return canonical
 
@@ -211,9 +211,9 @@ def body_diff(authored, live, exact):
             continue
         if key == "Root":
             reference = live.get("Root")
-            seq.value_diff("/Body/Root", seq.strip_groups(normalize_root(authored["Root"], reference)),
-                           seq.strip_groups(normalize_root(reference, reference)) if reference is not None else None,
-                           exact, changes)
+            theirs = seq.strip_groups(normalize_root(reference, reference)) if reference is not None else None
+            seq.value_diff("/Body/Root", seq.kept_markers(seq.strip_groups(normalize_root(authored["Root"], reference)), theirs),
+                           theirs, exact, changes)
         else:
             changes.extend(seq.body_diff({key: authored[key]}, live, exact, groups=False))
     if any(key in authored for key in GROUPED):
@@ -237,8 +237,15 @@ def diff(authored, extracted, exact):
 
 
 def read_body(calls):
+    """The template Body and the read's facts; its read warnings and markers are warned (Extract, Inspect)."""
     level, facts = seq.read_body(calls)
-    return template_body(level), facts
+    body = template_body(level)
+    seq.warn_read(body, facts)
+    if level.get("BindingTags"):
+        read_warning("/Body", "Sequencer.UnrepresentedBindingTags",
+                     f"Binding tags ({', '.join(sorted(level['BindingTags']))}) have no form in a template document; "
+                     "AssetDoc keeps them.")
+    return body, facts
 
 
 def extract(target, read, context, class_path, include_defaults=True):

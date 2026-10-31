@@ -26,18 +26,23 @@
 //                      value, default, ui_min?, ui_max?}];
 //          at offset 0 also stale_overrides[{name, kind, association, index}] and layers? {layers[], blends[],
 //          names[], visible[]} (only when the instance has its own layer stack)}
-//   edit  {parent?, ops[]}: {op: set, name, association?, index?, value} | {op: clear, name, association?, index?}
-//          (clear of a parameter that is not overridden or not exposed is a no-op)
+//   edit  {parent?, ops[]}: {op: set, name, kind?, association?, index?, value} | {op: clear, name, kind?, association?, index?}
+//          (clear of a parameter that is not overridden or not exposed is a no-op). kind (a read kind) picks one of
+//          several parameters of one name and different types, which the editor lists side by side; without it such
+//          a name fails with MaterialInstance.AmbiguousParameter. Overrides are kept per name and type.
 //          -> {overrides, dropped[], parent, has_static_permutation}
 //          refraction_depth_bias? (number | null): the editor's Refraction Depth Bias, stored as a scalar
 //          override entry no parent parameter exposes; kept by every edit unless set here. read reports it.
-// Values (document form): scalar number; vector [R,G,B,A]; double_vector [X,Y,Z,W]; texture /
+// Values (document form): scalar number (a Curve Atlas Row Parameter: {"Curve": curve path, "Row": its row in the
+// atlas}; set takes Curve, or Row / a number as the row); vector [R,G,B,A]; double_vector [X,Y,Z,W]; texture /
 // texture_collection / runtime_virtual_texture / sparse_volume_texture / parameter_collection object path
 // ("" = None); font {"Font": path, "Page": n}; static_switch bool; static_component_mask {"R","G","B","A"}.
 
 #include "AssetDocumentDataPrimitives.h"
 
 #include "AssetDocumentEditorNonInteractiveScope.h"
+#include "Curves/CurveLinearColor.h"
+#include "Curves/CurveLinearColorAtlas.h"
 #include "Engine/Font.h"
 #include "Engine/Texture.h"
 #include "Engine/TextureCollection.h"
@@ -96,6 +101,19 @@ const TCHAR* KindName(EMaterialParameterType Type)
 		}
 	}
 	return TEXT("unknown");
+}
+
+bool MaterialInstanceParseKind(const FString& Text, EMaterialParameterType& Out)
+{
+	for (const FKind& Kind : Kinds)
+	{
+		if (Text == Kind.Name)
+		{
+			Out = Kind.Type;
+			return true;
+		}
+	}
+	return false;
 }
 
 const TCHAR* AssociationName(EMaterialParameterAssociation Association)
@@ -209,6 +227,20 @@ FValue EncodeValue(const FMaterialParameterValue& Value)
 	default:
 		return MakeNull();
 	}
+}
+
+// A curve atlas scalar: the curve it samples and the row the scalar holds (PostLoad sets the row from the curve).
+FValue EncodeAtlasValue(const FMaterialParameterMetadata& Meta)
+{
+	FObjectBuilder Atlas;
+	Atlas.AddString(TEXT("Curve"), Meta.ScalarCurve.IsNull() ? FString() : Meta.ScalarCurve.ToSoftObjectPath().ToString());
+	Atlas.AddInt(TEXT("Row"), FMath::RoundToInt(Meta.Value.Float[0]));
+	return Atlas.Build();
+}
+
+bool IsAtlasParameter(EMaterialParameterType Type, const FMaterialParameterMetadata& Meta)
+{
+	return Type == EMaterialParameterType::Scalar && Meta.bUsedAsAtlasPosition;
 }
 
 bool ReadNumber(const FValue& Value, double& Out)
@@ -436,6 +468,65 @@ bool DecodeValue(EMaterialParameterType Type, const FValue& Value, const FMateri
 	}
 }
 
+// A curve atlas scalar as the Material Instance Editor's curve picker sets it: the curve (one of the atlas's gradient
+// curves, "" for none) and the row it holds. A number, or {"Row"}, picks the curve at that row; a row the atlas does
+// not have (or no atlas) is stored with no curve, as {"Curve": "", "Row": n} is.
+bool DecodeAtlasValue(const FValue& Value, const FMaterialParameterMetadata& Exposed, FMaterialParameterMetadata& Out, FString& OutCode,
+	FString& OutProblem)
+{
+	OutCode = TEXT("MaterialInstance.InvalidValue");
+	const UCurveLinearColorAtlas* Atlas = Exposed.ScalarAtlas.LoadSynchronous();
+	const FValue* Curve = Value.Kind == EAssetDocumentRuntimeValueKind::Object ? FindField(Value, TEXT("Curve")) : nullptr;
+	const FValue* Row = Value.Kind == EAssetDocumentRuntimeValueKind::Object ? FindField(Value, TEXT("Row")) : &Value;
+	double RowNumber = -1.0;
+	const bool bShape = Value.Kind == EAssetDocumentRuntimeValueKind::Object
+		? (Curve != nullptr || Row != nullptr) && Value.ObjectKeys.Num() == (Curve != nullptr ? 1 : 0) + (Row != nullptr ? 1 : 0)
+			&& (Curve == nullptr || Curve->Kind == EAssetDocumentRuntimeValueKind::String)
+		: ReadNumber(Value, RowNumber);
+	if (!bShape || (Row != nullptr && (!ReadNumber(*Row, RowNumber) || RowNumber < 0 || RowNumber != FMath::FloorToDouble(RowNumber))))
+	{
+		OutProblem = TEXT("A curve atlas parameter takes {\"Curve\": \"<curve path in the atlas>\"} (or its row: {\"Row\": n} or a number).");
+		return false;
+	}
+	const int32 Rows = Atlas != nullptr ? Atlas->GradientCurves.Num() : 0;
+	UCurveLinearColor* Picked = nullptr;
+	if (Curve != nullptr && !Curve->StringValue.IsEmpty())
+	{
+		UObject* Object = nullptr;
+		if (!ResolveAsset(Curve->StringValue, *UCurveLinearColor::StaticClass(), Object, OutProblem))
+		{
+			OutCode = OutProblem.StartsWith(TEXT("No asset")) ? TEXT("MaterialInstance.AssetNotFound") : TEXT("MaterialInstance.InvalidValue");
+			return false;
+		}
+		Picked = Cast<UCurveLinearColor>(Object);
+		const int32 Index = Atlas != nullptr ? Atlas->GradientCurves.Find(Picked) : INDEX_NONE;
+		if (Index == INDEX_NONE)
+		{
+			OutProblem = FString::Printf(TEXT("'%s' is not a curve of the parameter's atlas %s."), *Curve->StringValue,
+				Atlas != nullptr ? *Atlas->GetPathName() : TEXT("(none)"));
+			return false;
+		}
+		if (Row != nullptr && static_cast<int32>(RowNumber) != Index)
+		{
+			OutProblem = FString::Printf(TEXT("Row is the curve's row in the atlas: %d for '%s' (or leave Row out)."), Index, *Curve->StringValue);
+			return false;
+		}
+		RowNumber = Index;
+	}
+	else if (Curve == nullptr && RowNumber < Rows)
+	{
+		Picked = Atlas->GradientCurves[static_cast<int32>(RowNumber)];
+	}
+	else if (Row == nullptr)
+	{
+		RowNumber = 0.0;
+	}
+	Out = Exposed;
+	Out.Value = FMaterialParameterValue(static_cast<float>(RowNumber));
+	Out.ScalarCurve = Picked;
+	return true;
+}
+
 // The Material Instance Editor's "Refraction Depth Bias" is stored as a scalar override entry named
 // RefractionDepthBias that no parent parameter exposes (CopyToSourceInstance writes it on every edit).
 const FName RefractionDepthBiasName(TEXT("RefractionDepthBias"));
@@ -546,12 +637,14 @@ FValue DescribeParameter(const UMaterialInstanceConstant& Instance, const FParam
 	Row.AddString(TEXT("description"), Parameter.Meta.Description);
 	Row.AddString(TEXT("asset"), ParameterAssetPath(Instance, Parameter));
 	Row.AddBool(TEXT("overridden"), Parameter.Meta.bOverride);
-	Row.Add(TEXT("value"), EncodeValue(Parameter.Meta.Value));
+	const bool bAtlas = IsAtlasParameter(Parameter.Type, Parameter.Meta);
+	Row.Add(TEXT("value"), bAtlas ? EncodeAtlasValue(Parameter.Meta) : EncodeValue(Parameter.Meta.Value));
 	// The value the parent chain gives (what unticking the override reverts to).
 	FMaterialParameterMetadata Inherited;
 	const bool bInherited = Instance.GetParameterValue(Parameter.Type, FMemoryImageMaterialParameterInfo(Parameter.Info), Inherited,
 		EMaterialGetParameterValueFlags::CheckNonOverrides);
-	Row.Add(TEXT("default"), bInherited ? EncodeValue(Inherited.Value) : MakeNull());
+	Row.Add(TEXT("default"), !bInherited ? MakeNull() : IsAtlasParameter(Parameter.Type, Inherited) ? EncodeAtlasValue(Inherited)
+		: EncodeValue(Inherited.Value));
 	if (Parameter.Type == EMaterialParameterType::Scalar && Parameter.Meta.ScalarMax > Parameter.Meta.ScalarMin)
 	{
 		Row.Add(TEXT("ui_min"), MakeNumber(ShortestFloat(Parameter.Meta.ScalarMin)));
@@ -619,19 +712,54 @@ bool ChangeParent(FCall& Call, UMaterialInstanceConstant& Instance, const FStrin
 	return true;
 }
 
-const FParameter* FindParameter(const TArray<FParameter>& Exposed, const FMaterialParameterInfo& Info, int32& OutMatches)
+// An override is one parameter of one type: the editor lists parameters of one name and different types side by side.
+using FMaterialInstanceOverrideKey = TPair<FMaterialParameterInfo, uint8>;
+
+FMaterialInstanceOverrideKey MaterialInstanceOverrideKey(const FMaterialParameterInfo& Info, EMaterialParameterType Type)
+{
+	return FMaterialInstanceOverrideKey(Info, static_cast<uint8>(Type));
+}
+
+// The exposed parameter Info names (of Kind when it is set); OutMatches counts the candidates.
+const FParameter* FindParameter(const TArray<FParameter>& Exposed, const FMaterialParameterInfo& Info, const TOptional<EMaterialParameterType>& Kind,
+	int32& OutMatches)
 {
 	const FParameter* Found = nullptr;
 	OutMatches = 0;
 	for (const FParameter& Parameter : Exposed)
 	{
-		if (Parameter.Info == Info)
+		if (Parameter.Info == Info && (!Kind.IsSet() || Parameter.Type == Kind.GetValue()))
 		{
 			Found = Found == nullptr ? &Parameter : Found;
 			++OutMatches;
 		}
 	}
 	return Found;
+}
+
+bool MaterialInstanceReadKind(FReader& Op, TOptional<EMaterialParameterType>& Out)
+{
+	FString Text;
+	if (!Op.String(TEXT("kind"), Text, false))
+	{
+		return false;
+	}
+	if (!Op.Has(TEXT("kind")))
+	{
+		return true;
+	}
+	EMaterialParameterType Parsed = EMaterialParameterType::None;
+	if (!MaterialInstanceParseKind(Text, Parsed))
+	{
+		TArray<FString> Names;
+		for (const FKind& Kind : Kinds)
+		{
+			Names.Add(Kind.Name);
+		}
+		return Op.Fail(TEXT("Graph.InvalidArgument"), FString::Printf(TEXT("kind is one of %s."), *FString::Join(Names, TEXT(", "))), TEXT("kind"));
+	}
+	Out = Parsed;
+	return true;
 }
 
 bool ReadParameterInfo(FReader& Op, FMaterialParameterInfo& Out)
@@ -735,16 +863,16 @@ bool HandleMaterialInstanceEdit(FCall& Call, FObjectBuilder& Result)
 	// The editor's parameter list: every exposed parameter with its override flag and value.
 	const TArray<FParameter> Exposed = GetExposedParameters(*Instance);
 	TArray<FString> Candidates;
-	TMap<FMaterialParameterInfo, FParameter> Overrides;
+	TMap<FMaterialInstanceOverrideKey, FParameter> Overrides;
 	for (const FParameter& Parameter : Exposed)
 	{
 		Candidates.AddUnique(ParameterKey(Parameter.Info));
 		if (Parameter.Meta.bOverride)
 		{
-			Overrides.Add(Parameter.Info, Parameter);
+			Overrides.Add(MaterialInstanceOverrideKey(Parameter.Info, Parameter.Type), Parameter);
 		}
 	}
-	const TMap<FMaterialParameterInfo, FParameter> Before = Overrides;
+	const TMap<FMaterialInstanceOverrideKey, FParameter> Before = Overrides;
 	const TArray<FParameter> Stale = GetStaleOverrides(*Instance, Exposed);
 	// Refraction Depth Bias: kept unless the call sets it (number) or removes it (null: the parent's value).
 	const FScalarParameterValue* CurrentRefraction = FindRefractionDepthBias(*Instance, Exposed);
@@ -775,32 +903,54 @@ bool HandleMaterialInstanceEdit(FCall& Call, FObjectBuilder& Result)
 	for (int32 Index = 0; Index < Ops->Elements.Num(); ++Index)
 	{
 		FReader Op = Call.Args.Child(FString::Printf(TEXT("ops/%d"), Index), Ops->Elements[Index]);
-		FString Kind;
+		FString OpName;
 		FMaterialParameterInfo Info;
+		TOptional<EMaterialParameterType> Kind;
 		if (!Op.IsObject())
 		{
 			return Op.Fail(TEXT("Data.InvalidOp"), TEXT("Each op is an object."));
 		}
-		if (!Op.String(TEXT("op"), Kind) || !ReadParameterInfo(Op, Info))
+		if (!Op.String(TEXT("op"), OpName) || !ReadParameterInfo(Op, Info) || !MaterialInstanceReadKind(Op, Kind))
 		{
 			return false;
 		}
-		const bool bSet = Kind == TEXT("set");
-		if (!bSet && Kind != TEXT("clear"))
+		const bool bSet = OpName == TEXT("set");
+		if (!bSet && OpName != TEXT("clear"))
 		{
-			return Op.Fail(TEXT("Data.InvalidOp"), FString::Printf(TEXT("Unknown op '%s' (set, clear)."), *Kind), TEXT("op"));
+			return Op.Fail(TEXT("Data.InvalidOp"), FString::Printf(TEXT("Unknown op '%s' (set, clear)."), *OpName), TEXT("op"));
 		}
-		if (!(bSet ? Op.OnlyFields({TEXT("op"), TEXT("name"), TEXT("association"), TEXT("index"), TEXT("value")})
-			: Op.OnlyFields({TEXT("op"), TEXT("name"), TEXT("association"), TEXT("index")})))
+		if (!(bSet ? Op.OnlyFields({TEXT("op"), TEXT("name"), TEXT("kind"), TEXT("association"), TEXT("index"), TEXT("value")})
+			: Op.OnlyFields({TEXT("op"), TEXT("name"), TEXT("kind"), TEXT("association"), TEXT("index")})))
 		{
 			return false;
 		}
 		int32 Matches = 0;
-		const FParameter* Parameter = FindParameter(Exposed, Info, Matches);
+		const FParameter* Parameter = FindParameter(Exposed, Info, Kind, Matches);
+		if (Matches > 1)
+		{
+			TArray<FString> Typed;
+			for (const FParameter& Exposure : Exposed)
+			{
+				if (Exposure.Info == Info)
+				{
+					Typed.Add(KindName(Exposure.Type));
+				}
+			}
+			return Op.Fail(TEXT("MaterialInstance.AmbiguousParameter"), FString::Printf(
+				TEXT("The parent exposes several parameters named '%s' (%s), as the editor lists them; name the kind of the one to author."),
+				*ParameterKey(Info), *FString::Join(Typed, TEXT(", "))), TEXT("name"));
+		}
 		if (!bSet)
 		{
 			// Unticking the override; a parameter that is not exposed (or not overridden) has none.
-			Overrides.Remove(Info);
+			if (Kind.IsSet())
+			{
+				Overrides.Remove(MaterialInstanceOverrideKey(Info, Kind.GetValue()));
+			}
+			else if (Parameter != nullptr)
+			{
+				Overrides.Remove(MaterialInstanceOverrideKey(Info, Parameter->Type));
+			}
 			continue;
 		}
 		if (Parameter == nullptr)
@@ -815,7 +965,9 @@ bool HandleMaterialInstanceEdit(FCall& Call, FObjectBuilder& Result)
 					Listed.Add(FString::Printf(TEXT("%s (%s)"), *ParameterKey(Exposure.Info), KindName(Exposure.Type)));
 				}
 			}
-			FString Message = FString::Printf(TEXT("The parent %s exposes no parameter '%s'."), *PathOf(Instance->Parent), *ParameterKey(Info));
+			FString Message = Kind.IsSet()
+				? FString::Printf(TEXT("The parent %s exposes no %s parameter '%s'."), *PathOf(Instance->Parent), KindName(Kind.GetValue()), *ParameterKey(Info))
+				: FString::Printf(TEXT("The parent %s exposes no parameter '%s'."), *PathOf(Instance->Parent), *ParameterKey(Info));
 			if (!Suggestions.IsEmpty())
 			{
 				Message += FString::Printf(TEXT(" Did you mean: %s?"), *FString::Join(Suggestions, TEXT(", ")));
@@ -825,12 +977,6 @@ bool HandleMaterialInstanceEdit(FCall& Call, FObjectBuilder& Result)
 					Exposed.Num() > Listed.Num() ? *FString::Printf(TEXT(" and %d more (Inspect the instance for all)"), Exposed.Num() - Listed.Num()) : TEXT(""));
 			return Op.Fail(TEXT("MaterialInstance.UnknownParameter"), Message, TEXT("name"));
 		}
-		if (Matches > 1)
-		{
-			return Op.Fail(TEXT("MaterialInstance.AmbiguousParameter"), FString::Printf(
-				TEXT("The parent exposes several parameters named '%s' with different types; the editor shows each, but a document key cannot tell them apart."),
-				*ParameterKey(Info)), TEXT("name"));
-		}
 		const FValue* Value = Op.Find(TEXT("value"));
 		if (Value == nullptr)
 		{
@@ -839,21 +985,30 @@ bool HandleMaterialInstanceEdit(FCall& Call, FObjectBuilder& Result)
 		FMaterialParameterValue Decoded;
 		FString Code;
 		FString Problem;
-		if (!DecodeValue(Parameter->Type, *Value, Parameter->Meta, Decoded, Code, Problem))
+		FParameter Override = *Parameter;
+		if (IsAtlasParameter(Parameter->Type, Parameter->Meta))
+		{
+			if (!DecodeAtlasValue(*Value, Parameter->Meta, Override.Meta, Code, Problem))
+			{
+				return Op.Fail(Code, FString::Printf(TEXT("%s is a curve atlas parameter: %s"), *ParameterKey(Info), *Problem), TEXT("value"));
+			}
+			Decoded = Override.Meta.Value;
+		}
+		else if (!DecodeValue(Parameter->Type, *Value, Parameter->Meta, Decoded, Code, Problem))
 		{
 			return Op.Fail(Code, FString::Printf(TEXT("%s is a %s parameter: %s"), *ParameterKey(Info), KindName(Parameter->Type), *Problem), TEXT("value"));
 		}
-		FParameter Override = *Parameter;
 		Override.Meta.Value = Decoded;
 		Override.Meta.bOverride = true;
-		Overrides.Add(Info, MoveTemp(Override));
+		Overrides.Add(MaterialInstanceOverrideKey(Info, Parameter->Type), MoveTemp(Override));
 	}
 
 	bool bOverridesChanged = Overrides.Num() != Before.Num() || !Stale.IsEmpty() || !(Refraction == RefractionBefore);
-	for (const TPair<FMaterialParameterInfo, FParameter>& Pair : Overrides)
+	for (const TPair<FMaterialInstanceOverrideKey, FParameter>& Pair : Overrides)
 	{
 		const FParameter* Previous = Before.Find(Pair.Key);
-		bOverridesChanged |= Previous == nullptr || Previous->Meta.Value != Pair.Value.Meta.Value;
+		bOverridesChanged |= Previous == nullptr || Previous->Meta.Value != Pair.Value.Meta.Value
+			|| Previous->Meta.ScalarCurve != Pair.Value.Meta.ScalarCurve;
 	}
 	if (bOverridesChanged || bParentChanged)
 	{
@@ -863,7 +1018,7 @@ bool HandleMaterialInstanceEdit(FCall& Call, FObjectBuilder& Result)
 			FMaterialInstanceParameterUpdateContext UpdateContext(Instance, EMaterialInstanceClearParameterFlag::All);
 			for (const FParameter& Parameter : Exposed)
 			{
-				if (const FParameter* Override = Overrides.Find(Parameter.Info))
+				if (const FParameter* Override = Overrides.Find(MaterialInstanceOverrideKey(Parameter.Info, Parameter.Type)))
 				{
 					UpdateContext.SetParameterValueEditorOnly(Override->Info, Override->Meta, EMaterialSetParameterValueFlags::SetCurveAtlas);
 				}

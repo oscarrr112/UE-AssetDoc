@@ -12,6 +12,7 @@
 #include "Animation/AnimNotifies/AnimNotify.h"
 #include "Animation/AnimNotifies/AnimNotifyState.h"
 #include "Animation/AnimSequence.h"
+#include "Animation/AttributeCurve.h"
 #include "Animation/Skeleton.h"
 #include "Engine/AssetUserData.h"
 #include "Engine/SkeletalMesh.h"
@@ -233,6 +234,28 @@ FResult WriteProperties(UObject& Target, const FObjectProperties& Properties, co
  return Valid();
 }
 
+// A Details property (editable, saved, not read-only) of an instanced object.
+bool IsDetailsProperty(const FProperty& Property)
+{
+ return Property.HasAnyPropertyFlags(CPF_Edit)
+  && !Property.HasAnyPropertyFlags(CPF_EditConst | CPF_Transient | CPF_Deprecated | CPF_SkipSerialization);
+}
+// The engine's export text of a property (a fixed array: its elements in parentheses).
+FString ExportPropertyText(const FProperty& Property, const UObject& Object)
+{
+ FString Text;
+ for (int32 Index = 0; Index < Property.ArrayDim; ++Index)
+ {
+  FString Element;
+  Property.ExportText_InContainer(Index, Element, &Object, nullptr, nullptr, PPF_None);
+  Text += Index > 0 ? TEXT(",") + Element : Element;
+ }
+ return Property.ArrayDim > 1 ? TEXT("(") + Text + TEXT(")") : Text;
+}
+
+// The admitted Details values of an instanced object (notify, notify state, metadata, asset user data). A Details
+// value the document has no form for reads, when it differs from the class default, as the marker
+// {"Unsupported": reason, "Text": export text}: apply never writes it and keeps the value of a kept object.
 bool ReadProperties(UObject& Object, FValue& Out, TArray<FAssetDocumentRuntimeDiagnostic>& Diagnostics)
 {
  Out = MakeObject({}, {});
@@ -242,6 +265,16 @@ bool ReadProperties(UObject& Object, FValue& Out, TArray<FAssetDocumentRuntimeDi
  for (TFieldIterator<FProperty> It(Object.GetClass()); It; ++It)
   if (IsAuthorableReference(**It) && !Out.ObjectKeys.Contains(It->GetAuthoredName()))
    Put(Out, It->GetAuthoredName(), OptionalPath(CastField<FObjectProperty>(*It)->GetObjectPropertyValue_InContainer(&Object)));
+ const UObject* Defaults = Object.GetClass()->GetDefaultObject(false);
+ for (TFieldIterator<FProperty> It(Object.GetClass()); It; ++It)
+ {
+  const FString Name = It->GetAuthoredName();
+  if (!IsDetailsProperty(**It) || Out.ObjectKeys.Contains(Name)) continue;
+  const FString Text = ExportPropertyText(**It, Object);
+  if (Defaults && Text == ExportPropertyText(**It, *Defaults)) continue;
+  Put(Out, Name, MakeObject({TEXT("Unsupported"), TEXT("Text")},
+   {String(FString::Printf(TEXT("%s has no document form; AssetDoc keeps the value."), *It->GetCPPType())), String(Text)}));
+ }
  return true;
 }
 
@@ -262,6 +295,8 @@ struct FObjectRow
  UClass* Class = nullptr;
  FObjectProperties Properties;
  FString Path;
+ // The object name of the existing object this row keeps (empty: a new object).
+ FString Reuse;
 };
 struct FTrigger
 {
@@ -278,6 +313,11 @@ struct FNotifyRow
  FObjectRow Object;
  FTrigger Trigger;
  FString Path;
+ // The Guid of the existing notify this row keeps (unset: a new notify, unless ReuseIndex names one).
+ TOptional<FGuid> Reuse;
+ // The position, among the sequence's notifies of the row's family, of the existing notify this row keeps
+ // (INDEX_NONE: Reuse alone names it). With Reuse, that notify must hold that Guid.
+ int32 ReuseIndex = INDEX_NONE;
 };
 struct FCurveRow
 {
@@ -298,6 +338,9 @@ struct FIntent
  TOptional<int32> NumberOfFrames;
  TOptional<TArray<FCurveRow>> Curves;
  TOptional<TArray<FName>> Tracks;
+ // The first listed track whose name an earlier track has (INDEX_NONE: none). Allowed only where the sequence
+ // already holds exactly these tracks (the editor can save two tracks of one name).
+ int32 RepeatedTrack = INDEX_NONE;
  TOptional<TArray<FNotifyRow>> Notifies, States;
  TOptional<TArray<FMarkerRow>> Markers;
  TOptional<TArray<FObjectRow>> Metadata, UserData;
@@ -312,10 +355,13 @@ FResult ParseObjectRows(const FValue* Value, UClass& Base, const FString& Path, 
   const FValue& Row = Value->Elements[Index];
   const FString RowPath = Sub(Path, Index);
   FString ClassPath;
-  if (!OnlyKeys(Row, {TEXT("class"), TEXT("properties")}) || !ReadText(Field(Row, TEXT("class")), ClassPath))
+  if (!OnlyKeys(Row, {TEXT("class"), TEXT("properties"), TEXT("reuse")}) || !ReadText(Field(Row, TEXT("class")), ClassPath))
    return Invalid(InvalidIntent, TEXT("Object rows require class and optional properties."), RowPath);
   FObjectRow& Out1 = Out.AddDefaulted_GetRef();
   Out1.Path = RowPath;
+  if (const FValue* Reuse = Field(Row, TEXT("reuse")))
+   if (!ReadText(Reuse, Out1.Reuse) || Out1.Reuse.IsEmpty())
+    return Invalid(InvalidIntent, TEXT("An object row's reuse names an existing object."), Sub(RowPath, TEXT("reuse")));
   Out1.Class = LoadConcreteClass(ClassPath, Base);
   if (!Out1.Class)
    return Invalid(Unresolved, FString::Printf(TEXT("'%s' is not a concrete %s class."), *ClassPath, *Base.GetName()), Sub(RowPath, TEXT("class")));
@@ -379,14 +425,29 @@ FResult ParseNotifies(const FValue* Value, bool bStates, const FString& Path, TA
   const FValue& Row = Value->Elements[Index];
   FNotifyRow& Parsed = Out.AddDefaulted_GetRef();
   Parsed.Path = Sub(Path, Index);
-  if (!OnlyKeys(Row, {TEXT("time"), TEXT("duration"), TEXT("track"), TEXT("class"), TEXT("name"), TEXT("properties"), TEXT("trigger")})
-   || (!bStates && Field(Row, TEXT("duration"))))
+  if (!OnlyKeys(Row, {TEXT("time"), TEXT("duration"), TEXT("track"), TEXT("class"), TEXT("name"), TEXT("properties"), TEXT("trigger"),
+   TEXT("reuse"), TEXT("reuse_index")}) || (!bStates && Field(Row, TEXT("duration"))))
    return Invalid(InvalidIntent, TEXT("Unknown notify field."), Parsed.Path);
+  FString Text;
+  if (const FValue* Reuse = Field(Row, TEXT("reuse")))
+  {
+   FGuid Guid;
+   if (!ReadText(Reuse, Text) || !FGuid::Parse(Text, Guid))
+    return Invalid(InvalidIntent, TEXT("A notify row's reuse is the Guid of an existing notify."), Sub(Parsed.Path, TEXT("reuse")));
+   Parsed.Reuse = Guid;
+  }
+  if (const FValue* ReuseIndex = Field(Row, TEXT("reuse_index")))
+  {
+   int64 Position = 0;
+   if (!ReadInt(ReuseIndex, Position) || Position < 0 || Position > MAX_int32)
+    return Invalid(InvalidIntent, TEXT("A notify row's reuse_index is the position of an existing notify of its family."),
+     Sub(Parsed.Path, TEXT("reuse_index")));
+   Parsed.ReuseIndex = static_cast<int32>(Position);
+  }
   if (!ReadFloat(Field(Row, TEXT("time")), Parsed.Time) || Parsed.Time < 0.f)
    return Invalid(InvalidIntent, TEXT("Notify time must be a nonnegative number."), Sub(Parsed.Path, TEXT("time")));
   if (bStates && (!ReadFloat(Field(Row, TEXT("duration")), Parsed.Duration) || Parsed.Duration <= 0.f))
    return Invalid(InvalidIntent, TEXT("Notify state duration must be a positive number."), Sub(Parsed.Path, TEXT("duration")));
-  FString Text;
   if (const FValue* Track = Field(Row, TEXT("track")))
   {
    if (!ReadText(Track, Text) || Text.IsEmpty())
@@ -544,8 +605,9 @@ FResult ParseIntent(const FValue& Value, FIntent& Out)
   auto& Tracks = Out.Tracks.Emplace();
   for (int32 Index = 0; Index < V->Elements.Num(); ++Index)
   {
-   if (!ReadText(&V->Elements[Index], Text) || Text.IsEmpty() || Tracks.Contains(FName(*Text)))
+   if (!ReadText(&V->Elements[Index], Text) || Text.IsEmpty())
     return Invalid(InvalidIntent, TEXT("Notify track names must be unique and nonempty."), Sub(TEXT("/notify_tracks"), Index));
+   if (Out.RepeatedTrack == INDEX_NONE && Tracks.Contains(FName(*Text))) Out.RepeatedTrack = Index;
    Tracks.Add(FName(*Text));
   }
  }
@@ -602,6 +664,33 @@ FName TrackNameAt(const TArray<FName>& Tracks, int32 Index)
 {
  return Tracks.IsValidIndex(Index) ? Tracks[Index] : (Tracks.IsEmpty() ? FName(TEXT("1")) : Tracks[0]);
 }
+// How a row names its track: the track name, and for the n-th (n >= 2) of several tracks with one name (the editor
+// allows renaming a track to a used name) "<name>#<n>".
+FName TrackRefAt(const TArray<FName>& Tracks, int32 Index)
+{
+ const FName Name = TrackNameAt(Tracks, Index);
+ if (!Tracks.IsValidIndex(Index)) return Name;
+ int32 Occurrence = 0;
+ for (int32 Each = 0; Each <= Index; ++Each) Occurrence += Tracks[Each] == Name ? 1 : 0;
+ return Occurrence < 2 ? Name : FName(*FString::Printf(TEXT("%s#%d"), *Name.ToString(), Occurrence));
+}
+// The track a row's reference (TrackRefAt) names, or INDEX_NONE.
+int32 TrackIndexOf(const TArray<FName>& Tracks, FName Ref)
+{
+ const int32 Exact = Tracks.IndexOfByKey(Ref);
+ if (Exact != INDEX_NONE) return Exact;
+ const FString Text = Ref.ToString();
+ int32 Hash = INDEX_NONE;
+ if (!Text.FindLastChar(TEXT('#'), Hash) || Hash == 0) return INDEX_NONE;
+ const FString Digits = Text.Mid(Hash + 1);
+ if (Digits.IsEmpty() || !Digits.IsNumeric()) return INDEX_NONE;
+ const FName Base(*Text.Left(Hash));
+ int32 Wanted = FCString::Atoi(*Digits);
+ if (Wanted < 2) return INDEX_NONE;
+ for (int32 Index = 0; Index < Tracks.Num(); ++Index)
+  if (Tracks[Index] == Base && --Wanted == 0) return Index;
+ return INDEX_NONE;
+}
 
 void ApplyTrigger(FAnimNotifyEvent& Event, const FTrigger& Trigger)
 {
@@ -622,27 +711,69 @@ UClass* EventClass(const FAnimNotifyEvent& Event)
  return nullptr;
 }
 
-// Builds the replacement rows of one notify family. The existing row at the
-// same position is reused (object, guid, unspecified settings) when its class
-// matches, like editing that notify in place; otherwise a fresh event is made.
+// The editor's identity of a notify (FAnimNotifyEvent::Guid).
+FGuid EventGuid(const FAnimNotifyEvent& Event)
+{
+#if WITH_EDITORONLY_DATA
+ return Event.Guid;
+#else
+ return FGuid();
+#endif
+}
+
+bool RowNamesAnExistingNotify(const FNotifyRow& Row) { return Row.Reuse.IsSet() || Row.ReuseIndex != INDEX_NONE; }
+
+// Whether a row can keep an existing notify: one of the row's class whose notify object the sequence owns, or, for
+// a row without class, a named notify of the row's name.
+bool CanRowKeepNotify(const UAnimSequenceBase& Sequence, const FNotifyRow& Row, const FAnimNotifyEvent& Event, bool bStates)
+{
+ if (EventClass(Event) != Row.Object.Class) return false;
+ if (!Row.Object.Class) return Event.NotifyName == Row.Name;
+ const UObject* Object = bStates ? static_cast<const UObject*>(Event.NotifyStateClass.Get()) : static_cast<const UObject*>(Event.Notify.Get());
+ return Object && Object->IsIn(&Sequence);
+}
+
+// The existing notify a row keeps: the unused one at the row's reuse_index (holding the row's Guid, when given), else
+// the unused one with the row's Guid; it must be one the row can keep. INDEX_NONE when the row keeps none.
+int32 FindReusedNotify(const UAnimSequenceBase& Sequence, const FNotifyRow& Row, const TArray<FAnimNotifyEvent>& Previous,
+ const TArray<bool>& Used, bool bStates)
+{
+ if (Row.ReuseIndex != INDEX_NONE)
+ {
+  if (!Previous.IsValidIndex(Row.ReuseIndex) || Used[Row.ReuseIndex]) return INDEX_NONE;
+  const FAnimNotifyEvent& Event = Previous[Row.ReuseIndex];
+  if (Row.Reuse && EventGuid(Event) != *Row.Reuse) return INDEX_NONE;
+  return CanRowKeepNotify(Sequence, Row, Event, bStates) ? Row.ReuseIndex : INDEX_NONE;
+ }
+ if (!Row.Reuse) return INDEX_NONE;
+ for (int32 Index = 0; Index < Previous.Num(); ++Index)
+  if (!Used[Index] && EventGuid(Previous[Index]) == *Row.Reuse && CanRowKeepNotify(Sequence, Row, Previous[Index], bStates)) return Index;
+ return INDEX_NONE;
+}
+
+// Builds the replacement rows of one notify family. A row that names an existing notify (its Guid or its position,
+// paired by the profile) reuses it (object, guid, unspecified settings, Details values the document has no form
+// for), like editing that notify in place; any other row is a new notify.
 FResult BuildNotifyRows(UAnimSequenceBase& Sequence, const TArray<FNotifyRow>& Rows, const TArray<FAnimNotifyEvent>& Previous,
  const TArray<FName>& Tracks, bool bStates, TArray<FAnimNotifyEvent>& Out)
 {
+ TArray<bool> Used;
+ Used.Init(false, Previous.Num());
  for (int32 Index = 0; Index < Rows.Num(); ++Index)
  {
   const FNotifyRow& Row = Rows[Index];
   const FName Track = EffectiveTrack(Row.Track, Tracks);
-  const int32 TrackIndex = Tracks.IndexOfByKey(Track);
+  const int32 TrackIndex = TrackIndexOf(Tracks, Track);
   if (TrackIndex == INDEX_NONE)
    return Invalid(UnknownTrack, FString::Printf(TEXT("Notify track '%s' does not exist."), *Track.ToString()), Sub(Row.Path, TEXT("track")));
-  const FAnimNotifyEvent* Reused = Previous.IsValidIndex(Index) && EventClass(Previous[Index]) == Row.Object.Class
-   && (!Row.Object.Class || (bStates ? Previous[Index].NotifyStateClass->IsIn(&Sequence) : Previous[Index].Notify->IsIn(&Sequence)))
-   ? &Previous[Index] : nullptr;
+  const int32 ReusedIndex = FindReusedNotify(Sequence, Row, Previous, Used, bStates);
+  if (RowNamesAnExistingNotify(Row) && ReusedIndex == INDEX_NONE)
+   return Invalid(InvalidIntent, TEXT("The notify this row keeps is no longer in the sequence."), Row.Path);
+  if (ReusedIndex != INDEX_NONE) Used[ReusedIndex] = true;
+  const FAnimNotifyEvent* Reused = ReusedIndex != INDEX_NONE ? &Previous[ReusedIndex] : nullptr;
   FAnimNotifyEvent Event = Reused ? *Reused : FAnimNotifyEvent();
   FGuid Guid = FGuid::NewGuid();
-#if WITH_EDITORONLY_DATA
-  if (Reused && Reused->Guid.IsValid()) Guid = Reused->Guid;
-#endif
+  if (Reused && EventGuid(*Reused).IsValid()) Guid = EventGuid(*Reused);
   if (Row.Object.Class)
   {
    UObject* Object = Reused ? (bStates ? static_cast<UObject*>(Reused->NotifyStateClass) : static_cast<UObject*>(Reused->Notify))
@@ -679,8 +810,8 @@ FResult ValidateTimeline(const UAnimSequenceBase& Sequence, const FIntent& Inten
   for (const FAnimNotifyEvent& Event : Sequence.Notifies)
   {
    if ((Event.NotifyStateClass != nullptr) != bStates) continue;
-   const FName Name = TrackNameAt(Tracks, Event.TrackIndex);
-   if (!FinalTracks.Contains(Name))
+   const FName Name = TrackRefAt(Tracks, Event.TrackIndex);
+   if (TrackIndexOf(FinalTracks, Name) == INDEX_NONE)
     return Invalid(TrackInUse, FString::Printf(TEXT("Notify track '%s' is still used by an unlisted notify."), *Name.ToString()), TEXT("/notify_tracks"));
   }
   return Valid();
@@ -694,8 +825,8 @@ FResult ValidateTimeline(const UAnimSequenceBase& Sequence, const FIntent& Inten
     for (const FAnimSyncMarker& Marker : AsSequence->AuthoredSyncMarkers)
     {
 #if WITH_EDITORONLY_DATA
-     const FName Name = TrackNameAt(Tracks, Marker.TrackIndex);
-     if (!FinalTracks.Contains(Name))
+     const FName Name = TrackRefAt(Tracks, Marker.TrackIndex);
+     if (TrackIndexOf(FinalTracks, Name) == INDEX_NONE)
       return Invalid(TrackInUse, FString::Printf(TEXT("Notify track '%s' is still used by a sync marker."), *Name.ToString()), TEXT("/notify_tracks"));
 #endif
     }
@@ -707,7 +838,7 @@ FResult ValidateTimeline(const UAnimSequenceBase& Sequence, const FIntent& Inten
    {
     if (Row.Time > Limit || Row.Time + Row.Duration > Limit)
      return Invalid(OutOfRange, FString::Printf(TEXT("Notify time %g (+ duration %g) exceeds the play length %g."), Row.Time, Row.Duration, PlayLength), Sub(Row.Path, TEXT("time")));
-    if (!FinalTracks.Contains(EffectiveTrack(Row.Track, FinalTracks)))
+    if (TrackIndexOf(FinalTracks, EffectiveTrack(Row.Track, FinalTracks)) == INDEX_NONE)
      return Invalid(UnknownTrack, FString::Printf(TEXT("Notify track '%s' does not exist."), *Row.Track.ToString()), Sub(Row.Path, TEXT("track")));
    }
  if (Intent.Markers)
@@ -715,19 +846,33 @@ FResult ValidateTimeline(const UAnimSequenceBase& Sequence, const FIntent& Inten
   {
    if (Marker.Time > Limit)
     return Invalid(OutOfRange, FString::Printf(TEXT("Sync marker time %g exceeds the play length %g."), Marker.Time, PlayLength), Sub(Marker.Path, TEXT("time")));
-   if (!FinalTracks.Contains(EffectiveTrack(Marker.Track, FinalTracks)))
+   if (TrackIndexOf(FinalTracks, EffectiveTrack(Marker.Track, FinalTracks)) == INDEX_NONE)
     return Invalid(UnknownTrack, FString::Printf(TEXT("Notify track '%s' does not exist."), *Marker.Track.ToString()), Sub(Marker.Path, TEXT("track")));
   }
  return Valid();
 }
 
-FResult CheckOverlaps(const TArray<FAnimNotifyEvent>& Events, const TArray<FName>& Tracks)
+// Two notifies on one track at one time: refused when new. The editor's frame snapping can make them, and the
+// sequence keeps them; so many as the sequence already has on that track and time stay allowed.
+FResult CheckOverlaps(const TArray<FAnimNotifyEvent>& Events, const TArray<FName>& Tracks,
+ const TArray<FAnimNotifyEvent>& Previous, const TArray<FName>& PreviousTracks)
 {
+ auto Count = [](const TArray<FAnimNotifyEvent>& Rows, const TArray<FName>& Names, FName Ref, float Time)
+ {
+  int32 Found = 0;
+  for (const FAnimNotifyEvent& Row : Rows)
+   Found += TrackRefAt(Names, Row.TrackIndex) == Ref && FMath::IsNearlyEqual(Row.GetTime(), Time) ? 1 : 0;
+  return Found;
+ };
  for (int32 A = 0; A < Events.Num(); ++A)
   for (int32 B = A + 1; B < Events.Num(); ++B)
    if (Events[A].TrackIndex == Events[B].TrackIndex && FMath::IsNearlyEqual(Events[A].GetTime(), Events[B].GetTime()))
-    return Invalid(Overlap, FString::Printf(TEXT("Two notifies share track '%s' at time %g; UE would move one to another track."),
-     *TrackNameAt(Tracks, Events[A].TrackIndex).ToString(), Events[A].GetTime()), TEXT("/notifies"));
+   {
+    const FName Ref = TrackRefAt(Tracks, Events[A].TrackIndex);
+    if (Count(Events, Tracks, Ref, Events[A].GetTime()) > Count(Previous, PreviousTracks, Ref, Events[A].GetTime()))
+     return Invalid(Overlap, FString::Printf(TEXT("Two notifies share track '%s' at time %g; UE would move one to another track."),
+      *Ref.ToString(), Events[A].GetTime()), TEXT("/notifies"));
+   }
  return Valid();
 }
 
@@ -760,13 +905,30 @@ FResult ApplyCurves(UAnimSequenceBase& Sequence, const TArray<FCurveRow>& Curves
  return Result;
 }
 
+// A row that names an existing object of its class (its object name, paired by the profile) keeps it, with the
+// Details values the document has no form for; any other row is a new object.
 FResult BuildObjects(UObject& Outer, const TArray<UObject*>& Current, const TArray<FObjectRow>& Rows, TArray<UObject*>& OutNext)
 {
+ TArray<bool> Used;
+ Used.Init(false, Current.Num());
  for (int32 Index = 0; Index < Rows.Num(); ++Index)
  {
-  UObject* Existing = Current.IsValidIndex(Index) ? Current[Index] : nullptr;
-  UObject* Target = IsValid(Existing) && Existing->GetClass() == Rows[Index].Class && Existing->GetOuter() == &Outer
-   ? Existing : AssetDocumentAnimationAuthoringRaw::NewInstancedSubobject(Outer, *Rows[Index].Class);
+  UObject* Target = nullptr;
+  if (!Rows[Index].Reuse.IsEmpty())
+  {
+   for (int32 Candidate = 0; Candidate < Current.Num() && !Target; ++Candidate)
+   {
+    UObject* Existing = Current[Candidate];
+    if (!Used[Candidate] && IsValid(Existing) && Existing->GetClass() == Rows[Index].Class && Existing->GetOuter() == &Outer
+     && Existing->GetName() == Rows[Index].Reuse)
+    {
+     Used[Candidate] = true;
+     Target = Existing;
+    }
+   }
+   if (!Target) return Invalid(InvalidIntent, TEXT("The object this row keeps is no longer in the sequence."), Rows[Index].Path);
+  }
+  else Target = AssetDocumentAnimationAuthoringRaw::NewInstancedSubobject(Outer, *Rows[Index].Class);
   if (!Target) return Invalid(InvalidIntent, TEXT("An instanced object could not be allocated."), Rows[Index].Path);
   Target->Modify();
   auto R = WriteProperties(*Target, Rows[Index].Properties, Sub(Rows[Index].Path, TEXT("properties")));
@@ -774,6 +936,57 @@ FResult BuildObjects(UObject& Outer, const TArray<UObject*>& Current, const TArr
   OutNext.Add(Target);
  }
  return Valid();
+}
+
+// The notify tracks before and after the edit, and the checks of the authored timeline rows against them.
+FResult PrepareTracks(const UAnimSequenceBase& Sequence, const FIntent& Intent, float PlayLength, TArray<FName>& OutPrevious,
+ TArray<FName>& OutFinal)
+{
+ OutPrevious = CurrentTracks(Sequence);
+ if (Intent.Tracks && Intent.RepeatedTrack != INDEX_NONE && *Intent.Tracks != OutPrevious)
+  return Invalid(InvalidIntent, TEXT("Notify track names must be unique and nonempty."), Sub(TEXT("/notify_tracks"), Intent.RepeatedTrack));
+ OutFinal = Intent.Tracks ? *Intent.Tracks : (OutPrevious.IsEmpty() ? TArray<FName>{FName(TEXT("1"))} : OutPrevious);
+ return ValidateTimeline(Sequence, Intent, PlayLength, OutFinal);
+}
+
+// Float curves, notify tracks, notifies and notify states, as the curve and notify panels edit them.
+FResult ApplyCurvesAndNotifies(UAnimSequenceBase& Sequence, const FIntent& Intent, const TArray<FName>& PreviousTracks,
+ const TArray<FName>& FinalTracks)
+{
+ if (Intent.Curves) { auto R = ApplyCurves(Sequence, *Intent.Curves); if (!R.bValid) return R; }
+ if (Intent.Tracks || Intent.Notifies || Intent.States)
+ {
+  TArray<FAnimNotifyEvent> PreviousEvents, PreviousStates, Next;
+  for (const FAnimNotifyEvent& Event : Sequence.Notifies) (Event.NotifyStateClass ? PreviousStates : PreviousEvents).Add(Event);
+  // Kept rows follow their track by name.
+  auto Keep = [&](const TArray<FAnimNotifyEvent>& Rows)
+  {
+   for (FAnimNotifyEvent Event : Rows)
+   {
+    Event.TrackIndex = TrackIndexOf(FinalTracks, TrackRefAt(PreviousTracks, Event.TrackIndex));
+    Next.Add(MoveTemp(Event));
+   }
+  };
+  FResult R = Valid();
+  if (Intent.Notifies) { R = BuildNotifyRows(Sequence, *Intent.Notifies, PreviousEvents, FinalTracks, false, Next); if (!R.bValid) return R; }
+  else Keep(PreviousEvents);
+  if (Intent.States) { R = BuildNotifyRows(Sequence, *Intent.States, PreviousStates, FinalTracks, true, Next); if (!R.bValid) return R; }
+  else Keep(PreviousStates);
+  R = CheckOverlaps(Next, FinalTracks, Sequence.Notifies, PreviousTracks);
+  if (!R.bValid) return R;
+  AssetDocumentAnimationAuthoringRaw::SetNotifyTracks(Sequence, FinalTracks);
+  AssetDocumentAnimationAuthoringRaw::SetNotifies(Sequence, MoveTemp(Next));
+ }
+ return Valid();
+}
+
+// The notify panel's completion: cache refresh (sorted notifies, track bookkeeping), PostEditChange (compression /
+// derived data), dirty package.
+void CompleteEdit(UAnimSequenceBase& Sequence)
+{
+ Sequence.RefreshCacheData();
+ Sequence.PostEditChange();
+ Sequence.MarkPackageDirty();
 }
 
 FResult Apply(UAnimSequence& Sequence, const FIntent& Intent)
@@ -786,9 +999,8 @@ FResult Apply(UAnimSequence& Sequence, const FIntent& Intent)
  const FFrameRate Rate = Intent.FrameRate.Get(Model->GetFrameRate());
  const int32 Frames = Intent.NumberOfFrames.Get(Model->GetNumberOfFrames());
  const float PlayLength = Intent.FrameRate || Intent.NumberOfFrames ? float(Rate.AsSeconds(FFrameNumber(Frames))) : Sequence.GetPlayLength();
- const TArray<FName> PreviousTracks = CurrentTracks(Sequence);
- const TArray<FName> FinalTracks = Intent.Tracks ? *Intent.Tracks : (PreviousTracks.IsEmpty() ? TArray<FName>{FName(TEXT("1"))} : PreviousTracks);
- auto R = ValidateTimeline(Sequence, Intent, PlayLength, FinalTracks);
+ TArray<FName> PreviousTracks, FinalTracks;
+ auto R = PrepareTracks(Sequence, Intent, PlayLength, PreviousTracks, FinalTracks);
  if (!R.bValid) return R;
  // The preview mesh picker offers only meshes whose skeleton is compatible.
  if (const USkeletalMesh* Mesh = Cast<USkeletalMesh>(Intent.PreviewMeshObject))
@@ -808,30 +1020,8 @@ FResult Apply(UAnimSequence& Sequence, const FIntent& Intent)
   if (Model->GetFrameRate() != Rate || Model->GetNumberOfFrames() != Frames)
    return Invalid(ControllerFailed, TEXT("The frame rate / number of frames did not apply."), TEXT("/number_of_frames"));
  }
- if (Intent.Curves) { R = ApplyCurves(Sequence, *Intent.Curves); if (!R.bValid) return R; }
-
- if (Intent.Tracks || Intent.Notifies || Intent.States)
- {
-  TArray<FAnimNotifyEvent> PreviousEvents, PreviousStates, Next;
-  for (const FAnimNotifyEvent& Event : Sequence.Notifies) (Event.NotifyStateClass ? PreviousStates : PreviousEvents).Add(Event);
-  // Kept rows follow their track by name.
-  auto Keep = [&](const TArray<FAnimNotifyEvent>& Rows)
-  {
-   for (FAnimNotifyEvent Event : Rows)
-   {
-    Event.TrackIndex = FinalTracks.IndexOfByKey(TrackNameAt(PreviousTracks, Event.TrackIndex));
-    Next.Add(MoveTemp(Event));
-   }
-  };
-  if (Intent.Notifies) { R = BuildNotifyRows(Sequence, *Intent.Notifies, PreviousEvents, FinalTracks, false, Next); if (!R.bValid) return R; }
-  else Keep(PreviousEvents);
-  if (Intent.States) { R = BuildNotifyRows(Sequence, *Intent.States, PreviousStates, FinalTracks, true, Next); if (!R.bValid) return R; }
-  else Keep(PreviousStates);
-  R = CheckOverlaps(Next, FinalTracks);
-  if (!R.bValid) return R;
-  AssetDocumentAnimationAuthoringRaw::SetNotifyTracks(Sequence, FinalTracks);
-  AssetDocumentAnimationAuthoringRaw::SetNotifies(Sequence, MoveTemp(Next));
- }
+ R = ApplyCurvesAndNotifies(Sequence, Intent, PreviousTracks, FinalTracks);
+ if (!R.bValid) return R;
  if (Intent.Markers || Intent.Tracks)
  {
   TArray<AssetDocumentAnimationAuthoringRaw::FSyncMarkerRow> Rows;
@@ -844,13 +1034,13 @@ FResult Apply(UAnimSequence& Sequence, const FIntent& Intent)
     if (Sequence.AuthoredSyncMarkers.IsValidIndex(Index) && Sequence.AuthoredSyncMarkers[Index].MarkerName == Marker.Name)
      Guid = Sequence.AuthoredSyncMarkers[Index].Guid;
 #endif
-    Rows.Add({Marker.Name, Marker.Time, FinalTracks.IndexOfByKey(EffectiveTrack(Marker.Track, FinalTracks)), Guid});
+    Rows.Add({Marker.Name, Marker.Time, TrackIndexOf(FinalTracks, EffectiveTrack(Marker.Track, FinalTracks)), Guid});
    }
   else
    for (const FAnimSyncMarker& Marker : Sequence.AuthoredSyncMarkers)
    {
 #if WITH_EDITORONLY_DATA
-    Rows.Add({Marker.MarkerName, Marker.Time, FinalTracks.IndexOfByKey(TrackNameAt(PreviousTracks, Marker.TrackIndex)), Marker.Guid});
+    Rows.Add({Marker.MarkerName, Marker.Time, TrackIndexOf(FinalTracks, TrackRefAt(PreviousTracks, Marker.TrackIndex)), Marker.Guid});
 #else
     Rows.Add({Marker.MarkerName, Marker.Time, 0, FGuid()});
 #endif
@@ -876,11 +1066,24 @@ FResult Apply(UAnimSequence& Sequence, const FIntent& Intent)
   for (UObject* Data : Current) if (Data) Sequence.RemoveUserDataOfClass(Data->GetClass());
   for (UObject* Data : Next) Sequence.AddAssetUserData(CastChecked<UAssetUserData>(Data));
  }
- // The notify panel's completion: cache refresh (sorted notifies, track
- // bookkeeping), PostEditChange (compression / derived data), dirty package.
- Sequence.RefreshCacheData();
- Sequence.PostEditChange();
- Sequence.MarkPackageDirty();
+ CompleteEdit(Sequence);
+ return Valid();
+}
+
+// The timeline-only edit of an asset that is not a sequence (an Anim Composite): curves and notifies, nothing else.
+FResult ApplyTimeline(UAnimSequenceBase& Asset, const FIntent& Intent)
+{
+ if (Intent.Skeleton || Intent.PreviewMesh || Intent.References || Intent.FrameRate || Intent.NumberOfFrames || Intent.Markers
+  || Intent.Metadata || Intent.UserData)
+  return Invalid(InvalidIntent, TEXT("The timeline edit takes curves, notify tracks, notifies and notify states only."));
+ if (!Asset.GetDataModel()) return Invalid(ControllerFailed, TEXT("The asset has no animation data model."));
+ TArray<FName> PreviousTracks, FinalTracks;
+ auto R = PrepareTracks(Asset, Intent, Asset.GetPlayLength(), PreviousTracks, FinalTracks);
+ if (!R.bValid) return R;
+ Asset.Modify();
+ R = ApplyCurvesAndNotifies(Asset, Intent, PreviousTracks, FinalTracks);
+ if (!R.bValid) return R;
+ CompleteEdit(Asset);
  return Valid();
 }
 
@@ -903,9 +1106,12 @@ bool CaptureObjectRows(UObject& Owner, TConstArrayView<UObject*> Objects, FValue
  {
   if (!IsValid(Item)) continue;
   FValue Properties = MakeObject({}, {});
-  // Only objects instanced in this asset have authorable properties.
-  if (!Item->IsTemplate() && Item->IsIn(&Owner) && !ReadProperties(*Item, Properties, Diagnostics)) return false;
-  Out.Elements.Add(MakeObject({TEXT("class"), TEXT("properties")}, {String(Item->GetClass()->GetPathName()), MoveTemp(Properties)}));
+  // Only objects instanced in this asset have authorable properties; their name identifies them (a row's reuse).
+  const bool bOwned = !Item->IsTemplate() && Item->IsIn(&Owner);
+  if (bOwned && !ReadProperties(*Item, Properties, Diagnostics)) return false;
+  FValue Row = MakeObject({TEXT("class"), TEXT("properties")}, {String(Item->GetClass()->GetPathName()), MoveTemp(Properties)});
+  if (bOwned) Put(Row, TEXT("object"), String(Item->GetName()));
+  Out.Elements.Add(MoveTemp(Row));
  }
  return true;
 }
@@ -921,6 +1127,90 @@ FValue CaptureKey(const FRichCurveKey& Key)
 FValue CaptureColor(const FLinearColor& Color)
 {
  return MakeObject({TEXT("R"), TEXT("G"), TEXT("B"), TEXT("A")}, {Number(Color.R), Number(Color.G), Number(Color.B), Number(Color.A)});
+}
+
+// The key count and first / last key time of a keyed track (times are distinct and sorted); null times without keys.
+void PutKeyRange(FValue& Row, TArray<float>& Times)
+{
+ Times.Sort();
+ Put(Row, TEXT("key_count"), Integer(Times.Num()));
+ Put(Row, TEXT("start"), Times.IsEmpty() ? Null() : Number(Times[0]));
+ Put(Row, TEXT("end"), Times.IsEmpty() ? Null() : Number(Times.Last()));
+}
+
+// Transform curves (the bone offsets Persona keys on the additive layer tracks): per curve its name and the distinct
+// key times of its nine channels. Listed, not keyed: the values are read through bone sampling.
+FValue CaptureTransformCurves(const IAnimationDataModel& Model)
+{
+ FValue Rows = Array();
+ for (const FTransformCurve& Curve : Model.GetTransformCurves())
+ {
+  TArray<float> Times;
+  for (const FVectorCurve* Channel : {&Curve.TranslationCurve, &Curve.RotationCurve, &Curve.ScaleCurve})
+   for (const FRichCurve& Axis : Channel->FloatCurves)
+    for (const FRichCurveKey& Key : Axis.GetConstRefOfKeys()) Times.AddUnique(Key.Time);
+  FValue Row = MakeObject({TEXT("name")}, {String(Curve.GetName().ToString())});
+  PutKeyRange(Row, Times);
+  Rows.Elements.Add(MoveTemp(Row));
+ }
+ return Rows;
+}
+
+// Animated bone attributes (custom attributes an import brings, such as timecode): bone, name, value type and keys.
+FValue CaptureAttributes(const IAnimationDataModel& Model)
+{
+ FValue Rows = Array();
+ for (const FAnimatedBoneAttribute& Attribute : Model.GetAttributes())
+ {
+  TArray<float> Times;
+  for (const FAttributeKey& Key : Attribute.Curve.GetConstRefOfKeys()) Times.AddUnique(Key.Time);
+  const UScriptStruct* Type = Attribute.Identifier.GetType();
+  FValue Row = MakeObject({TEXT("bone"), TEXT("name"), TEXT("type")}, {String(Attribute.Identifier.GetBoneName().ToString()),
+   String(Attribute.Identifier.GetName().ToString()), Type ? String(Type->GetPathName()) : Null()});
+  PutKeyRange(Row, Times);
+  Rows.Elements.Add(MoveTemp(Row));
+ }
+ return Rows;
+}
+
+// Float curves, notify tracks, notifies and notify states of any UAnimSequenceBase.
+bool CaptureTimeline(UAnimSequenceBase& Sequence, const IAnimationDataModel& Model, FValue& Out,
+ TArray<FAssetDocumentRuntimeDiagnostic>& Diagnostics)
+{
+ FValue Curves = Array();
+ for (const FFloatCurve& Curve : Model.GetFloatCurves())
+ {
+  FValue Keys = Array();
+  for (const FRichCurveKey& Key : Curve.FloatCurve.GetConstRefOfKeys()) Keys.Elements.Add(CaptureKey(Key));
+  Curves.Elements.Add(MakeObject({TEXT("name"), TEXT("keys"), TEXT("flags"), TEXT("color"), TEXT("default_color"), TEXT("comment")},
+   {String(Curve.GetName().ToString()), MoveTemp(Keys), Integer(Curve.GetCurveTypeFlags()), CaptureColor(Curve.GetColor()),
+    CaptureColor(FAnimCurveBase::MakeColor(Curve.GetName())), String(Curve.Comment)}));
+ }
+ Put(Out, TEXT("curves"), MoveTemp(Curves));
+ const TArray<FName> Tracks = CurrentTracks(Sequence);
+ FValue TrackRows = Array();
+ for (const FName& Track : Tracks) TrackRows.Elements.Add(String(Track.ToString()));
+ Put(Out, TEXT("notify_tracks"), MoveTemp(TrackRows));
+ FValue Events = Array(), States = Array();
+ for (const FAnimNotifyEvent& Event : Sequence.Notifies)
+ {
+  UObject* Item = Event.NotifyStateClass ? static_cast<UObject*>(Event.NotifyStateClass) : static_cast<UObject*>(Event.Notify);
+  FValue Row = MakeObject({}, {});
+  Put(Row, TEXT("time"), Number(Event.GetTime()));
+  if (Event.NotifyStateClass) Put(Row, TEXT("duration"), Number(Event.GetDuration()));
+  Put(Row, TEXT("track"), String(TrackRefAt(Tracks, Event.TrackIndex).ToString()));
+  Put(Row, TEXT("class"), Item ? String(Item->GetClass()->GetPathName()) : Null());
+  Put(Row, TEXT("name"), String(Event.NotifyName.ToString()));
+  FValue ItemProperties = MakeObject({}, {});
+  if (Item && !Item->IsTemplate() && Item->IsIn(&Sequence) && !ReadProperties(*Item, ItemProperties, Diagnostics)) return false;
+  Put(Row, TEXT("properties"), MoveTemp(ItemProperties));
+  Put(Row, TEXT("trigger"), CaptureTrigger(Event));
+  Put(Row, TEXT("guid"), String(EventGuid(Event).ToString(EGuidFormats::Digits)));
+  (Event.NotifyStateClass ? States : Events).Elements.Add(MoveTemp(Row));
+ }
+ Put(Out, TEXT("notifies"), MoveTemp(Events));
+ Put(Out, TEXT("notify_states"), MoveTemp(States));
+ return true;
 }
 
 bool Capture(UAnimSequence& Sequence, FValue& Out, TArray<FAssetDocumentRuntimeDiagnostic>& Diagnostics)
@@ -948,38 +1238,10 @@ bool Capture(UAnimSequence& Sequence, FValue& Out, TArray<FAssetDocumentRuntimeD
  FValue BoneRows = Array();
  for (const FName& Bone : Bones) BoneRows.Elements.Add(String(Bone.ToString()));
  Put(Out, TEXT("bone_tracks"), MoveTemp(BoneRows));
- FValue Curves = Array();
- for (const FFloatCurve& Curve : Model->GetFloatCurves())
- {
-  FValue Keys = Array();
-  for (const FRichCurveKey& Key : Curve.FloatCurve.GetConstRefOfKeys()) Keys.Elements.Add(CaptureKey(Key));
-  Curves.Elements.Add(MakeObject({TEXT("name"), TEXT("keys"), TEXT("flags"), TEXT("color"), TEXT("default_color"), TEXT("comment")},
-   {String(Curve.GetName().ToString()), MoveTemp(Keys), Integer(Curve.GetCurveTypeFlags()), CaptureColor(Curve.GetColor()),
-    CaptureColor(FAnimCurveBase::MakeColor(Curve.GetName())), String(Curve.Comment)}));
- }
- Put(Out, TEXT("curves"), MoveTemp(Curves));
+ Put(Out, TEXT("transform_curves"), CaptureTransformCurves(*Model));
+ Put(Out, TEXT("attributes"), CaptureAttributes(*Model));
+ if (!CaptureTimeline(Sequence, *Model, Out, Diagnostics)) return false;
  const TArray<FName> Tracks = CurrentTracks(Sequence);
- FValue TrackRows = Array();
- for (const FName& Track : Tracks) TrackRows.Elements.Add(String(Track.ToString()));
- Put(Out, TEXT("notify_tracks"), MoveTemp(TrackRows));
- FValue Events = Array(), States = Array();
- for (const FAnimNotifyEvent& Event : Sequence.Notifies)
- {
-  UObject* Item = Event.NotifyStateClass ? static_cast<UObject*>(Event.NotifyStateClass) : static_cast<UObject*>(Event.Notify);
-  FValue Row = MakeObject({}, {});
-  Put(Row, TEXT("time"), Number(Event.GetTime()));
-  if (Event.NotifyStateClass) Put(Row, TEXT("duration"), Number(Event.GetDuration()));
-  Put(Row, TEXT("track"), String(TrackNameAt(Tracks, Event.TrackIndex).ToString()));
-  Put(Row, TEXT("class"), Item ? String(Item->GetClass()->GetPathName()) : Null());
-  Put(Row, TEXT("name"), String(Event.NotifyName.ToString()));
-  FValue ItemProperties = MakeObject({}, {});
-  if (Item && !Item->IsTemplate() && Item->IsIn(&Sequence) && !ReadProperties(*Item, ItemProperties, Diagnostics)) return false;
-  Put(Row, TEXT("properties"), MoveTemp(ItemProperties));
-  Put(Row, TEXT("trigger"), CaptureTrigger(Event));
-  (Event.NotifyStateClass ? States : Events).Elements.Add(MoveTemp(Row));
- }
- Put(Out, TEXT("notifies"), MoveTemp(Events));
- Put(Out, TEXT("notify_states"), MoveTemp(States));
  FValue Markers = Array();
  for (const FAnimSyncMarker& Marker : Sequence.AuthoredSyncMarkers)
  {
@@ -988,7 +1250,7 @@ bool Capture(UAnimSequence& Sequence, FValue& Out, TArray<FAssetDocumentRuntimeD
   TrackIndex = Marker.TrackIndex;
 #endif
   Markers.Elements.Add(MakeObject({TEXT("name"), TEXT("time"), TEXT("track")},
-   {String(Marker.MarkerName.ToString()), Number(Marker.Time), String(TrackNameAt(Tracks, TrackIndex).ToString())}));
+   {String(Marker.MarkerName.ToString()), Number(Marker.Time), String(TrackRefAt(Tracks, TrackIndex).ToString())}));
  }
  Put(Out, TEXT("sync_markers"), MoveTemp(Markers));
  FValue Metadata, UserData;
@@ -1009,7 +1271,8 @@ FAssetDocumentPrimitiveDescriptor MakeDescriptor(bool bEdit)
  D.Owner = EAssetDocumentPrimitiveOwner::Animation; D.ExecutionThread = EAssetDocumentExecutionThread::GameThread;
  D.Access = bEdit ? EAssetDocumentPrimitiveAccess::Mutating : EAssetDocumentPrimitiveAccess::ReadOnly;
  D.AllowedPhases = bEdit ? TArray<EAssetDocumentRuntimeRequestPhase>{EAssetDocumentRuntimeRequestPhase::Apply}
-  : TArray<EAssetDocumentRuntimeRequestPhase>{EAssetDocumentRuntimeRequestPhase::Preflight, EAssetDocumentRuntimeRequestPhase::Verify};
+  : TArray<EAssetDocumentRuntimeRequestPhase>{EAssetDocumentRuntimeRequestPhase::Preflight, EAssetDocumentRuntimeRequestPhase::Apply,
+   EAssetDocumentRuntimeRequestPhase::Verify};
  D.AllowedHandleKinds = {EAssetDocumentHandleKind::Asset};
  D.HandleArgumentSchemas = {{TEXT("asset"), EAssetDocumentHandleKind::Asset,
   bEdit ? EAssetDocumentHandleAccess::Mutable : EAssetDocumentHandleAccess::ReadOnly, true}};
@@ -1043,6 +1306,29 @@ FAssetDocumentPrimitiveDescriptor MakeDescriptor(bool bEdit)
  A.AuthorityFingerprint = TEXT("ue-5.7.4|animation|asset-authoring|snapshot-covered|") + D.PrimitiveId;
  return D;
 }
+}
+
+bool CaptureAnimationAssetTimeline(UAnimSequenceBase& Asset, FAssetDocumentRuntimeValueDto& Out,
+ TArray<FAssetDocumentRuntimeDiagnostic>& Diagnostics)
+{
+ using namespace AnimationAssetAuthoringLocal;
+ const IAnimationDataModel* Model = Asset.GetDataModel();
+ if (!Model)
+ {
+  Diagnostics.Append(Invalid(SnapshotFailed, TEXT("The asset has no animation data model.")).Diagnostics);
+  return false;
+ }
+ Out = MakeObject({}, {});
+ return CaptureTimeline(Asset, *Model, Out, Diagnostics);
+}
+
+FAssetDocumentContractValidationResult ApplyAnimationAssetTimeline(UAnimSequenceBase& Asset, const FAssetDocumentRuntimeValueDto& Intent)
+{
+ using namespace AnimationAssetAuthoringLocal;
+ FIntent Parsed;
+ auto R = ParseIntent(Intent, Parsed);
+ if (!R.bValid) return R;
+ return ApplyTimeline(Asset, Parsed);
 }
 
 FAssetDocumentPrimitiveDescriptor MakeAnimationAssetAuthoringSnapshotDescriptor() { using namespace AnimationAssetAuthoringLocal; return MakeDescriptor(false); }

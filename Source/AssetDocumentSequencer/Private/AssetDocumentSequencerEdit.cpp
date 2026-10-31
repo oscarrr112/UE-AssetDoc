@@ -16,7 +16,8 @@
 //   binding.remove {guid}                    the tree's Delete: children first, tracks, references, folder entries
 //   binding.rename {guid, name}              F2: FMovieScenePossessable::SetName + UMovieScene::SetObjectDisplayName
 //   binding.set {guid, entry}                entry: {Class?, Bind | Spawnable | CustomBinding | References} (the kind
-//                                            and its content, converting the kind when it changes) and/or {Tags}
+//                                            and its content, converting the kind when it changes) and/or {Tags},
+//                                            SpawnedBy? (the spawnable it possesses; omitted = kept, null = none)
 //   binding.order {guids}                    SortingOrder of siblings in this order (the tree's drag reorder)
 //   track.add {binding?, type, property?, name?, object?}
 //   track.remove {track} | track.set {track, entry} | track.order {tracks}
@@ -26,7 +27,9 @@
 //                                            the parameter index path) when the list is too large for one op
 //   folders.set {folders, bindings, tracks}  the whole folder tree: [{Path, Color?}], [{guid, folder}], [{track, folder}]
 //   markers.set {markers}                    the whole marked-frame list
-//   metadata.set {values}                    Author / Notes (the listed ones; "" clears)
+//   metadata.set {values}                    Author / Notes (the listed ones; "" clears); Objects [{Class, Properties?}]:
+//                                            the other metadata objects, each complete, unlisted classes removed
+//   binding_tags.set {tags}                  every binding tag {tag: [binding reference]} (untagged, then tagged in order)
 //   template.root {class}                    a Template / Camera Animation Sequence's bound actor class: a new root
 //                                            spawnable of that class with the old root's tracks and component bindings
 //                                            (the Details panel's class picker; AssetDocumentSequencerTemplateRoot.cpp)
@@ -58,6 +61,7 @@
 #include "MovieSceneFolder.h"
 #include "MovieSceneMarkedFrame.h"
 #include "MovieSceneMetaData.h"
+#include "MovieSceneObjectBindingID.h"
 #include "MovieScenePossessable.h"
 #include "MovieSceneSequence.h"
 #include "MovieSceneSpawnable.h"
@@ -892,6 +896,18 @@ bool ReadTags(FReader& Entry, const FValue& Tags, TArray<FName>& Out)
 
 namespace SequencerEditLocal
 {
+// SpawnedBy as the read shows a spawnable that no longer exists ({"Binding": "#<Id>"}, Fixed or not, the Id stored): the stored value
+// stays as it is. Any other value is decoded (a binding path must name a binding of the sequence).
+bool IsStoredDanglingSpawnedBy(FEdit& Edit, const FValue& Value, const FMovieSceneObjectBindingID& Stored)
+{
+	const FValue* Path = Value.Kind == EAssetDocumentRuntimeValueKind::Object ? FindField(Value, TEXT("Binding")) : nullptr;
+	FGuid Named;
+	FGuid Resolved;
+	return Stored.IsValid() && Path != nullptr && Path->Kind == EAssetDocumentRuntimeValueKind::String
+		&& Value.ObjectKeys.Num() == (FindField(Value, TEXT("Fixed")) != nullptr ? 2 : 1) && Path->StringValue.StartsWith(TEXT("#")) && FGuid::Parse(Path->StringValue.Mid(1), Named) && Named == Stored.GetGuid()
+		&& !ResolveBindingPath(Edit.Model(), Path->StringValue, Resolved);
+}
+
 bool OpBindingSet(FEdit& Edit, FReader& Op)
 {
 	FGuid Guid;
@@ -905,8 +921,8 @@ bool OpBindingSet(FEdit& Edit, FReader& Op)
 	{
 		return SetTemplateBinding(Edit, Op, Entry, *EntryValue, Guid);
 	}
-	if (!CheckFields(Entry, *EntryValue, {TEXT("Class"), TEXT("Bind"), TEXT("Spawnable"), TEXT("CustomBinding"), TEXT("References"), TEXT("Tags")},
-		TEXT("binding.set entry")))
+	if (!CheckFields(Entry, *EntryValue, {TEXT("Class"), TEXT("Bind"), TEXT("Spawnable"), TEXT("CustomBinding"), TEXT("References"), TEXT("SpawnedBy"),
+		TEXT("Tags")}, TEXT("binding.set entry")))
 	{
 		return false;
 	}
@@ -957,6 +973,17 @@ bool OpBindingSet(FEdit& Edit, FReader& Op)
 	else if (const FValue* Class = FindField(*EntryValue, TEXT("Class")))
 	{
 		SetPossessedClass(*Edit.MovieScene.FindPossessable(Guid), Class->StringValue);
+	}
+	if (const FValue* SpawnedBy = FindField(*EntryValue, TEXT("SpawnedBy"));
+		SpawnedBy != nullptr && !IsStoredDanglingSpawnedBy(Edit, *SpawnedBy, Edit.MovieScene.FindPossessable(Guid)->GetSpawnableObjectBindingID()))
+	{
+		FMovieSceneObjectBindingID Id;
+		FDecodeContext Context{Edit.Model(), TimeOf(Edit.MovieScene), &Edit.MovieScene, Entry, TEXT("SpawnedBy")};
+		if (!DecodeBindingId(*SpawnedBy, Id, Context))
+		{
+			return false;
+		}
+		Edit.MovieScene.FindPossessable(Guid)->SetSpawnableObjectBindingID(Id);
 	}
 	// The entry is complete: no Tags = none.
 	const FValue NoTags = MakeArray(TArray<FValue>());
@@ -1230,6 +1257,87 @@ bool OpMarkersSet(FEdit& Edit, FReader& Op)
 	return true;
 }
 
+// The metadata objects other than UMovieSceneMetaData, complete: each listed class found or added (the find-or-add
+// call) with its fields decoded against the class defaults; the classes not listed are removed.
+bool WriteMetaDataObjects(FEdit& Edit, FReader& Reader, ULevelSequence& Level, const FValue& Objects)
+{
+	if (Objects.Kind != EAssetDocumentRuntimeValueKind::Array)
+	{
+		return Reader.Fail(TEXT("Sequencer.InvalidValue"), TEXT("Objects is an array of {Class, Properties?}."), TEXT("Objects"));
+	}
+	TArray<UClass*> Listed;
+	for (int32 Index = 0; Index < Objects.Elements.Num(); ++Index)
+	{
+		const FValue& Row = Objects.Elements[Index];
+		const FString Key = FString::Printf(TEXT("Objects/%d"), Index);
+		FReader RowReader = Reader.Child(Key, Row);
+		if (!CheckFields(RowReader, Row, {TEXT("Class"), TEXT("Properties")}, TEXT("A metadata object")))
+		{
+			return false;
+		}
+		const FValue* ClassPath = FindField(Row, TEXT("Class"));
+		UClass* Class = ClassPath != nullptr && ClassPath->Kind == EAssetDocumentRuntimeValueKind::String
+			? LoadObject<UClass>(nullptr, *ClassPath->StringValue, nullptr, LOAD_NoWarn | LOAD_Quiet) : nullptr;
+		if (Class == nullptr || Class->HasAnyClassFlags(CLASS_Abstract) || Class->IsChildOf(UMovieSceneMetaData::StaticClass())
+			|| Class->IsChildOf(AActor::StaticClass()) || Class->IsChildOf(UActorComponent::StaticClass()))
+		{
+			return RowReader.Fail(TEXT("Sequencer.InvalidMetaDataClass"), TEXT("Class is a concrete metadata object class (Author and Notes are "
+				"MetaData's own fields)."), TEXT("Class"));
+		}
+		if (Listed.Contains(Class))
+		{
+			return RowReader.Fail(TEXT("Sequencer.DuplicateMetaData"), TEXT("A sequence has one metadata object per class."), TEXT("Class"));
+		}
+		Listed.Add(Class);
+		UObject* Object = Level.FindOrAddMetaDataByClass(Class);
+		Object->SetFlags(RF_Transactional);
+		Object->Modify();
+		const FValue Empty = MakeEmptyObject();
+		const FValue* Properties = FindField(Row, TEXT("Properties"));
+		FDecodeContext Context{Edit.Model(), TimeOf(Edit.MovieScene), Object, RowReader, TEXT("Properties")};
+		if (!DecodeSparseObject(*Class, Properties != nullptr ? *Properties : Empty, Object, Class->GetDefaultObject(), &IsSubobjectField, Context))
+		{
+			return false;
+		}
+		Object->PostEditChange();
+	}
+	for (const UObject* Object : MetaDataObjectsOf(Level))
+	{
+		if (Object->GetClass() != UMovieSceneMetaData::StaticClass() && !Listed.Contains(Object->GetClass()))
+		{
+			Level.RemoveMetaDataByClass(Object->GetClass());
+		}
+	}
+	return true;
+}
+
+// A tagged binding: a binding of this sequence by path ("#<Id>" also names a binding that no longer exists, as the read
+// shows a stale tag), a binding of a sub-sequence, or the raw form.
+bool DecodeTaggedBinding(FEdit& Edit, FReader& Reader, const FValue& Value, const FString& Key, UE::MovieScene::FFixedObjectBindingID& Out)
+{
+	const FValue* Path = Value.Kind == EAssetDocumentRuntimeValueKind::Object ? FindField(Value, TEXT("Binding")) : nullptr;
+	FGuid Guid;
+	if (Path != nullptr && Path->Kind == EAssetDocumentRuntimeValueKind::String && FindField(Value, TEXT("Sequence")) == nullptr
+		&& !ResolveBindingPath(Edit.Model(), Path->StringValue, Guid) && Path->StringValue.StartsWith(TEXT("#"))
+		&& FGuid::Parse(Path->StringValue.Mid(1), Guid) && Value.ObjectKeys.Num() == 1)
+	{
+		Out = UE::MovieScene::FFixedObjectBindingID(Guid, MovieSceneSequenceID::Root);
+		return true;
+	}
+	FMovieSceneObjectBindingID Id;
+	FDecodeContext Context{Edit.Model(), TimeOf(Edit.MovieScene), &Edit.MovieScene, Reader, Key};
+	if (!DecodeBindingId(Value, Id, Context))
+	{
+		return false;
+	}
+	if (!Id.IsValid())
+	{
+		return Reader.Fail(TEXT("Sequencer.InvalidValue"), TEXT("A tagged binding is {\"Binding\": \"<binding path>\"}."), Key);
+	}
+	Out = UE::MovieScene::FFixedObjectBindingID(Id.GetGuid(), Id.GetRelativeSequenceID());
+	return true;
+}
+
 bool OpMetaDataSet(FEdit& Edit, FReader& Op)
 {
 	const FValue* Values = nullptr;
@@ -1238,7 +1346,7 @@ bool OpMetaDataSet(FEdit& Edit, FReader& Op)
 		return false;
 	}
 	FReader Reader = Op.Child(TEXT("values"), *Values);
-	if (!CheckFields(Reader, *Values, {TEXT("Author"), TEXT("Notes")}, TEXT("MetaData")))
+	if (!CheckFields(Reader, *Values, {TEXT("Author"), TEXT("Notes"), TEXT("Objects")}, TEXT("MetaData")))
 	{
 		return false;
 	}
@@ -1258,7 +1366,78 @@ bool OpMetaDataSet(FEdit& Edit, FReader& Op)
 	{
 		MetaData->SetNotes(Notes->StringValue);
 	}
+	if (const FValue* Objects = FindField(*Values, TEXT("Objects")))
+	{
+		if (!WriteMetaDataObjects(Edit, Reader, *Level, *Objects))
+		{
+			return false;
+		}
+	}
 	Edit.bChanged = true;
+	return true;
+}
+
+// Binding tags as the binding tag panel writes them (UMovieScene::TagBinding / RemoveTag): a tag whose bindings
+// differ is removed and tagged again in the listed order; a tag not listed is removed.
+bool OpBindingTagsSet(FEdit& Edit, FReader& Op)
+{
+	const FValue* Tags = nullptr;
+	if (!Op.Object(TEXT("tags"), Tags))
+	{
+		return false;
+	}
+	FReader Reader = Op.Child(TEXT("tags"), *Tags);
+	TArray<TPair<FName, TArray<UE::MovieScene::FFixedObjectBindingID>>> Wanted;
+	for (int32 Index = 0; Index < Tags->ObjectKeys.Num(); ++Index)
+	{
+		const FString& Tag = Tags->ObjectKeys[Index];
+		const FValue& Rows = Tags->Elements[Index];
+		if (Tag.IsEmpty() || Rows.Kind != EAssetDocumentRuntimeValueKind::Array)
+		{
+			return Reader.Fail(TEXT("Sequencer.InvalidValue"), TEXT("BindingTags maps a tag name to the bindings it tags: {\"<tag>\": "
+				"[{\"Binding\": \"<binding path>\"}, ...]}."), Escape(Tag));
+		}
+		TArray<UE::MovieScene::FFixedObjectBindingID>& Ids = Wanted.Emplace_GetRef(FName(*Tag), TArray<UE::MovieScene::FFixedObjectBindingID>()).Value;
+		for (int32 Row = 0; Row < Rows.Elements.Num(); ++Row)
+		{
+			UE::MovieScene::FFixedObjectBindingID Id;
+			if (!DecodeTaggedBinding(Edit, Reader, Rows.Elements[Row], FString::Printf(TEXT("%s/%d"), *Escape(Tag), Row), Id))
+			{
+				return false;
+			}
+			Ids.Add(Id);
+		}
+	}
+	const TMap<FName, FMovieSceneObjectBindingIDs>& Live = Edit.MovieScene.AllTaggedBindings();
+	TArray<FName> LiveTags;
+	Live.GetKeys(LiveTags);
+	for (const FName& Tag : LiveTags)
+	{
+		if (!Wanted.ContainsByPredicate([&Tag](const TPair<FName, TArray<UE::MovieScene::FFixedObjectBindingID>>& Item) { return Item.Key == Tag; }))
+		{
+			Edit.MovieScene.RemoveTag(Tag);
+			Edit.bChanged = true;
+		}
+	}
+	for (const TPair<FName, TArray<UE::MovieScene::FFixedObjectBindingID>>& Item : Wanted)
+	{
+		TArray<FMovieSceneObjectBindingID> Ids;
+		for (const UE::MovieScene::FFixedObjectBindingID& Id : Item.Value)
+		{
+			Ids.AddUnique(FMovieSceneObjectBindingID(Id));
+		}
+		const FMovieSceneObjectBindingIDs* Have = Edit.MovieScene.AllTaggedBindings().Find(Item.Key);
+		if (Have != nullptr ? Have->IDs == Ids : Ids.IsEmpty())
+		{
+			continue;
+		}
+		Edit.MovieScene.RemoveTag(Item.Key);
+		for (const UE::MovieScene::FFixedObjectBindingID& Id : Item.Value)
+		{
+			Edit.MovieScene.TagBinding(Item.Key, Id);
+		}
+		Edit.bChanged = true;
+	}
 	return true;
 }
 
@@ -1289,6 +1468,7 @@ bool RunOp(FEdit& Edit, FReader& Op, const FString& Kind)
 	if (Kind == TEXT("director.remove")) { return OpDirectorRemove(Edit, Op); }
 	if (Kind == TEXT("section_groups.set")) { return OpSectionGroupsSet(Edit, Op); }
 	if (Kind == TEXT("groups.set")) { return OpNodeGroupsSet(Edit, Op); }
+	if (Kind == TEXT("binding_tags.set")) { return OpBindingTagsSet(Edit, Op); }
 	return Op.Fail(TEXT("Graph.InvalidArgument"), FString::Printf(TEXT("Unknown op '%s'."), *Kind), TEXT("op"));
 }
 
@@ -1306,7 +1486,8 @@ bool CheckOpFields(FReader& Op, const FValue& Value, const FString& Kind)
 		{TEXT("parameters.append"), {TEXT("track"), TEXT("section"), TEXT("entries"), TEXT("parameter")}},
 		{TEXT("folders.set"), {TEXT("folders"), TEXT("bindings"), TEXT("tracks")}}, {TEXT("markers.set"), {TEXT("markers")}},
 		{TEXT("metadata.set"), {TEXT("values")}}, {TEXT("template.root"), {TEXT("class")}}, {TEXT("director.create"), {}},
-		{TEXT("director.remove"), {}}, {TEXT("section_groups.set"), {TEXT("groups")}}, {TEXT("groups.set"), {TEXT("groups")}}};
+		{TEXT("director.remove"), {}}, {TEXT("section_groups.set"), {TEXT("groups")}}, {TEXT("groups.set"), {TEXT("groups")}},
+		{TEXT("binding_tags.set"), {TEXT("tags")}}};
 	const TArray<FString>* Allowed = Fields.Find(Kind);
 	if (Allowed == nullptr)
 	{

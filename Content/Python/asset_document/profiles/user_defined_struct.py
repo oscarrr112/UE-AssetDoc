@@ -43,6 +43,8 @@ dependents are restored.  Writes are covered by Core's package snapshot; preflig
 """
 from __future__ import annotations
 
+from asset_document import markers
+
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.meta import (
     ComparisonPolicy, DefaultPolicy, DeletePolicy, IdentityPolicy, OmissionPolicy, OrderPolicy, ProfileMeta,
@@ -121,7 +123,7 @@ def canonical_member(row, path):
     out = {"Name": types.validate_label(row.get("Name"), f"{path}/Name", "UserDefinedStruct.InvalidMemberName", "member")}
     if "RenamedFrom" in row:
         out["RenamedFrom"] = types.validate_label(row["RenamedFrom"], f"{path}/RenamedFrom",
-                                                  "UserDefinedStruct.InvalidMemberName", "member")
+                                                  "UserDefinedStruct.InvalidMemberName", "member", reference=True)
     if "Type" not in row:
         raise _error(f"{path}/Type", "Type is required, e.g. \"float\", \"struct:/Script/CoreUObject.Vector\" or "
                      "\"array:name\".", "UserDefinedStruct.InvalidMemberType")
@@ -198,7 +200,7 @@ def read_live(calls, dependents=False):
 
 def member_from_live(row):
     member = {"Name": row["name"], "Type": type_body(row["type"])}
-    if row.get("supported") and row.get("default") is not None:
+    if (row.get("supported") and row.get("default") is not None) or markers.is_marker(row.get("default")):
         member["DefaultValue"] = row["default"]
     if row.get("tooltip"):
         member["Tooltip"] = row["tooltip"]
@@ -298,7 +300,12 @@ def member_ops(body, live):
                 op["metadata"] = metadata
             if len(op) > 2:
                 ops.append((op, path))
-            if "DefaultValue" in member:
+            if "DefaultValue" in member and markers.is_marker(member["DefaultValue"]):
+                # A default the codec has no form for: kept as stored.
+                kept = row is not None and index not in retyped and markers.is_marker(row.get("default"))
+                markers.require_unchanged(f"{path}/DefaultValue", member["DefaultValue"],
+                                          row.get("default") if kept else None, PREFIX)
+            elif "DefaultValue" in member:
                 fresh = row is None or index in retyped
                 live_default = None if fresh else row.get("default")
                 if fresh or not row.get("supported") or not types.covers(member["DefaultValue"], live_default):
@@ -338,7 +345,9 @@ def apply(document, read, mutable, context):
 # ---------------------------------------------------------------------------
 def extract(target, read, context):
     live = read_live(types.TypeCalls(context, BY_ID, read, prefix=PREFIX))
-    return common.document(target, USER_STRUCT_CLASS, {}, body_from_live(live))
+    body = body_from_live(live)
+    markers.warn_all(body, PREFIX, "/Body")
+    return common.document(target, USER_STRUCT_CLASS, {}, body)
 
 
 def diff(authored, extracted, exact):

@@ -20,7 +20,8 @@ from asset_document.meta import DocumentAction
 ANIM_MONTAGE_CLASS = "/Script/Engine.AnimMontage"
 ANIM_MONTAGE_ROUTE_ID = "animation_profile"
 from asset_document.profiles import anim_montage_execution as execution
-from asset_document.profiles.anim_montage_codec import (lower_body, snapshot_to_document_parts, validate_notify_times,
+from asset_document.profiles.anim_montage_codec import (TRIGGER_DEFAULTS, judge_authored, lower_body,
+                                                         snapshot_to_document_parts, validate_notify_times,
                                                          validate_notify_tracks)
 from asset_document.profiles import anim_montage_settings as settings_codec
 
@@ -67,6 +68,7 @@ class AnimMontageProfileCandidate:
         _validate_body(document.get("Body", {}))
         DocumentCodec().validate(document)
         body = document.get("Body", {})
+        judge_authored(body)
         validate_notify_times({key: body[key] for key in ("SlotAnimTracks", "Notifies", "NotifyStates") if key in body})
         # A new Montage has one notify track (the editor's track "1") unless NotifyTracks lists its tracks.
         validate_notify_tracks(body, document.get("Action") == DocumentAction.CREATE.value)
@@ -110,6 +112,7 @@ class AnimMontageProfileCandidate:
 
     def extract(self, *, target, asset_handle, context, include_defaults=False):
         body, properties = snapshot_to_document_parts(execution.read_snapshot(context, asset_handle))
+        execution.warn_unknown_slots(context, body)
         return {"SchemaVersion": 1, "Target": _require_target(target), "Class": ANIM_MONTAGE_CLASS,
                 "Action": DocumentAction.CREATE_OR_UPDATE.value, "Definitions": {}, "Properties": properties,
                 "Body": body}
@@ -171,6 +174,10 @@ def _scoped_diff(before, after):
             _align_segment_starts(expected, actual)
         if (normalized and key in ("notifies", "notify_states") and type(actual) is list
                 and all(type(row) is dict and "object" in row for row in expected + actual)):
+            tracks = after_body.get("SlotAnimTracks") or before_body.get("SlotAnimTracks") or []
+            first = tracks[0].get("SlotName") if tracks and type(tracks[0]) is dict else None
+            _link_first_slot_as_null(expected, first)
+            _link_first_slot_as_null(actual, first)
             changes.extend(_notify_differences(canonical, expected, actual, before_body[canonical], after_body[canonical]))
             continue
         if canonical_diff(expected, actual):
@@ -215,17 +222,37 @@ def _align_segment_starts(expected: list, actual: list) -> None:
 
 
 def _notify_key(row: dict) -> tuple:
-    return (row["object"]["class"], row.get("track_index", 0))
+    identity = ("class", row["object"]["class"]) if row["object"] is not None else ("name", row["name"])
+    return (identity, row.get("track_index", 0))
+
+
+def _link_first_slot_as_null(rows: list, first) -> None:
+    """A link may name the first slot track or leave it unnamed; both are slot index 0, which the snapshot gives as
+    null."""
+    for row in rows:
+        link = row.get("link")
+        if type(link) is dict and first is not None:
+            for name in ("slot_name", "end_slot_name"):
+                if link.get(name) == first:
+                    link[name] = None
 
 
 def _notify_matches(wanted: dict, observed: dict) -> bool:
-    """One notify row as authored: the same time (and duration), track and class, and the properties the
-    document sets with the values it gives (a property it omits keeps its class default)."""
+    """One notify row as authored: the same time (and duration), track, class (or skeleton notify name) and link,
+    the trigger settings the document gives (an omitted one is not compared) and the properties it sets with the
+    values it gives (an omitted property is not compared)."""
     if _notify_key(wanted) != _notify_key(observed) or not same_number(wanted["time"], observed["time"]):
         return False
     if ("duration" in wanted) != ("duration" in observed) or (
             "duration" in wanted and not same_number(wanted["duration"], observed["duration"])):
         return False
+    if wanted["link"] != observed["link"]:
+        return False
+    live_trigger = {**TRIGGER_DEFAULTS, **observed["trigger"]}
+    if not all(same_value(value, live_trigger[name]) for name, value in wanted["trigger"].items()):
+        return False
+    if wanted["object"] is None:
+        return True
     authored = wanted["object"]["properties"]
     live = observed["object"]["properties"]
     return all(name in live and same_value(value, as_authored(value, live[name])) for name, value in authored.items())

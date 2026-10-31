@@ -45,6 +45,9 @@ WEIGHTED = ("Null", "Control")
 MODULE_KEEPS = ("Curve", "Connector")
 VARIABLE_FIELDS = (("Public", "public", False), ("ReadOnly", "read_only", False),
                    ("ExposeToCinematics", "expose", False), ("Category", "category", ""), ("Tooltip", "tooltip", ""))
+# Variable details an authored variable may omit (it keeps the rig's): key, op field.
+VARIABLE_KEPT_FLAGS = (("ExposeOnSpawn", "expose_on_spawn"), ("Private", "private"))
+VARIABLE_RANGE_FIELDS = (("SliderRange", "slider"), ("ValueRange", "value"))
 FORWARDS_SOLVE = "RigUnit_BeginExecution"
 ROOT_MODULE = "/ControlRig/Modules/Modules56/Root.Root_C"
 
@@ -165,7 +168,7 @@ def _references(entry):
     for index, item in enumerate(entry.get("Parents", []) if type(entry.get("Parents")) is list else []):
         if type(item) is dict and type(item.get("Parent")) is str:
             refs.append((f"Parents/{index}/Parent", item["Parent"]))
-    for field, inner in (("Spaces", "Space"), ("Hosts", "Space")):
+    for field, inner in (("Spaces", "Space"), ("Hosts", "Space"), ("RemovedSpaces", "Space")):
         for index, item in enumerate(entry.get(field, []) if type(entry.get(field)) is list else []):
             key = item.get(inner) if type(item) is dict else item
             if type(key) is str:
@@ -180,16 +183,19 @@ def _renamed_from(entry):
 
 def check_hierarchy(hierarchy, live_keys, mesh_keys=False):
     """Stable refusals of a Hierarchy region before any write: duplicate keys, references to elements the region
-    does not list, parents listed after their children, procedural elements. ``mesh_keys`` (a FactoryContext
+    does not list, parents listed after their children, new or edited procedural elements (``live_keys`` maps the
+    rig's element keys to their entries; a Reference element listed as the rig has it is kept). ``mesh_keys`` (a FactoryContext
     document): the rig's imported bones and curves, which it need not list (None when not imported yet: any Bone /
     Curve key passes, and the edit refuses one the rig does not have); False for other documents."""
     seen = {}
     for index, entry in enumerate(hierarchy):
         where = f"/Body/Hierarchy/{index}"
-        if entry.get("Type") == "Reference":
-            raise error(f"{where}/Type", "Reference elements are made by graph code at runtime, never authored.",
-                        "ControlRig.ProceduralElement")
         key = element_key(entry)
+        if entry.get("Type") == "Reference":
+            held = live_keys.get(key) if isinstance(live_keys, dict) else None
+            if held is None or not common.same(entry, held, exact=False):
+                raise error(f"{where}/Type", "Reference elements are made by graph code, never authored: list one as "
+                            "the rig has it (extract) or leave it out to remove it.", "ControlRig.ProceduralElement")
         if key in seen:
             raise error(f"{where}/Name", f"{key} is listed twice (also at /Body/Hierarchy/{seen[key]}).",
                         "ControlRig.DuplicateElement")
@@ -347,6 +353,19 @@ def phase_variable_details(body, live):
             if not common.same(entry.get(key, default), current.get(key, default), False):
                 op[field] = entry.get(key, default)
                 fields[field] = f"{where}/{key}"
+        for key, field in VARIABLE_KEPT_FLAGS:
+            if key in entry and entry[key] != current.get(key, False):
+                op[field] = entry[key]
+                fields[field] = f"{where}/{key}"
+        for key, prefix in VARIABLE_RANGE_FIELDS:
+            if key not in entry:
+                continue
+            for bound in ("Min", "Max"):
+                text = cr.range_text(entry[key][bound]) if bound in entry[key] else ""
+                live_bound = current.get(key, {}).get(bound)
+                if text != (cr.range_text(live_bound) if live_bound is not None else ""):
+                    op[f"{prefix}_{bound.lower()}"] = text
+                    fields[f"{prefix}_{bound.lower()}"] = f"{where}/{key}/{bound}" if bound in entry[key] else f"{where}/{key}"
         if "Default" in entry and ("Default" not in current or not common.same(entry["Default"], current["Default"], False)):
             op["default"] = entry["Default"]
         elif "Default" not in entry and "Default" in current:
@@ -398,9 +417,26 @@ def phase_element_removes(body, live, keep=None, unlisted_kept=None):
     return ops
 
 
+def components_removed(calls, removes):
+    """Warnings for the element removes that take hierarchy components with them (the document does not hold
+    components, so it cannot list them; the editor removes an element's components with it)."""
+    if not removes:
+        return []
+    grouped = cr.components_by_element(cr.read_header(calls))
+    warnings = []
+    for op in removes:
+        key = op.op.get("key")
+        if key in grouped:
+            warnings.append(RuntimeDiagnostic(
+                path="/Body/Hierarchy", code="ControlRig.ComponentsRemoved", severity=DiagnosticSeverity.WARNING,
+                message=f"{key} is removed with its hierarchy components ({', '.join(grouped[key])}): the document does "
+                        "not list components; keep the element in Hierarchy to keep them."))
+    return warnings
+
+
 def _reduced(entry):
     """What an element is added with: its first parent only, no spaces / hosts (they may name later elements)."""
-    wire = {key: value for key, value in _wire(entry).items() if key not in ("Spaces", "Hosts", "Parents")}
+    wire = {key: value for key, value in _wire(entry).items() if key not in ("Spaces", "Hosts", "RemovedSpaces", "Parents")}
     if type(entry.get("Parents")) is list and entry["Parents"]:
         wire["Parent"] = entry["Parents"][0]["Parent"]
     return wire
@@ -422,8 +458,10 @@ def phase_element_sets(body, live):
     ops = []
     for index, entry in enumerate(body["Hierarchy"]):
         wire = _wire(entry)
+        current = have.get(element_key(entry), {})
         changes = []
-        ik.value_diff("", wire, have.get(element_key(entry), {}), False, changes)
+        kept = {key: current[key] for key in cr.ELEMENT_KEEP if key not in wire and key in current}
+        ik.value_diff("", dict(wire, **kept), current, False, changes, cr.ELEMENT_DEFAULTS)
         if changes:
             ops.append(Op({"op": "element.set", "entry": wire}, f"/Body/Hierarchy/{index}",
                           nested={"entry": f"/Body/Hierarchy/{index}"}))
@@ -546,7 +584,7 @@ def apply(canonical, read, mutable, context, creating=False):
     importing = factory is not None and not any(entry.get("Type") == "Bone" for entry in live.get("Hierarchy", [])) and (
         creating or fresh(live))
     if "Hierarchy" in body:
-        check_hierarchy(body["Hierarchy"], {element_key(entry) for entry in live.get("Hierarchy", [])},
+        check_hierarchy(body["Hierarchy"], {element_key(entry): entry for entry in live.get("Hierarchy", [])},
                         None if importing else (mesh_keys(live) if factory else False))
     creating = creating or fresh(live)
     forwards_solve, conversion = plan(body, live, creating)
@@ -577,7 +615,9 @@ def apply(canonical, read, mutable, context, creating=False):
         edits.run([Op({"op": "graph.forwards_solve"}, "/Body/Graphs")])
     if conversion is not None:
         if conversion == "rig.to_module" and "Hierarchy" in body:
-            if edits.run(phase_element_removes(body, live, keep=lambda entry: not _blocks_module(entry))):
+            removes = phase_element_removes(body, live, keep=lambda entry: not _blocks_module(entry))
+            warnings.extend(components_removed(calls, removes))
+            if edits.run(removes):
                 live = read_live(calls)
         edits.run([Op({"op": conversion}, "/Body/RigType")])
         live = read_live(calls)
@@ -591,7 +631,9 @@ def apply(canonical, read, mutable, context, creating=False):
 
     if edits.run(phase_element_renames(body, live)):
         live = read_live(calls)
-    if edits.run(phase_element_removes(body, live, unlisted_kept=cr.imported_kept if factory else None)):
+    removes = phase_element_removes(body, live, unlisted_kept=cr.imported_kept if factory else None)
+    warnings.extend(components_removed(calls, removes))
+    if edits.run(removes):
         live = read_live(calls)
     if edits.run(phase_element_adds(body, live)):
         live = read_live(calls)
@@ -661,7 +703,7 @@ def preflight(canonical, read, context):
         return
     live = read_live(ik.RigCalls(context, read, prefix=cr.PREFIX))
     if "Hierarchy" in body:
-        check_hierarchy(body["Hierarchy"], {element_key(entry) for entry in live.get("Hierarchy", [])},
+        check_hierarchy(body["Hierarchy"], {element_key(entry): entry for entry in live.get("Hierarchy", [])},
                         mesh_keys(live) if factory else False)
     plan(body, live, False)
 

@@ -116,6 +116,21 @@ public:
 	/** Broadcast when a Sidecar Mirroring setting is changed in the editor. */
 	static FSimpleMulticastDelegate& OnMirrorSettingsChanged();
 
+	//~ Sidecar Files
+
+	/**
+	 * Keep sidecar files out of the editor's Auto Reimport (default: true). JSON files are import candidates, so without
+	 * this a new or changed <AssetName>.assetdoc.json under Content makes the editor offer to import it ("changes to
+	 * source content files have been detected"). On: every Auto Reimport directory that covers the Content folder (Editor
+	 * Preferences > Loading & Saving > Auto Reimport > Directories to Monitor) gets the exclude wildcards *.assetdoc.json
+	 * and *.assetdoc.asset.json; other entries are left as they are. Off: those two wildcards are removed. Takes effect at once.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Sidecar Files")
+	bool bExcludeSidecarsFromAutoReimport = true;
+
+	/** Broadcast when Exclude Sidecars From Auto Reimport is changed in the editor. */
+	static FSimpleMulticastDelegate& OnAutoReimportSettingChanged();
+
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif

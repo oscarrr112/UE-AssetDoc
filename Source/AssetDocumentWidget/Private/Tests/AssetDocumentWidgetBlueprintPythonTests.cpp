@@ -23,6 +23,9 @@
 // function) with Widget.InvalidBindingFunction at the binding, naming what differs and the fix; the right signature
 // validates and applies; an update that changes the bound function's signature is refused the same way.
 //
+// UEAssetDoc.WidgetBlueprint.AnimationGetter: a graph reads an animation the same document creates (a new Widget
+// Blueprint, and an existing one getting a second animation); re-applying changes nothing.
+//
 // UEAssetDoc.WidgetBlueprint.RawEdits checks the editor-equivalent raw
 // edits (AssetDocumentWidgetRawEdits.h) against the editor's own operations.
 
@@ -1230,6 +1233,62 @@ bool FAssetDocumentWidgetBlueprintRenameTest::RunTest(const FString& Parameters)
 	UPackageTools::UnloadPackages({Target.Get()->GetOutermost()});
 	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 	ExtractEquals(*this, Target, BackText, TEXT("after reload from disk"));
+	return !HasAnyErrors();
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentWidgetBlueprintAnimationGetterTest, "UEAssetDoc.WidgetBlueprint.AnimationGetter",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAssetDocumentWidgetBlueprintAnimationGetterTest::RunTest(const FString& Parameters)
+{
+	using namespace AssetDocumentWidgetBlueprintPythonTests;
+	const FTarget Target(TEXT("WBP_AnimationGetter"));
+	ON_SCOPE_EXIT { Target.Cleanup(); };
+	// An event plays the animation: its getter is the animation's member variable, which exists once the animation does.
+	const auto Animation = [](const TCHAR* Name)
+	{
+		return FString::Printf(TEXT(R"json({"Name":"%s","Tracks":[{"Widget":"Title","Property":"RenderOpacity","Type":"Float","Keys":[{"Frame":0,"Value":0},{"Frame":30,"Value":1}]}]})json"), Name);
+	};
+	const auto Play = [](const TCHAR* Event, const TCHAR* Name)
+	{
+		return FString::Printf(TEXT(R"json({"Id":"%s","Action":"K2:CustomEvent","Name":"%s"},{"Id":"Get%s","Action":"K2:Get:%s"},)json")
+			TEXT(R"json({"Id":"Play%s","Action":"K2:CallFunction:/Script/UMG.UserWidget:PlayAnimation"})json"), Event, Event, Name, Name, Name);
+	};
+	const auto Links = [](const TCHAR* Event, const TCHAR* Name)
+	{
+		return FString::Printf(TEXT(R"json({"From":"%s:then","To":"Play%s:execute"},{"From":"Get%s:%s","To":"Play%s:InAnimation"})json"),
+			Event, Name, Name, Name, Name);
+	};
+	const auto Body = [](const FString& Animations, const FString& Nodes, const FString& Edges)
+	{
+		return FString(TEXT(R"json("ParentClass":"/Script/UMG.UserWidget",
+"WidgetTree":{"RootWidget":{"Name":"Root","Class":"/Script/UMG.CanvasPanel","IsVariable":false,"Children":[
+  {"Name":"Title","Class":"/Script/UMG.TextBlock","IsVariable":true,"Properties":{"Text":"Hi"}}]}},)json"))
+			+ TEXT("\"Animations\":[") + Animations + TEXT("],\"UbergraphPages\":[{\"Name\":\"EventGraph\",\"Nodes\":[") + Nodes
+			+ TEXT("],\"Links\":[") + Edges + TEXT("]}]");
+	};
+
+	// A new Widget Blueprint.
+	const FString Created = Document(Target, TEXT("Create"), Body(Animation(TEXT("FloatUp")), Play(TEXT("Show"), TEXT("FloatUp")), Links(TEXT("Show"), TEXT("FloatUp"))));
+	if (!TestTrue(TEXT("create with an animation and its getter applies"), Apply(*this, Target, Created, TEXT("Create")).IsSuccess()))
+	{
+		return false;
+	}
+	TestTrue(TEXT("created Widget Blueprint compiles"), CompilesClean(Target.Get()));
+	TestNotNull(TEXT("FloatUp exists"), FindAnimation(Target.Get(), TEXT("FloatUp")));
+	const FAssetDocumentResult Again = Apply(*this, Target, Created.Replace(TEXT("\"Action\":\"Create\""), TEXT("\"Action\":\"Update\"")), TEXT("Reapply"));
+	TestTrue(TEXT("re-apply changes nothing"), Again.IsSuccess() && !Again.bSavedAsset);
+
+	// An existing Widget Blueprint gets a second animation and a getter of it.
+	const FString Updated = Document(Target, TEXT("Update"), Body(Animation(TEXT("FloatUp")) + TEXT(",") + Animation(TEXT("Pulse")),
+		Play(TEXT("Show"), TEXT("FloatUp")) + TEXT(",") + Play(TEXT("Beat"), TEXT("Pulse")),
+		Links(TEXT("Show"), TEXT("FloatUp")) + TEXT(",") + Links(TEXT("Beat"), TEXT("Pulse"))));
+	const FAssetDocumentResult Added = Apply(*this, Target, Updated, TEXT("AddAnimation"));
+	TestTrue(TEXT("adding an animation and its getter applies"), Added.IsSuccess() && Added.bSavedAsset);
+	TestTrue(TEXT("updated Widget Blueprint compiles"), CompilesClean(Target.Get()));
+	TestNotNull(TEXT("Pulse exists"), FindAnimation(Target.Get(), TEXT("Pulse")));
+	const FAssetDocumentResult AgainUpdated = Apply(*this, Target, Updated, TEXT("ReapplyUpdate"));
+	TestTrue(TEXT("re-applying the update changes nothing"), AgainUpdated.IsSuccess() && !AgainUpdated.bSavedAsset);
+	TestNoDiff(*this, Updated, TEXT("after update"));
 	return !HasAnyErrors();
 }
 #endif

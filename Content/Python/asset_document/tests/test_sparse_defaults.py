@@ -27,9 +27,11 @@ class StructAsAuthoredTests(unittest.TestCase):
         live = {"FalloffDistance": 2000, "AttenuationShape": "Sphere", "Extents": {"X": 400, "Y": 0}}
         self.assertEqual(common.struct_as_authored({"FalloffDistance": 2000}, live), {"FalloffDistance": 2000})
         self.assertEqual(common.struct_as_authored({"Extents": {"X": 1}}, live), {"Extents": {"X": 400}})
-        # Same-length arrays element by element; anything else as it is.
+        # Array elements by index; live elements past the authored array whole; anything else as it is.
         self.assertEqual(common.struct_as_authored([{"A": 1}], [{"A": 1, "B": 2}]), [{"A": 1}])
-        self.assertEqual(common.struct_as_authored([{"A": 1}], [{"A": 1}, {"A": 2}]), [{"A": 1}, {"A": 2}])
+        self.assertEqual(common.struct_as_authored([{"A": 1}], [{"A": 1, "B": 2}, {"A": 2, "B": 3}]),
+                         [{"A": 1}, {"A": 2, "B": 3}])
+        self.assertEqual(common.struct_as_authored([{"A": 1}, {"A": 3}], [{"A": 1, "B": 2}]), [{"A": 1}])
         self.assertEqual(common.struct_as_authored(1, {"A": 1}), {"A": 1})
         # A member the live value does not have stays missing (a difference).
         self.assertEqual(common.struct_as_authored({"Unknown": 1}, live), {})
@@ -81,6 +83,51 @@ class PropertiesAsAuthoredTests(unittest.TestCase):
         self.assertEqual(_paths(self._check({"Scale": 3.0})), ["/Properties/Scale"])
         self.assertEqual(_AsAuthoredAdapter.reads, [])
         self.assertEqual(_paths(self._check({"Tags": ["A"]})), ["/Properties/Tags"])
+
+
+class ItemizedArrayDifferencesTests(unittest.TestCase):
+    """An array property authored with fewer struct members than the read lists (an Input Mapping Context's
+    Mappings): adding or removing an element is that one difference, not every omitted member of the others."""
+    LIVE = {"Mappings": [
+        {"Action": "/Game/IA_Jump.IA_Jump", "Key": "SpaceBar", "Triggers": [], "Modifiers": []},
+        {"Action": "/Game/IA_Move.IA_Move", "Key": "W", "Triggers": [], "Modifiers": [{"Class": "Negate"}]}]}
+
+    def setUp(self):
+        self.saved = common.PropertySemanticAdapter
+        common.PropertySemanticAdapter = _AsAuthoredAdapter
+        _AsAuthoredAdapter.live = self.LIVE
+        _AsAuthoredAdapter.reads = []
+
+    def tearDown(self):
+        common.PropertySemanticAdapter = self.saved
+
+    def _check(self, mappings):
+        from asset_document.diff.canonical_diff import canonical_diff
+        properties = {"Mappings": mappings}
+        document = {"Class": "/Script/EnhancedInput.InputMappingContext", "Properties": properties}
+        # The generic Profile's comparison: authored (before) against the full read (after).
+        changes = canonical_diff({"Properties": properties}, {"Properties": self.LIVE})
+        self.assertGreater(len(changes), 1)
+        return common.properties_as_authored(changes, document, None, None, False)
+
+    def test_an_appended_element_is_one_difference(self):
+        jump, move = ({"Action": row["Action"], "Key": row["Key"]} for row in self.LIVE["Mappings"])
+        fire = {"Action": "/Game/IA_Fire.IA_Fire", "Key": "LeftMouseButton"}
+        changes = self._check([jump, move, fire])
+        self.assertEqual([(change.path, change.kind, change.before) for change in changes],
+                         [("/Properties/Mappings/2", DiffKind.REMOVE, fire)])
+
+    def test_a_removed_element_is_one_difference_with_its_whole_value(self):
+        jump = {"Action": self.LIVE["Mappings"][0]["Action"], "Key": "SpaceBar"}
+        changes = self._check([jump])
+        self.assertEqual([(change.path, change.kind, change.after) for change in changes],
+                         [("/Properties/Mappings/1", DiffKind.ADD, self.LIVE["Mappings"][1])])
+
+    def test_a_changed_member_of_a_kept_element_is_itemized(self):
+        jump, move = ({"Action": row["Action"], "Key": row["Key"]} for row in self.LIVE["Mappings"])
+        changes = self._check([jump, dict(move, Key="S"), {"Action": "/Game/IA_Fire.IA_Fire"}])
+        self.assertEqual([(change.path, change.kind) for change in changes],
+                         [("/Properties/Mappings/1/Key", DiffKind.REPLACE), ("/Properties/Mappings/2", DiffKind.REMOVE)])
 
 
 class PhysicsShapeDefaultsTests(unittest.TestCase):

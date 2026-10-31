@@ -6,12 +6,16 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import unittest
+from copy import deepcopy
 
 from asset_document.diagnostics import (
     AssetDocumentContractError,
     DiagnosticContext,
     DiagnosticSeverity,
     RuntimeDiagnostic,
+)
+from asset_document.regions.primitive_catalog import (
+    NamedOpaqueHandleResult, PrimitiveOutcome, PrimitiveOutcomeStatus,
 )
 from asset_document.tests.fixtures.anim_montage_cases import (
     CANONICAL_BODY_KEYS,
@@ -223,6 +227,26 @@ class AnimMontageProfileTests(unittest.TestCase):
         self.assertEqual([(d.path, d.kind.value) for d in profile.diff(document(desired), document(actual))],
                          [("/Body/Notifies/-", "Add")])
 
+    def test_skeleton_notifies_triggers_and_links_compare_like_other_rows(self):
+        from asset_document.profiles.anim_montage import AnimMontageProfileCandidate
+        profile = AnimMontageProfileCandidate()
+        actual = observed_body()
+        actual["Notifies"] = [{"Time": 0.2, "TrackIndex": 0, "Name": "Footstep", "NotifyTriggerChance": 0.5}]
+        desired = observed_body()
+        # Omitted trigger settings are not compared; a link naming the first slot track is the unnamed link.
+        desired["Notifies"] = [{"Time": 0.2, "Name": "Footstep", "SlotName": desired["SlotAnimTracks"][0]["SlotName"]}]
+        self.assertEqual(profile.diff(document(desired), document(actual)), ())
+        desired["Notifies"][0]["NotifyTriggerChance"] = 0.25
+        self.assertEqual([d.path for d in profile.diff(document(desired), document(actual))], ["/Body/Notifies/0"])
+        desired["Notifies"][0]["NotifyTriggerChance"] = 0.5
+        desired["Notifies"][0]["LinkMethod"] = 1
+        self.assertEqual([d.path for d in profile.diff(document(desired), document(actual))], ["/Body/Notifies/0"])
+        del desired["Notifies"][0]["LinkMethod"]
+        # Another skeleton notify name is another notify: the listed one is missing, the actual one is extra.
+        desired["Notifies"][0]["Name"] = "Land"
+        self.assertEqual([(d.path, d.kind.value) for d in profile.diff(document(desired), document(actual))],
+                         [("/Body/Notifies/0", "Replace"), ("/Body/Notifies/-", "Add")])
+
     def test_stale_provider_phase_access_and_class_rejections_are_preserved(self) -> None:
         profile = importlib.import_module(
             "asset_document.profiles.anim_montage"
@@ -338,6 +362,21 @@ class AnimMontageExecutionTests(unittest.TestCase):
         context = MontageContext(phase=RuntimePhase.APPLY)
         self.profile.apply(document(body), context.asset_handle, context.asset_handle, context)
         return context
+
+    def test_asset_user_data_is_written_whole_by_the_settings_primitive(self):
+        from asset_document.profiles import anim_montage_execution as execution
+        rows = [{"Class": "/Script/AssetDocumentTests.AssetDocumentTestUserData", "Properties": {"Value": 3}}]
+        value = dict(document({}), Properties={"AssetUserData": rows, "RateScale": 2})
+        _, fields, intent, _ = execution.lower_document(value)
+        self.assertEqual(fields, {"RateScale": 2})
+        self.assertEqual(intent, {"asset_user_data": rows})
+        cleared = execution.lower_document(dict(document({}), Properties={"AssetUserData": []}))
+        self.assertEqual((cleared[1], cleared[2]), ({}, {"asset_user_data": []}))
+        admitted = [{"name": "RateScale", "codec_id": "number.v1", "writable": True},
+                    {"name": "AssetUserData", "codec_id": "array.v1", "writable": True}]
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            execution.editor_rows({"AssetUserData": rows}, admitted, execution._PLAIN_PROPERTY_CODECS)
+        self.assertEqual(raised.exception.diagnostic.code, "AnimMontage.UnknownProperty")
 
     def test_sparse_omission_and_explicit_empty_remain_distinct(self):
         omitted, _ = self.preflight({})
@@ -638,9 +677,14 @@ class AnimMontageSettingsTests(unittest.TestCase):
         with self.assertRaises(AssetDocumentContractError) as caught:
             self.preflight(dict(document({}), Properties={"NotAProperty": 1}))
         self.assertEqual(caught.exception.diagnostic.code, "AnimMontage.UnknownProperty")
-        # Natively admitted references stay outside the Montage Properties region.
-        assert_error(self, "AnimMontage.UnknownProperty", "/Properties/PreviewBasePose",
-                     lambda: self.preflight(dict(document({}), Properties={"PreviewBasePose": None})))
+        # A reference a settings region shows is authored there, not in Properties.
+        for name in ("PreviewBasePose", "BlendProfileIn"):
+            assert_error(self, "AnimMontage.ManagedPropertyOverlap", f"/Properties/{name}",
+                         lambda name=name: self.preflight(dict(document({}), Properties={name: None})))
+        # Any other admitted object reference is a Properties field, set or cleared by its path.
+        for value in ("/Game/Poses/PA_Guard.PA_Guard", None):
+            plan = self.preflight(dict(document({}), Properties={"PreviewPoseAsset": value}))[0]
+            self.assertEqual(plan[0]["Intent"], {"properties": [{"name": "PreviewPoseAsset", "value": value}]})
         # A new Montage starts with the native default curve name, which may stay.
         created = self.preflight(document({"Skeleton": "/Game/SK", "Curves": curves, "Blend": {"BlendInTime": 0.1},
             "TimeStretch": {"TimeStretchCurveName": "MontageTimeStretchCurve"}}), exists=False)[0]
@@ -668,6 +712,11 @@ class AnimMontageSettingsTests(unittest.TestCase):
         regions, properties = settings_snapshot_to_body(native_settings())
         self.assertEqual(regions, observed_settings_body())
         self.assertEqual(properties, {"RateScale": 1.5, "bLoop": False})
+        # A reference a settings region shows is not repeated in Properties; another one is listed.
+        native = native_settings()
+        native["properties"].update({"PreviewBasePose": None, "PreviewPoseAsset": "/Game/Poses/PA_Guard.PA_Guard"})
+        self.assertEqual(settings_snapshot_to_body(native)[1],
+                         {"RateScale": 1.5, "bLoop": False, "PreviewPoseAsset": "/Game/Poses/PA_Guard.PA_Guard"})
 
 
 class AnimMontageTimelineAuthoringTests(unittest.TestCase):
@@ -741,6 +790,198 @@ class AnimMontageTimelineAuthoringTests(unittest.TestCase):
         gap = [{"SlotName": "DefaultSlot", "Segments": [self.segment(0.0, 0.666, 0.595), self.segment(1.1194, 0.5)]}]
         self.assertEqual([d.path for d in self.profile.diff(document({"SlotAnimTracks": gap}), document(observed))],
                          ["/Body/SlotAnimTracks"])
+
+
+MISSING_MESH = "/Game/Animation/SK_Gone.SK_Gone"
+
+
+def anomalous_snapshot():
+    """A Montage the editor made and then lost parts of: its preview mesh does not load, a segment's animation was
+    deleted, a track sits on a slot the Skeleton no longer has, and a section is linked to a removed track."""
+    from asset_document.tests.fixtures.anim_montage_cases import native_snapshot
+    snapshot = native_snapshot()
+    snapshot["preview_mesh"] = MISSING_MESH
+    snapshot["slots"][0]["segments"].append({
+        "animation": None, "start": 1.0, "source_start": 0.0, "source_end": 0.5, "rate": 1.0, "loops": 1,
+        "previous_slot": "DefaultSlot", "previous_segment": 1})
+    snapshot["slots"].append({"name": "Removed", "segments": [{
+        "animation": "/Game/Animation/AS_Attack.AS_Attack", "start": 0.0, "source_start": 0.0, "source_end": 1.0,
+        "rate": 1.0, "loops": 1, "previous_slot": "Removed", "previous_segment": 0}]})
+    snapshot["sections"].append({"name": "Late", "next": "None", "time": 1.25, "slot_name": "DefaultSlot", "method": 0})
+    snapshot["read_facts"] = [{"fact": "preview_mesh_unresolved"}, {"fact": "section_slot_missing", "section": 1, "slot": 4}]
+    return snapshot
+
+
+class AnomalousMontageContext(MontageContext):
+    """The montage double with the anomalous snapshot, a mesh that does not resolve and a Skeleton without "Removed"."""
+    skeleton_slots = ("DefaultSlot", "UpperBody")
+
+    def invoke(self, *, requirement, value_arguments, handle_arguments):
+        outcome = super().invoke(requirement=requirement, value_arguments=value_arguments, handle_arguments=handle_arguments)
+        primitive = requirement.primitive_id
+        if primitive == "animation.montage.profile.snapshot.v1":
+            return PrimitiveOutcome(PrimitiveOutcomeStatus.SUCCEEDED, anomalous_snapshot(), (), (), ())
+        if primitive == "editor.asset.resolve_existing.v1" and value_arguments["path"] == MISSING_MESH:
+            return PrimitiveOutcome(PrimitiveOutcomeStatus.SUCCEEDED, {"exists": False},
+                                    tuple(NamedOpaqueHandleResult(name, ()) for name in ("asset_read", "asset_mutable")),
+                                    (), ())
+        return outcome
+
+
+class AnimMontageTolerantReadTests(unittest.TestCase):
+    """Editor-made anomalies read with warnings, re-apply unchanged and take other edits; new ones are refused."""
+
+    def setUp(self):
+        from asset_document.profiles.anim_montage import AnimMontageProfileCandidate
+        self.profile = AnimMontageProfileCandidate()
+
+    def extract(self):
+        from asset_document.diagnostics import collecting_read_warnings
+        from asset_document.dto import RuntimePhase
+        from asset_document.read_only_extract import extract_document
+        context = AnomalousMontageContext(phase=RuntimePhase.VERIFY)
+        with collecting_read_warnings() as warnings:
+            extracted = extract_document(TARGET, lambda: self.profile.extract(
+                target=TARGET, asset_handle=context.asset_handle, context=context), self.profile.canonicalize,
+                read_only=True)
+        return extracted, {(item.code, item.path) for item in warnings}
+
+    def preflight(self, value):
+        context = AnomalousMontageContext()
+        return self.profile.preflight(value, context.asset_handle, context), context
+
+    def apply(self, value):
+        from asset_document.dto import RuntimePhase
+        context = AnomalousMontageContext(phase=RuntimePhase.APPLY)
+        self.profile.apply(value, context.asset_handle, context.asset_handle, context)
+        return context
+
+    def test_extract_reads_the_anomalies_with_warnings(self):
+        extracted, warnings = self.extract()
+        body = extracted["Body"]
+        self.assertEqual(body["PreviewMesh"], MISSING_MESH)
+        self.assertIsNone(body["SlotAnimTracks"][0]["Segments"][1]["AnimReference"])
+        self.assertEqual(body["SlotAnimTracks"][1]["SlotName"], "Removed")
+        self.assertEqual(warnings, {
+            ("AnimMontage.MissingReference", "/Body/PreviewMesh"),
+            ("AnimMontage.MissingReference", "/Body/SlotAnimTracks/0/Segments/1/AnimReference"),
+            ("AnimMontage.UnknownSlot", "/Body/SlotAnimTracks/1/SlotName"),
+            ("AnimMontage.UnknownSectionSlot", "/Body/CompositeSections/1/SlotName")})
+        # The snapshot facts never reach the document.
+        self.assertNotIn("read_facts", str(extracted))
+
+    def test_a_slot_track_named_none_reads_with_a_warning(self):
+        from asset_document.diagnostics import collecting_read_warnings
+        from asset_document.profiles.anim_montage_codec import snapshot_to_document_parts
+        from asset_document.tests.fixtures.anim_montage_cases import native_snapshot
+        from asset_document.tolerance import reading_live
+        snapshot = native_snapshot()
+        snapshot["slots"].append({"name": "None", "segments": []})
+        with collecting_read_warnings() as warnings, reading_live():
+            body = snapshot_to_document_parts(snapshot)[0]
+            self.profile.canonicalize(document(body))
+        self.assertEqual(body["SlotAnimTracks"][1]["SlotName"], "None")
+        self.assertEqual([(item.code, item.path) for item in warnings],
+                         [("AnimMontage.InvalidSlotName", "/Body/SlotAnimTracks/1/SlotName")])
+        # Outside a read the rule refuses, as for any new input.
+        assert_error(self, "AnimMontage.InvalidSlotName", "/Body/SlotAnimTracks/1/SlotName",
+                     lambda: self.profile.canonicalize(document(body)))
+
+    def test_two_tracks_on_one_slot_read_with_a_warning_and_are_kept_unchanged(self):
+        from asset_document.diagnostics import collecting_read_warnings
+        from asset_document.profiles import anim_montage_execution as execution
+        from asset_document.profiles.anim_montage_codec import lower_body, snapshot_to_document_parts
+        from asset_document.tests.fixtures.anim_montage_cases import native_snapshot
+        from asset_document.tolerance import reading_live
+        snapshot = native_snapshot()
+        snapshot["slots"].append(deepcopy(snapshot["slots"][0]))
+        with collecting_read_warnings() as warnings, reading_live():
+            body = snapshot_to_document_parts(snapshot)[0]
+            self.profile.canonicalize(document(body))
+        self.assertEqual([track["SlotName"] for track in body["SlotAnimTracks"]], ["DefaultSlot", "DefaultSlot"])
+        self.assertEqual([(item.code, item.path) for item in warnings],
+                         [("AnimMontage.DuplicateSlot", "/Body/SlotAnimTracks/1/SlotName")])
+        assert_error(self, "AnimMontage.DuplicateSlot", "/Body/SlotAnimTracks/1/SlotName",
+                     lambda: self.profile.canonicalize(document(body)))
+        # Unchanged, the slot tracks are not written; changed, the write is refused at the second track.
+        with tolerance_settled():
+            lowered = lower_body({"SlotAnimTracks": body["SlotAnimTracks"]})
+            kept = execution.keep_unchanged_anomalies(None, lowered, snapshot)
+            self.assertNotIn("slots", kept)
+            changed = deepcopy(body["SlotAnimTracks"])
+            changed[0]["Segments"][0]["AnimPlayRate"] = 2.0
+            assert_error(self, "AnimMontage.DuplicateSlot", "/Body/SlotAnimTracks/1/SlotName",
+                         lambda: execution.keep_unchanged_anomalies(None, lower_body({"SlotAnimTracks": changed}),
+                                                                    snapshot))
+
+    def test_unchanged_anomalies_settle_and_new_ones_are_refused(self):
+        from asset_document import tolerance
+        extracted, _ = self.extract()
+        with tolerance.authoring() as findings:
+            self.profile.canonicalize(extracted)
+        tolerance.settle(findings, extracted, extracted)
+        edited = deepcopy(extracted)
+        edited["Body"]["SlotAnimTracks"][0]["Segments"].append(dict(edited["Body"]["SlotAnimTracks"][0]["Segments"][1],
+                                                                    StartPos=1.5))
+        with tolerance.authoring() as findings:
+            self.profile.canonicalize(edited)
+        assert_error(self, "AnimMontage.MissingReference", "/Body/SlotAnimTracks/0/Segments/2/AnimReference",
+                     lambda: tolerance.settle(findings, edited, extracted))
+
+    def test_another_edit_keeps_what_no_write_can_carry(self):
+        extracted, _ = self.extract()
+        extracted["Body"]["CompositeSections"][0]["LinkableTime"] = 0.5
+        with tolerance_settled():
+            plan, context = self.preflight(extracted)
+        steps = {step["PrimitiveId"]: step["Intent"] for step in plan}
+        self.assertNotIn("animation.asset.preview_mesh.set.v1", steps)
+        structure = steps["animation.montage.notifies.replace.v1"]["structure"]
+        self.assertEqual(list(structure), ["sections"])
+        self.assertEqual(structure["sections"][0]["time"], 0.5)
+        # The existing track on the removed slot is not judged again.
+        self.assertNotIn("animation_asset.skeleton.read.v1", context.calls)
+        with tolerance_settled():
+            applied = self.apply(extracted)
+        self.assertEqual([primitive for primitive in applied.calls if primitive.startswith("animation.")],
+                         [step["PrimitiveId"] for step in plan])
+
+    def test_new_values_of_the_same_kind_are_refused(self):
+        extracted, _ = self.extract()
+        mesh = deepcopy(extracted)
+        mesh["Body"]["PreviewMesh"] = "/Game/Animation/SK_Other"
+        missing = AnomalousMontageContext()
+        missing.invoke = _resolving_nothing(missing, "/Game/Animation/SK_Other.SK_Other")
+        with tolerance_settled():
+            assert_error(self, "AnimMontage.MissingReference", "/Body/PreviewMesh",
+                         lambda: self.profile.preflight(mesh, missing.asset_handle, missing))
+        slots = deepcopy(extracted)
+        slots["Body"]["SlotAnimTracks"][0]["Segments"][0]["AnimPlayRate"] = 2.0
+        with tolerance_settled():
+            assert_error(self, "AnimMontage.MissingReference", "/Body/SlotAnimTracks/0/Segments/1/AnimReference",
+                         lambda: self.preflight(slots))
+        renamed = deepcopy(extracted)
+        renamed["Body"]["SlotAnimTracks"][1]["SlotName"] = "Gone"
+        with tolerance_settled():
+            assert_error(self, "AnimMontage.UnknownSlot", "/Body/SlotAnimTracks/1/SlotName", lambda: self.preflight(renamed))
+
+
+def tolerance_settled():
+    from asset_document import tolerance
+    return tolerance.settled()
+
+
+def _resolving_nothing(context, path):
+    """``context.invoke`` with ``path`` resolving to no asset."""
+    original = context.invoke
+
+    def invoke(*, requirement, value_arguments, handle_arguments):
+        if requirement.primitive_id == "editor.asset.resolve_existing.v1" and value_arguments["path"] == path:
+            context.calls.append(requirement.primitive_id)
+            return PrimitiveOutcome(PrimitiveOutcomeStatus.SUCCEEDED, {"exists": False},
+                                    tuple(NamedOpaqueHandleResult(name, ()) for name in ("asset_read", "asset_mutable")),
+                                    (), ())
+        return original(requirement=requirement, value_arguments=value_arguments, handle_arguments=handle_arguments)
+    return invoke
 
 
 if __name__ == "__main__":

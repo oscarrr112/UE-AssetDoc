@@ -458,7 +458,8 @@ FAssetDocumentContractValidationResult RecompleteGraphInstallInverse(UBehaviorTr
   return Result;
  }
  FAssetDocumentAIBehaviorTreeSemanticRuntimeMirrorResult Out;
- return CompleteMirror(Tree,*Graph,Out);
+ // A root without a child may still hold detached branches.
+ return CompleteMirror(Tree,*Graph,Out,true,true);
 }
 FAssetDocumentContractValidationResult CaptureAndRegisterInstalledReplacementCompletion(UBehaviorTree& Tree, IAssetDocumentAtomicTransaction& Transaction)
 {
@@ -479,7 +480,7 @@ FAssetDocumentContractValidationResult CaptureAndRegisterInstalledReplacementCom
  {
   auto R=CaptureValueOr(Tree,Values,EProjectionVersion::V2); if (!R.bValid) return R;
   R=Gather(Tree,*Graph,Decorators,EProjectionVersion::V2); if (!R.bValid) return R;
-  R=ValidateMirror(Tree,*Graph); if (!R.bValid) return R;
+  R=ValidateMirror(Tree,*Graph,true); if (!R.bValid) return R;
   if (!Tree.BlackboardAsset && (Values.Leaves.ContainsByPredicate([](const auto& Leaf){return !Leaf.Key.IsNone();}) || !Decorators.Decorators.IsEmpty()))
    return Fail(TEXT("AIProvider.BehaviorTree.GraphInstallPreimageMismatch"),TEXT("The old graph requires a Blackboard for recompletion."));
   Digest=Values.SemanticAuthoredDigest;

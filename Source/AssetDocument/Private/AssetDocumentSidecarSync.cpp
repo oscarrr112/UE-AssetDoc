@@ -15,9 +15,11 @@
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
+#include "Misc/SecureHash.h"
 #include "Runtime/AssetDocumentRuntimeTypes.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 #include "UObject/Package.h"
 #include "UObject/UObjectGlobals.h"
 
@@ -345,6 +347,48 @@ void FAssetDocumentSidecarSync::SetStepHookForTest(TFunction<void(const FString&
 	SidecarSyncLocal::GStepHook = MoveTemp(Hook);
 }
 
+FString FAssetDocumentSidecarSync::GetInFlightApplyPath(const FString& PackageName)
+{
+	const FString Key = FAssetDocumentSidecarSyncIndex::MakeKey(PackageName);
+	return FPaths::Combine(FPaths::GetPath(FAssetDocumentSidecarSyncIndex::GetDefaultFilePath()), TEXT("InFlight"),
+		FMD5::HashAnsiString(*Key) + TEXT(".json"));
+}
+
+FString FAssetDocumentSidecarSync::FindInFlightApply(const FString& PackageName)
+{
+	FString Text;
+	if (!FFileHelper::LoadFileToString(Text, *GetInFlightApplyPath(PackageName)))
+	{
+		return FString();
+	}
+	const TSharedPtr<FJsonObject> Record = SidecarSyncLocal::ParseObject(Text);
+	FString Package;
+	FString Digest;
+	if (!Record.IsValid() || !Record->TryGetStringField(TEXT("package"), Package) || !Record->TryGetStringField(TEXT("digest"), Digest)
+		|| FAssetDocumentSidecarSyncIndex::MakeKey(Package) != FAssetDocumentSidecarSyncIndex::MakeKey(PackageName))
+	{
+		return FString();
+	}
+	return Digest;
+}
+
+bool FAssetDocumentSidecarSync::BeginInFlightApply(const FString& PackageName, const FString& SidecarPath, const FString& Digest)
+{
+	const TSharedRef<FJsonObject> Record = MakeShared<FJsonObject>();
+	Record->SetStringField(TEXT("package"), UE::AssetDocument::SidecarSync::ToPackageName(PackageName));
+	Record->SetStringField(TEXT("sidecar"), SidecarPath);
+	Record->SetStringField(TEXT("digest"), Digest);
+	Record->SetStringField(TEXT("started_utc"), FDateTime::UtcNow().ToIso8601());
+	FString Text;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Text);
+	return FJsonSerializer::Serialize(Record, Writer) && FFileHelper::SaveStringToFile(Text, *GetInFlightApplyPath(PackageName));
+}
+
+void FAssetDocumentSidecarSync::EndInFlightApply(const FString& PackageName)
+{
+	IFileManager::Get().Delete(*GetInFlightApplyPath(PackageName), false, true, true);
+}
+
 void FAssetDocumentSidecarSync::RecordIndex(const FAssetDocumentSidecarSyncOutcome& Outcome)
 {
 	using namespace UE::AssetDocument::SidecarSync;
@@ -515,13 +559,30 @@ FAssetDocumentSidecarSyncOutcome FAssetDocumentSidecarSync::Sync(const FAssetDoc
 		{
 			return false;
 		}
+		const bool bExplicit = Request.Trigger == EAssetDocumentSidecarSyncTrigger::Explicit;
+		if (!bExplicit && !ExpectedDigest.IsEmpty() && FindInFlightApply(PackageName) == ExpectedDigest)
+		{
+			Outcome.State = TEXT("failed");
+			Outcome.Code = InterruptedApplyCode;
+			Outcome.Message = TEXT("Applying this sidecar content did not finish in an earlier editor session (the editor crashed or was closed "
+				"during the apply), so it is not applied again on its own. Change the sidecar to apply new content, or apply this "
+				"content with apply_asset_document_file to try it again.");
+			Notice(FailedNotice, Outcome.Code, Outcome.Message, true);
+			return false;
+		}
 		const uint64 WritesBefore = FAssetDocumentEditorSync::GetSidecarWriteSerial();
 		FAssetDocumentApplyFileRequest Apply;
 		Apply.FilePath = Outcome.SidecarPath;
 		Apply.bSaveAsset = true;
 		Apply.bTriggeredByWatcher = bWatcher;
 		Apply.bBypassSidecarSync = true;
+		if (!BeginInFlightApply(PackageName, Outcome.SidecarPath, ExpectedDigest))
+		{
+			UE_LOG(LogAssetDocument, Warning, TEXT("AssetDocument sidecar sync of %s: could not record the apply in %s"), *PackageName,
+				*GetInFlightApplyPath(PackageName));
+		}
 		Outcome.Apply = Service.ApplyFile(Apply);
+		EndInFlightApply(PackageName);
 		if (!Outcome.Apply->IsSuccess())
 		{
 			Outcome.State = TEXT("failed");

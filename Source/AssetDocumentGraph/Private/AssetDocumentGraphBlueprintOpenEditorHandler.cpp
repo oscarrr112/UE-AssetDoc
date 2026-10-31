@@ -37,6 +37,25 @@ void CollectShownGraphs(const TSharedRef<SWidget>& Widget, TArray<UEdGraph*>& Ou
 	}
 }
 
+// The Blueprint editor open on Blueprint, or null.
+FBlueprintEditor* FindBlueprintEditor(const UBlueprint& Blueprint)
+{
+	UAssetEditorSubsystem* Editors = GEditor != nullptr ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr;
+	IAssetEditorInstance* Instance = Editors != nullptr ? Editors->FindEditorForAsset(const_cast<UBlueprint*>(&Blueprint), false) : nullptr;
+	if (Instance == nullptr)
+	{
+		return nullptr;
+	}
+	// The editor of a Blueprint asset is an asset editor toolkit (as FBlueprintEditorUtils::GetIBlueprintEditorForObject assumes).
+	FAssetEditorToolkit* Toolkit = static_cast<FAssetEditorToolkit*>(Instance);
+	if (!Toolkit->IsBlueprintEditor())
+	{
+		return nullptr;
+	}
+	FBlueprintEditor* Editor = static_cast<FBlueprintEditor*>(Toolkit);
+	return Editor->GetBlueprintObj() == &Blueprint ? Editor : nullptr;
+}
+
 class FBlueprintOpenEditorHandler final : public IAssetDocumentOpenEditorHandler
 {
 public:
@@ -68,21 +87,9 @@ public:
 
 	virtual void RefreshOpenEditor(UObject& Asset, bool bSucceeded) const override
 	{
-		UAssetEditorSubsystem* Editors = GEditor != nullptr ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr;
-		IAssetEditorInstance* Instance = Editors != nullptr ? Editors->FindEditorForAsset(&Asset, false) : nullptr;
-		if (Instance == nullptr)
-		{
-			return;
-		}
-		// The editor of a Blueprint asset is an asset editor toolkit (as FBlueprintEditorUtils::GetIBlueprintEditorForObject assumes).
-		FAssetEditorToolkit* Toolkit = static_cast<FAssetEditorToolkit*>(Instance);
-		if (!Toolkit->IsBlueprintEditor())
-		{
-			return;
-		}
-		FBlueprintEditor* Editor = static_cast<FBlueprintEditor*>(Toolkit);
 		UBlueprint& Blueprint = *CastChecked<UBlueprint>(&Asset);
-		if (Editor->GetBlueprintObj() != &Blueprint)
+		FBlueprintEditor* Editor = FindBlueprintEditor(Blueprint);
+		if (Editor == nullptr)
 		{
 			return;
 		}
@@ -115,5 +122,13 @@ public:
 TSharedRef<IAssetDocumentOpenEditorHandler> MakeBlueprintOpenEditorHandler()
 {
 	return MakeShared<BlueprintOpenEditorHandling::FBlueprintOpenEditorHandler>();
+}
+
+void ClearOpenEditorGraphSelection(const UBlueprint& Blueprint)
+{
+	if (FBlueprintEditor* Editor = BlueprintOpenEditorHandling::FindBlueprintEditor(Blueprint))
+	{
+		Editor->ClearSelectionStateFor(FBlueprintEditor::SelectionState_Graph);
+	}
 }
 } // namespace UE::AssetDocument::Graph

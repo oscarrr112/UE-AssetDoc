@@ -525,13 +525,35 @@ bool AddTest(FEditContext& Context, FReader& Op, FString& OutName)
 	return true;
 }
 
+// A test node whose class does not load (no instance), by its key (its graph node's name).
+UAIGraphNode* FindTestNodeWithoutInstance(const UEdGraph& Graph, FStringView Name)
+{
+	for (UAIGraphNode* Option : GetOptionNodes(Graph))
+	{
+		for (UAIGraphNode* Sub : Option->SubNodes)
+		{
+			if (Sub != nullptr && Sub->NodeInstance == nullptr && FStringView(NodeKey(*Sub)).Equals(Name, ESearchCase::IgnoreCase))
+			{
+				return Sub;
+			}
+		}
+	}
+	return nullptr;
+}
+
 bool Remove(FEditContext& Context, FReader& Op)
 {
 	if (!Op.OnlyFields({TEXT("op"), TEXT("name")}))
 	{
 		return false;
 	}
-	UEdGraphNode* Node = RequireNode(Context, Op, false);
+	FString Name;
+	Op.String(TEXT("name"), Name, false);
+	UEdGraphNode* Node = FindTestNodeWithoutInstance(Context.Graph, Name);
+	if (Node == nullptr)
+	{
+		Node = RequireNode(Context, Op, false);
+	}
 	if (Node == nullptr)
 	{
 		return false;
@@ -874,8 +896,33 @@ bool HandleFinalize(FCall& Call, FObjectBuilder& Result)
 	}
 	LinkParents(*Graph);
 	Query->Modify();
+	// Initialize's SpawnMissingNodes takes the test nodes whose class does not load (no instance) out of the options
+	// with a generator; the query keeps such a test as it is, so it goes back to its place afterwards.
+	TArray<TTuple<UAIGraphNode*, int32, UAIGraphNode*>> TestsWithoutClass;
+	for (UAIGraphNode* Option : GetOptionNodes(*Graph))
+	{
+		for (int32 Index = 0; Index < Option->SubNodes.Num(); ++Index)
+		{
+			UAIGraphNode* Sub = Option->SubNodes[Index];
+			if (Sub != nullptr && Sub->NodeInstance == nullptr)
+			{
+				TestsWithoutClass.Emplace(Option, Index, Sub);
+			}
+		}
+	}
 	// The graph tab's Initialize (also what Save leaves): SpawnMissingNodes, CalculateAllWeights, UpdateAsset.
 	Graph->Initialize();
+	for (const TTuple<UAIGraphNode*, int32, UAIGraphNode*>& Entry : TestsWithoutClass)
+	{
+		UAIGraphNode* Option = Entry.Get<0>();
+		UAIGraphNode* Sub = Entry.Get<2>();
+		if (!Option->SubNodes.Contains(Sub))
+		{
+			Option->Modify();
+			Option->InsertSubNodeAt(Sub, FMath::Min(Entry.Get<1>(), Option->SubNodes.Num()));
+			Sub->ParentNode = Option;
+		}
+	}
 	// Every option / test node carries its key (nodes the editor added keep their instance's name as key), so the
 	// editor's Undo / Redo, which renames instances, leaves the keys alone.
 	{

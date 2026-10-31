@@ -282,6 +282,19 @@ bool HasExactInitializedClosure(
 		}
 		return true;
 	}
+	if (UE::AssetDocumentAI::BehaviorTreeAuthoredReadback::IsMissingClassNode(Node))
+	{
+		// No instance reads the Blackboard; only the nodes attached to it need the exact closure.
+		for (const UAIGraphNode* SubNode : Node.SubNodes)
+		{
+			if (SubNode == nullptr
+				|| !HasExactInitializedClosure(*SubNode, Tree, Blackboard, bCompositeIdentityChecked))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
 	if (Node.NodeInstance == nullptr)
 	{
 		return false;

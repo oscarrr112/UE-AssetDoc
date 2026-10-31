@@ -31,14 +31,18 @@
 //      to{type, state}, priority, delay, delay_duration, delay_variance, enabled, delegate}]}
 //     {kind: node, list, state, transition, index, id, node_id, type, instance_type, name, enabled?,
 //      considered?, considered_editable?, evaluation_mode?, indent, operand, node{}, node_defaults[],
-//      node_reset{}, instance{}, instance_defaults[], instance_reset{}, unsupported[]} (*_reset: the default of
-//      each value that differs from it)
+//      node_reset{}, instance{}, instance_defaults[], instance_reset{}, unsupported[], node_marked[],
+//      instance_marked[]} (*_reset: the default of each value that differs from it; *_marked: the values not at
+//      their default that the codec cannot encode)
 //     {kind: binding, source{struct, path}, target{struct, path}, output, function?{id, node_id, type,
-//      instance{}, instance_defaults[], node{}, node_defaults[]}}
+//      instance{}, instance_defaults[], unsupported[], instance_marked[]}}
+//     {kind: part, field, values{} | name + items[]}: a record over the page budget is followed by parts holding
+//      the members of its object fields (a list member over the budget in slices); the reader folds them back.
 //   ai.state_tree.edit.v1    {ops[]} (one editor transaction per call) -> {ops}:
 //     {op: schema, values{}} | {op: tree, global_tasks_completion} |
 //     {op: parameters, state?, props[{id, name, type{pin type}, value?}]} |
-//     {op: parameter_values, state, values{}} (linked states: the overridden values) |
+//     {op: parameter_values, state, values{}, kept[]?} (linked states: the overridden values; kept: overridden
+//      names whose current value stays) |
 //     {op: hierarchy, subtrees[{id, name, children[...]}]} |
 //     {op: state, id, name?, description?, tag?, type?, selection?, tasks_completion?, enabled?, weight?,
 //      tick_rate? (number | null), check_prerequisites?, enter_event? ({tag, payload, consume} | null),
@@ -548,6 +552,29 @@ FValue EncodeValues(const UStruct& Type, const void* Memory, const void* Default
 		Values.Add(Property->GetAuthoredName(), MoveTemp(Value));
 	}
 	return Values.Build();
+}
+
+TArray<FString> MarkedValues(const UStruct& Type, const void* Memory, const void* DefaultMemory, EValueOwner Owner)
+{
+	TArray<FString> Out;
+	for (TFieldIterator<FProperty> It(&Type); It; ++It)
+	{
+		FProperty* Property = *It;
+		if (!IsAuthoredProperty(*Property, Owner)
+			|| (DefaultMemory != nullptr && Property->Identical_InContainer(Memory, DefaultMemory, 0, PPF_None)))
+		{
+			continue;
+		}
+		FString CodecId;
+		FValue Value;
+		FString Code;
+		if (!EditorPropertyValueCodec::Inspect(*Property, CodecId)
+			|| !EditorPropertyValueCodec::Encode(*Property, Property->ContainerPtrToValuePtr<void>(Memory), Value, Code))
+		{
+			Out.Add(Property->GetAuthoredName());
+		}
+	}
+	return Out;
 }
 
 FValue EncodeChangedDefaults(const UStruct& Type, const void* Memory, const void* DefaultMemory, EValueOwner Owner)

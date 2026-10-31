@@ -176,10 +176,10 @@ class GraphNodeTests(unittest.TestCase):
         report = execute(context, [{"Id": "Begin", "Action": "K2:BeginPlay"}, self.ASSIGN_NODE, self.EVENT_NODE],
                          self.LINKS)
         self.assertEqual(context.custom_events(), ["OnDied_Event"])
-        # BeginPlay reuses the ghost event; the adopted event is only placed (laid out with the others once
-        # the graph holds them all).
-        self.assertEqual(mutations(context), ["graph.node.spawn.v1", "graph.pin.connect.v1"]
-                         + ["graph.node.layout.set.v1"] * 3 + ["graph.finalize.v1"])
+        # BeginPlay reuses the ghost event and the unlisted ghost Overlap and Tick are removed; the adopted
+        # event is only placed (laid out with the new Assign once the graph holds them all).
+        self.assertEqual(mutations(context), ["graph.node.remove.v1"] * 2 + ["graph.node.spawn.v1", "graph.pin.connect.v1"]
+                         + ["graph.node.layout.set.v1"] * 2 + ["graph.finalize.v1"])
         self.assertEqual(context.calls_of("graph.node.spawn.v1")[0]["action_key"], ASSIGN)
         self.assertIn(("UbergraphPages/EventGraph", "Ev"), report.node_bindings)
 

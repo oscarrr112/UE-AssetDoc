@@ -14,8 +14,11 @@ Semantics (MCP/schemas/assetdocument/Niagara.md):
   ``DisplayName`` / ``Note`` omitted = none, ``Inputs`` complete (omitted = reset to default).
 * Set Parameters modules (``Assign``) get editor-made names (``SetVariables_<guid>``): an entry whose ``Name`` the
   graph does not have pairs with the stack's next unpaired Set Parameters module, in order.
-* ``EventHandlers`` match by position (deleted from the end, added at the end), ``SimulationStages`` by ``Name``
-  (a different ``Class`` replaces the stage).
+* ``EventHandlers`` match by position (deleted from the end, added at the end).  ``SimulationStages`` pair by
+  ``Name`` and ``Class`` (names may repeat), then the rest by ``RenamedFrom`` (a rename: the stage keeps its modules
+  and settings); among several candidates the stage holding the entry's modules is taken, else the first.  An entry
+  that pairs with no stage is a new stage (class defaults, no modules of the stage it may replace).  A different
+  ``Class`` replaces the stage.  Stage ops address stages by position.
 * Scratch pad modules and dynamic inputs (``Script: "ScratchPad:<name>"``: the system's scratch pad of that name,
   else the emitter's) are added, moved, deleted and set like any other module (they have no ``Version``).
 
@@ -24,6 +27,7 @@ their settings and inputs, in the next pass.
 """
 from __future__ import annotations
 
+from asset_document import markers
 from asset_document.diff.model import DiffKind
 from asset_document.diff.semantic_compare import as_authored
 from asset_document.profiles import data_table_common as common
@@ -34,7 +38,7 @@ SYSTEM_GROUPS = ("SystemSpawn", "SystemUpdate")
 EMITTER_GROUPS = ("EmitterSpawn", "EmitterUpdate", "ParticleSpawn", "ParticleUpdate")
 MODULE_KEYS = ("Name", "Script", "Assign", "Version", "Enabled", "DisplayName", "Note", "Inputs")
 HANDLER_KEYS = ("Properties", "Modules")
-STAGE_KEYS = ("Name", "Class", "Enabled", "Properties", "Modules")
+STAGE_KEYS = ("Name", "RenamedFrom", "Class", "Enabled", "Properties", "Modules")
 STATELESS_KEYS = ("Properties", "Modules", "Renderers")
 STATELESS_MODULE_KEYS = ("Class", "Properties")
 _MISSING = object()
@@ -143,12 +147,14 @@ def check_system_stacks(body):
         seen = set()
         for index, entry in enumerate(_list(body["Parameters"], "/Body/Parameters", "Parameters")):
             where = f"/Body/Parameters/{index}"
-            _object(entry, where, ("Name", "Type", "Description"), "declared parameter")
+            _object(entry, where, ("Name", "Type", "Description", "Meta"), "declared parameter")
             for key in ("Name", "Type"):
                 if type(entry.get(key)) is not str or not entry[key]:
                     _fail(f"{where}/{key}", f"A declared parameter has a {key}.", "InvalidBody")
             if "Description" in entry and type(entry["Description"]) is not str:
                 _fail(f"{where}/Description", "Description is a string.", "InvalidBody")
+            if "Meta" in entry:
+                check_meta(entry["Meta"], f"{where}/Meta")
             if entry["Name"] in seen:
                 _fail(f"{where}/Name", f"Two declared parameters are named '{entry['Name']}'.", "DuplicateName")
             seen.add(entry["Name"])
@@ -200,15 +206,14 @@ def check_emitter_stacks(entry, path):
             if "Modules" in handler:
                 _check_modules(handler["Modules"], f"{where}/Modules", names, f"the emitter '{entry.get('Name')}'")
     if "SimulationStages" in entry:
-        stages = set()
+        # Stage names may repeat (the stack's "+" adds stages named None): a stage is identified by its place.
         for index, stage in enumerate(_list(entry["SimulationStages"], f"{path}/SimulationStages", "SimulationStages")):
             where = f"{path}/SimulationStages/{index}"
             _object(stage, where, STAGE_KEYS, "simulation stage")
             if type(stage.get("Name")) is not str or not stage["Name"]:
                 _fail(f"{where}/Name", "A simulation stage has a Name.", "InvalidBody")
-            if stage["Name"] in stages:
-                _fail(f"{where}/Name", f"Two simulation stages are named '{stage['Name']}'.", "DuplicateName")
-            stages.add(stage["Name"])
+            if "RenamedFrom" in stage and (type(stage["RenamedFrom"]) is not str or not stage["RenamedFrom"]):
+                _fail(f"{where}/RenamedFrom", "RenamedFrom is the simulation stage's current name.", "InvalidBody")
             if "Class" in stage and type(stage["Class"]) is not str:
                 _fail(f"{where}/Class", "Class is a simulation stage class.", "InvalidBody")
             if "Enabled" in stage and type(stage["Enabled"]) is not bool:
@@ -274,9 +279,11 @@ def _same_input(want, have):
         want_properties, have_properties = spec.get("Properties", {}), current.get("Properties", {})
         if type(want_properties) is dict and type(have_properties) is dict:
             # A struct value (a curve) and the elements of an array of structs (its Keys) list the members they
-            # set; the others hold their defaults (the read-back lists them all).
+            # set; the others hold their defaults (the read-back lists them all). A property read as a marker
+            # that the value leaves out keeps its value.
             have_properties = {name: as_authored(want_properties[name], value) if name in want_properties else value
-                               for name, value in have_properties.items()}
+                               for name, value in have_properties.items()
+                               if name in want_properties or not markers.is_marker(value)}
         return _same(spec.get("Class"), current.get("Class")) and _same(want_properties, have_properties)
     if type(want) is dict and type(have) is dict and "Dynamic" in want and "Dynamic" in have:
         left, right = want["Dynamic"], have["Dynamic"]
@@ -286,6 +293,35 @@ def _same_input(want, have):
         return set(inputs_left) == set(inputs_right) and all(
             _same_input(inputs_left[name], inputs_right[name]) for name in inputs_left)
     return _same(want, have) or _same_enum_name(want, have)
+
+
+def _writable_input(want, have, where):
+    """``want`` without the markers in its data interface Properties (also those of its dynamic inputs' values): each
+    is checked against the live value's (left as read it keeps the stored value, which the edit never resets; an
+    edited one is refused)."""
+    if type(want) is not dict:
+        return want
+    current = have if type(have) is dict else {}
+    spec = want.get("DataInterface")
+    if type(spec) is dict and type(spec.get("Properties")) is dict:
+        live_interface = current.get("DataInterface") if type(current.get("DataInterface")) is dict else {}
+        live_properties = live_interface.get("Properties") if type(live_interface.get("Properties")) is dict else {}
+        properties = {}
+        for name, value in spec["Properties"].items():
+            if markers.is_marker(value):
+                markers.require_unchanged(f"{where}/DataInterface/Properties/{_escape(name)}", value,
+                                          live_properties.get(name), PREFIX)
+            else:
+                properties[name] = value
+        return {**want, "DataInterface": {**spec, "Properties": properties}}
+    dynamic = want.get("Dynamic")
+    if type(dynamic) is dict and type(dynamic.get("Inputs")) is dict:
+        live_dynamic = current.get("Dynamic") if type(current.get("Dynamic")) is dict else {}
+        live_inputs = live_dynamic.get("Inputs") if type(live_dynamic.get("Inputs")) is dict else {}
+        inputs = {name: _writable_input(value, live_inputs.get(name, _MISSING), f"{where}/Dynamic/Inputs/{_escape(name)}")
+                  for name, value in dynamic["Inputs"].items()}
+        return {**want, "Dynamic": {**dynamic, "Inputs": inputs}}
+    return want
 
 
 def _module_signature(entry):
@@ -471,7 +507,7 @@ def _plan_inputs(plan, location, path, name, authored, live):
                         f"({want['Unsupported']}); keep it as extracted or give it a value.", want,
                         None if have is _MISSING else have)
             continue
-        write[input_name] = want
+        write[input_name] = _writable_input(want, have, where)
         plan.change(where, value, None if have is _MISSING else have, live_present=have is not _MISSING)
     reset = sorted(input_name for input_name in live if input_name not in authored)
     for input_name in reset:
@@ -503,6 +539,31 @@ def plan_system_stacks(plan, body, live_body):
         plan_graph(plan, groups, other)
 
 
+def check_meta(value, path):
+    """A user or declared parameter's ``Meta``: the Details metadata other than Description (its own key)."""
+    if type(value) is not dict:
+        _fail(path, "Meta is an object (FNiagaraVariableMetaData values other than Description).", "InvalidBody")
+    if "Description" in value:
+        _fail(f"{path}/Description", "Description is the parameter's own Description key, not part of Meta.",
+              "InvalidBody")
+
+
+def meta_op(entry, current, path=None):
+    """The ``meta`` edit ({properties, reset}) that makes a parameter's metadata the authored ``Meta`` (complete
+    when present); None when omitted (kept) or already equal. A member read as a marker (no document form) is kept:
+    left as extracted or left out; an edited marker is refused (``Niagara.UnrepresentedValue``)."""
+    if "Meta" not in entry:
+        return None
+    live = current.get("Meta", {})
+    for name, value in entry["Meta"].items():
+        if markers.is_marker(value):
+            markers.require_unchanged(f"{path or ''}/{_escape(name)}", value, live.get(name), PREFIX)
+    write = {name: value for name, value in entry["Meta"].items()
+             if not markers.is_marker(value) and (name not in live or not common.same(value, live[name], exact=False))}
+    reset = sorted(name for name in live if name not in entry["Meta"] and not markers.is_marker(live[name]))
+    return {"properties": write, "reset": reset} if write or reset else None
+
+
 def plan_declared_parameters(plan, body, live_body):
     if "Parameters" not in body:
         return
@@ -520,9 +581,14 @@ def plan_declared_parameters(plan, body, live_body):
             if entry.get("Description"):
                 op["description"] = entry["Description"]
             plan.change(path, entry, current, op, DiffKind.ADD, True, current is not None)
-        elif entry.get("Description", "") != current.get("Description", ""):
-            plan.change(f"{path}/Description", entry.get("Description"), current.get("Description"),
-                        {"op": "parameter", "name": entry["Name"], "description": entry.get("Description", "")})
+        else:
+            if entry.get("Description", "") != current.get("Description", ""):
+                plan.change(f"{path}/Description", entry.get("Description"), current.get("Description"),
+                            {"op": "parameter", "name": entry["Name"], "description": entry.get("Description", "")})
+            meta = meta_op(entry, current, f"{path}/Meta")
+            if meta is not None:
+                plan.change(f"{path}/Meta", entry["Meta"], current.get("Meta", {}),
+                            {"op": "parameter", "name": entry["Name"], "meta": meta})
 
 
 def plan_emitter_stacks(plan, path, name, entry, current, defaults, property_changes):
@@ -554,7 +620,7 @@ def plan_emitter_stacks(plan, path, name, entry, current, defaults, property_cha
             where = f"{base}/{index}"
             if "Properties" in handler:
                 write, reset = property_changes(handler["Properties"], have.get("Properties", {}),
-                                                defaults.get("event_handler", {}))
+                                                defaults.get("event_handler", {}), f"{where}/Properties")
                 if write or reset:
                     op = {"op": "event_handler", "emitter": name, "event": index, "properties": write}
                     if reset:
@@ -570,15 +636,15 @@ def plan_emitter_stacks(plan, path, name, entry, current, defaults, property_cha
         for index, have in enumerate(live_handlers):
             for module in have.get("Modules", []):
                 other[module["Name"]] = (dict(location, group="EventHandler", event=index), module)
-    # Simulation stages: by Name.
+    # Simulation stages: by Name and Class, then by RenamedFrom (_pair_stages); ops address them by position.
     live_stages = current.get("SimulationStages", [])
     if "SimulationStages" in entry:
         _plan_stages(plan, f"{path}/SimulationStages", name, entry["SimulationStages"], live_stages, defaults,
                      property_changes, groups, other, location)
     else:
-        for stage in live_stages:
+        for at, stage in enumerate(live_stages):
             for module in stage.get("Modules", []):
-                other[module["Name"]] = (dict(location, group="SimulationStage", stage=stage["Name"]), module)
+                other[module["Name"]] = (dict(location, group="SimulationStage", stage=at), module)
     if groups:
         plan_graph(plan, groups, other)
 
@@ -587,60 +653,100 @@ def _stage_class(entry, live):
     return entry.get("Class", live.get("Class") if live else None)
 
 
-def _plan_stages(plan, base, emitter, authored, live_list, defaults, property_changes, groups, other, location):
-    live = {stage["Name"]: stage for stage in live_list}
-    kept = {}
-    for stage in authored:
-        current = live.get(stage["Name"])
-        if current is not None and _stage_class(stage, current) == current["Class"]:
-            kept[stage["Name"]] = current
-    for stage in live_list:
-        if stage["Name"] not in kept:
-            plan.change(base, None, stage, {"op": "delete_stage", "emitter": emitter, "stage": stage["Name"]},
-                        DiffKind.REMOVE, False, True)
-    order = [stage["Name"] for stage in live_list if stage["Name"] in kept]
-    previous = None
+def _stage_affinity(stage, current):
+    """How well an authored stage describes a current one: the same module names (modules are unique in the emitter
+    graph), then the same Properties (omitted: none)."""
+    modules = stage.get("Modules")
+    same_modules = type(modules) is list and bool(modules) and \
+        [module.get("Name") for module in modules] == [module["Name"] for module in current.get("Modules", [])]
+    return 2 * same_modules + _same(stage.get("Properties", {}), current.get("Properties", {}))
+
+
+def _pair_stages(authored, live_list):
+    """For each authored stage, the position of the current stage it is (None: a new stage). A stage pairs with an
+    unpaired current stage of the same Name and Class; a stage left over that has a RenamedFrom then pairs with an
+    unpaired current stage of that name and the same Class (a rename). Name and Class go first, so that a rename
+    applied once re-applies as a no-op. Among several candidates the one the stage describes best is taken
+    (_stage_affinity), else the first: repeated names pair in order. A stage that pairs with none is new, also where
+    a removed stage of its Class leaves a place."""
+    pairs = [None] * len(authored)
+    taken = set()
+
+    def pair(index, stage, candidates):
+        if candidates:
+            chosen = max(candidates, key=lambda at: (_stage_affinity(stage, live_list[at]), -at))
+            pairs[index] = chosen
+            taken.add(chosen)
+
     for index, stage in enumerate(authored):
-        if stage["Name"] not in kept:
+        pair(index, stage, [at for at, current in enumerate(live_list) if at not in taken and current["Name"] == stage["Name"]
+                            and _stage_class(stage, current) == current["Class"]])
+    for index, stage in enumerate(authored):
+        if pairs[index] is None and "RenamedFrom" in stage:
+            pair(index, stage, [at for at, current in enumerate(live_list) if at not in taken
+                                and current["Name"] == stage["RenamedFrom"] and _stage_class(stage, current) == current["Class"]])
+    return pairs
+
+
+def _plan_stages(plan, base, emitter, authored, live_list, defaults, property_changes, groups, other, location):
+    """Stage ops address a stage by its position at the time the op runs: deletes go last stage first, moves bring the
+    kept stages into document order, adds go first to last, so that every later op (stage settings, module stacks)
+    finds stage N at document index N."""
+    pairs = _pair_stages(authored, live_list)
+    kept = {at for at in pairs if at is not None}
+    for at in reversed(range(len(live_list))):
+        if at not in kept:
+            plan.change(base, None, live_list[at], {"op": "delete_stage", "emitter": emitter, "stage": at},
+                        DiffKind.REMOVE, False, True)
+    order = [at for at in range(len(live_list)) if at in kept]
+    previous = None
+    for index, at in enumerate(pairs):
+        if at is None:
             continue
-        position = order.index(stage["Name"])
+        position = order.index(at)
         if (order[position - 1] if position > 0 else None) != previous:
-            plan.change(f"{base}/{index}", stage["Name"], stage["Name"],
-                        {"op": "move_stage", "emitter": emitter, "stage": stage["Name"], "after": previous}, DiffKind.REPLACE)
-            order.remove(stage["Name"])
-            order.insert(0 if previous is None else order.index(previous) + 1, stage["Name"])
-        previous = stage["Name"]
-    for index in reversed(range(len(authored))):
-        stage = authored[index]
-        if stage["Name"] in kept:
+            after = None if previous is None else order.index(previous)
+            plan.change(f"{base}/{index}", authored[index]["Name"], live_list[at]["Name"],
+                        {"op": "move_stage", "emitter": emitter, "stage": position, "after": after}, DiffKind.REPLACE)
+            order.remove(at)
+            order.insert(0 if previous is None else order.index(previous) + 1, at)
+        previous = at
+    for index, stage in enumerate(authored):
+        if pairs[index] is not None:
             continue
         if "Class" not in stage:
             _fail(f"{base}/{index}/Class", "A new simulation stage has a Class.", "InvalidBody")
-        anchor = next((authored[at]["Name"] for at in reversed(range(index)) if authored[at]["Name"] in kept), None)
-        plan.change(f"{base}/{index}", stage, live.get(stage["Name"]),
-                    {"op": "add_stage", "emitter": emitter, "name": stage["Name"], "class": stage["Class"], "after": anchor},
-                    DiffKind.ADD, True, stage["Name"] in live)
+        replaced = next((current for at, current in enumerate(live_list) if at not in kept and current["Name"] == stage["Name"]),
+                        None)
+        plan.change(f"{base}/{index}", stage, replaced,
+                    {"op": "add_stage", "emitter": emitter, "name": stage["Name"], "class": stage["Class"],
+                     "after": index - 1 if index > 0 else None},
+                    DiffKind.ADD, True, replaced is not None)
     for index, stage in enumerate(authored):
-        current = kept.get(stage["Name"])
-        if current is None:
+        if pairs[index] is None:
             continue
+        current = live_list[pairs[index]]
         where = f"{base}/{index}"
-        op = {"op": "stage", "emitter": emitter, "stage": stage["Name"]}
+        op = {"op": "stage", "emitter": emitter, "stage": index}
+        if stage["Name"] != current["Name"]:
+            op["name"] = stage["Name"]
+            plan.change(f"{where}/Name", stage["Name"], current["Name"])
         want = stage.get("Enabled", True)
         if want != current.get("Enabled", True):
             op["enabled"] = want
             plan.change(f"{where}/Enabled", want, current.get("Enabled", True))
-        if "Properties" in stage:
-            write, reset = property_changes(stage["Properties"], current.get("Properties", {}),
-                                            defaults.get("stages", {}).get(current["Class"], {}))
+        properties = stage.get("Properties")
+        if properties is not None:
+            write, reset = property_changes(properties, current.get("Properties", {}),
+                                            defaults.get("stages", {}).get(current["Class"], {}), f"{where}/Properties")
             if write or reset:
                 op["properties"] = write
                 if reset:
                     op["reset"] = reset
-                plan.change(f"{where}/Properties", stage["Properties"], current.get("Properties", {}))
+                plan.change(f"{where}/Properties", properties, current.get("Properties", {}))
         if len(op) > 3:
             plan.ops.append((op, where))
-        stage_location = dict(location, group="SimulationStage", stage=stage["Name"])
+        stage_location = dict(location, group="SimulationStage", stage=index)
         if "Modules" in stage:
             groups.append(Group(stage_location, f"{where}/Modules", stage["Modules"], current.get("Modules", [])))
         else:
@@ -656,7 +762,7 @@ def plan_stateless(plan, path, name, authored, current, defaults, property_chang
     template_changed = False
     if "Properties" in authored:
         write, reset = property_changes(authored["Properties"], current.get("Properties", {}),
-                                        defaults.get("stateless", {}))
+                                        defaults.get("stateless", {}), f"{base}/Properties")
         if write or reset:
             op = {"op": "stateless", "emitter": name, "properties": write}
             if reset:
@@ -689,7 +795,8 @@ def plan_stateless(plan, path, name, authored, current, defaults, property_chang
 
 
 def _plan_stateless_module(plan, where, emitter, module_class, authored, live, defaults, property_changes):
-    write, reset = property_changes(authored, live, defaults.get("stateless_modules", {}).get(module_class, {}))
+    write, reset = property_changes(authored, live, defaults.get("stateless_modules", {}).get(module_class, {}),
+                                    f"{where}/Properties")
     if write or reset:
         op = {"op": "stateless_module", "emitter": emitter, "class": module_class, "properties": write}
         if reset:

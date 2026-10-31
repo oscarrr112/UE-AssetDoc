@@ -422,6 +422,8 @@ void AppendNodeRecord(TArray<FValue>& Out, const FStateTreeEditorNode& Node, ENo
 	TArray<FString> InstanceDefaults;
 	TArray<FString> Unsupported;
 	// node_reset / instance_reset: the default of each value that differs from it (an omitted value is reset).
+	TArray<FString> NodeMarked;
+	TArray<FString> InstanceMarked;
 	FValue NodeValues = MakeEmptyObject();
 	FValue NodeReset = MakeEmptyObject();
 	if (const UScriptStruct* NodeStruct = Node.Node.GetScriptStruct())
@@ -429,6 +431,7 @@ void AppendNodeRecord(TArray<FValue>& Out, const FStateTreeEditorNode& Node, ENo
 		FInstancedStruct Default(NodeStruct);
 		NodeValues = EncodeValues(*NodeStruct, Node.Node.GetMemory(), Default.GetMemory(), EValueOwner::NodeStruct, NodeDefaults, Unsupported);
 		NodeReset = EncodeChangedDefaults(*NodeStruct, Node.Node.GetMemory(), Default.GetMemory(), EValueOwner::NodeStruct);
+		NodeMarked = MarkedValues(*NodeStruct, Node.Node.GetMemory(), Default.GetMemory(), EValueOwner::NodeStruct);
 	}
 	FValue InstanceValues = MakeEmptyObject();
 	FValue InstanceReset = MakeEmptyObject();
@@ -440,6 +443,7 @@ void AppendNodeRecord(TArray<FValue>& Out, const FStateTreeEditorNode& Node, ENo
 		InstanceValues = EncodeValues(*Class, Node.InstanceObject, Class->GetDefaultObject(), EValueOwner::InstanceObject,
 			InstanceDefaults, Unsupported);
 		InstanceReset = EncodeChangedDefaults(*Class, Node.InstanceObject, Class->GetDefaultObject(), EValueOwner::InstanceObject);
+		InstanceMarked = MarkedValues(*Class, Node.InstanceObject, Class->GetDefaultObject(), EValueOwner::InstanceObject);
 	}
 	else if (const UScriptStruct* InstanceStruct = Node.Instance.GetScriptStruct())
 	{
@@ -448,6 +452,7 @@ void AppendNodeRecord(TArray<FValue>& Out, const FStateTreeEditorNode& Node, ENo
 		InstanceValues = EncodeValues(*InstanceStruct, Node.Instance.GetMemory(), Default.GetMemory(), EValueOwner::InstanceStruct,
 			InstanceDefaults, Unsupported);
 		InstanceReset = EncodeChangedDefaults(*InstanceStruct, Node.Instance.GetMemory(), Default.GetMemory(), EValueOwner::InstanceStruct);
+		InstanceMarked = MarkedValues(*InstanceStruct, Node.Instance.GetMemory(), Default.GetMemory(), EValueOwner::InstanceStruct);
 	}
 	Record.AddString(TEXT("instance_type"), InstanceType);
 	Record.Add(TEXT("node"), MoveTemp(NodeValues));
@@ -457,6 +462,8 @@ void AppendNodeRecord(TArray<FValue>& Out, const FStateTreeEditorNode& Node, ENo
 	Record.Add(TEXT("instance_defaults"), MakeStringArray(InstanceDefaults));
 	Record.Add(TEXT("instance_reset"), MoveTemp(InstanceReset));
 	Record.Add(TEXT("unsupported"), MakeStringArray(Unsupported));
+	Record.Add(TEXT("node_marked"), MakeStringArray(NodeMarked));
+	Record.Add(TEXT("instance_marked"), MakeStringArray(InstanceMarked));
 	Out.Add(Record.Build());
 }
 

@@ -17,11 +17,21 @@ FSimpleMulticastDelegate& UAssetDocumentSettings::OnMirrorSettingsChanged()
 	return Delegate;
 }
 
+FSimpleMulticastDelegate& UAssetDocumentSettings::OnAutoReimportSettingChanged()
+{
+	static FSimpleMulticastDelegate Delegate;
+	return Delegate;
+}
+
 #if WITH_EDITOR
 void UAssetDocumentSettings::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 	const FName Name = PropertyChangedEvent.GetMemberPropertyName();
+	if (Name == GET_MEMBER_NAME_CHECKED(UAssetDocumentSettings, bExcludeSidecarsFromAutoReimport))
+	{
+		OnAutoReimportSettingChanged().Broadcast();
+	}
 	if (Name == GET_MEMBER_NAME_CHECKED(UAssetDocumentSettings, bMirrorSidecars)
 		|| Name == GET_MEMBER_NAME_CHECKED(UAssetDocumentSettings, MirrorExcludedPaths)
 		|| Name == GET_MEMBER_NAME_CHECKED(UAssetDocumentSettings, MirrorExcludedClasses)

@@ -406,6 +406,14 @@ FAssetDocumentGenericRequestAdapter::AdaptExtract(
 	// diff_only (default) lists only values that differ from the class defaults;
 	// diff_only=false or include_all_writable lists every writable value.
 	IncludeDefaults.BooleanValue = Request.bIncludeAllWritable || !Request.bDiffOnly;
+	if (Request.bIncludeLayout)
+	{
+		// The profile reports its graph nodes' drawn sizes beside the document (asset_document/graphs/node_layout.py).
+		Adapted.CanonicalDocument.ObjectKeys.Add(TEXT("include_layout"));
+		FAssetDocumentRuntimeValueDto& IncludeLayout = Adapted.CanonicalDocument.Elements.AddDefaulted_GetRef();
+		IncludeLayout.Kind = EAssetDocumentRuntimeValueKind::Boolean;
+		IncludeLayout.BooleanValue = true;
+	}
 	return Adapted;
 }
 

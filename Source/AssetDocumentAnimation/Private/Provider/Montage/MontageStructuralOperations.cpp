@@ -3,7 +3,6 @@
 #include "Provider/Montage/MontageStructuralOperations.h"
 #include "Provider/Montage/MontageStructuralRollback.h"
 #include "Provider/Montage/MontageStructuralPreparation.h"
-#include "Provider/Montage/MontageManagedNotifyIdentity.h"
 #include "AssetDocumentEditorNativeState.h"
 #include "Animation/AnimData/IAnimationDataModel.h"
 #include "Animation/AnimNotifies/AnimNotify.h"
@@ -179,10 +178,7 @@ FAssetDocumentContractValidationResult PrepareRetainedNotifies(FPreparedStructur
  State.DesiredNotifies.Reset();
  for (const auto& Event : State.OldNotifies)
  {
-  if ((EnumHasAnyFlags(Intent.ReplaceManagedFamilies, EManagedNotifyReplacement::Events)
-    && IsManagedMontageNotifyEvent(*State.Target, Event, false))
-   || (EnumHasAnyFlags(Intent.ReplaceManagedFamilies, EManagedNotifyReplacement::States)
-    && IsManagedMontageNotifyEvent(*State.Target, Event, true))) continue;
+  if (Event.NotifyStateClass ? Intent.bReplaceNotifyStates : Intent.bReplaceNotifies) continue;
   FLinkPlacement Begin, End;
   const FString What = FString::Printf(TEXT("%s at %g s on notify track %d"), Event.NotifyStateClass ? TEXT("notify state") : TEXT("notify"),
    Event.GetTime(), Event.TrackIndex);
@@ -245,6 +241,8 @@ FAssetDocumentContractValidationResult ValidateDurableShape(const FPreparedStruc
    const auto* Animation = A.GetAnimReference().Get();
    auto Valid = ValidateMontageSegmentStart(Slot.AnimTrack.AnimSegments, S, I);
    if (!Valid.bValid) return Valid;
+   // Kept slot tracks stay as they are, including a segment whose animation is gone.
+   if (!Animation && !State.bReplaceSlots) continue;
    if (!IsValid(Animation) || A.AnimEndTime > Animation->GetPlayLength())
     return Result(false, TEXT("AnimationProvider.Montage.InvalidSegment"), FString::Printf(
      TEXT("SlotAnimTracks[%d].Segments[%d]: a reload would clamp its AnimEndTime %g to the animation length."), S, I, A.AnimEndTime));
@@ -273,8 +271,8 @@ FAssetDocumentContractValidationResult ApplyNativeImpl(TSharedRef<FPreparedStruc
   || !Token.TransactionId.IsValid() || Token.TransactionId != Transaction.GetTransactionId()
   || Token.RequestId != State->RequestId || Token.RuntimeRevision != State->RuntimeRevision)
   return Result(false, TEXT("AnimationProvider.Montage.InvalidContext"));
- if (State->ReplaceManagedFamilies != EManagedNotifyReplacement::None)
-  return Result(false, TEXT("AnimationProvider.Montage.InvalidContext"), TEXT("Managed replacement projection requires the full notify composite."));
+ if (State->bReplaceNotifies || State->bReplaceNotifyStates)
+  return Result(false, TEXT("AnimationProvider.Montage.InvalidContext"), TEXT("A notify family replacement requires the full notify composite."));
  if (!BaselineCurrent(*State)) return Result(false, TEXT("AnimationProvider.Montage.PreparedStateDrift"));
  if (!State->bChanged) { State->bApplied = true; return Result(true); }
  State->bApplied = true;
@@ -371,8 +369,7 @@ FAssetDocumentContractValidationResult PrepareMontageStructuralEdit(UAnimMontage
  OutPrepared.Reset();
  if (!IsStructuralContext() || !IsValid(&Target) || Target.GetClass() != UAnimMontage::StaticClass()
   || Target.IsTemplate() || Target.HasAnyFlags(RF_NeedLoad | RF_NeedPostLoad) || !Target.IsDataModelValid()
-  || !RequestId.IsValid() || RuntimeRevision == 0 || (!Intent.Slots.IsSet() && !Intent.Sections.IsSet())
-  || uint8(Intent.ReplaceManagedFamilies) > uint8(EManagedNotifyReplacement::Both))
+  || !RequestId.IsValid() || RuntimeRevision == 0 || (!Intent.Slots.IsSet() && !Intent.Sections.IsSet()))
   return Result(false, TEXT("AnimationProvider.Montage.InvalidContext"));
  if (Target.ParentAsset || !Target.ChildrenAssets.IsEmpty())
   return Result(false, TEXT("AnimationProvider.Montage.DependencyUnavailable"), TEXT("Parent/child montage mutation requires the shared dependency footprint owner."));
@@ -386,7 +383,7 @@ FAssetDocumentContractValidationResult PrepareMontageStructuralEdit(UAnimMontage
  State->SyncGroup = Target.SyncGroup; State->SyncSlot = Target.SyncSlotIndex;
  State->OldSlots = Target.SlotAnimTracks; State->OldSections = Target.CompositeSections; State->OldNotifies = Target.Notifies;
  State->bReplaceSlots = Intent.Slots.IsSet(); State->bReplaceSections = Intent.Sections.IsSet();
- State->ReplaceManagedFamilies = Intent.ReplaceManagedFamilies;
+ State->bReplaceNotifies = Intent.bReplaceNotifies; State->bReplaceNotifyStates = Intent.bReplaceNotifyStates;
  if (!State->FrameRate.IsValid() || State->OldFrames < 0) return Result(false);
  if (Intent.Slots.IsSet())
  {

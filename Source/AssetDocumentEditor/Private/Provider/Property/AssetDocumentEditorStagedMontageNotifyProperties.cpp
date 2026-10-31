@@ -91,15 +91,15 @@ bool RequestedObject(const FAssetDocumentPrimitiveInvocation& Invocation, const 
   if (Family.Kind != EAssetDocumentRuntimeValueKind::Array) return false;
  const int32 Index = Root.ObjectKeys.IndexOfByKey(bState ? TEXT("notify_states") : TEXT("notifies"));
  if (!Root.Elements.IsValidIndex(Index)) return false;
- const TArray<FString> RowKeys = bState
-  ? TArray<FString>{TEXT("time"), TEXT("duration"), TEXT("track_index"), TEXT("object")}
-  : TArray<FString>{TEXT("time"), TEXT("track_index"), TEXT("object")};
  // Match the actual staged family against the real frozen request. Animation
  // owns allocation provenance and full timeline validation; this is DTO identity.
  for (const auto& Row : Root.Elements[Index].Elements)
  {
-  if (!ExactKeys(Row, RowKeys)) return false;
-  const auto& Requested = Row.Elements.Last();
+  if (Row.Kind != EAssetDocumentRuntimeValueKind::Object || Row.ObjectKeys.Num() != Row.Elements.Num()) return false;
+  const int32 ObjectIndex = Row.ObjectKeys.IndexOfByKey(TEXT("object"));
+  if (!Row.Elements.IsValidIndex(ObjectIndex)) return false;
+  const auto& Requested = Row.Elements[ObjectIndex];
+  if (Requested.Kind == EAssetDocumentRuntimeValueKind::Null) continue; // a skeleton notify has no object
   if (!ExactKeys(Requested, {TEXT("class"), TEXT("properties")})) return false;
   if (Requested.Elements[0].Kind == EAssetDocumentRuntimeValueKind::String
    && Requested.Elements[0].StringValue == Object.GetClass()->GetPathName()
@@ -128,8 +128,7 @@ struct FIdentity
    || NotifyClass->GetPathName() != ClassPath || NotifyClass->GetUniqueID() != ClassRevision
    || NotifyClass->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists)
    || !NotifyClass->IsChildOf(bState ? UAnimNotifyState::StaticClass() : UAnimNotify::StaticClass())
-   || !Notify->HasAnyFlags(RF_Transactional)
-   || !Notify->GetName().StartsWith(bState ? TEXT("AssetDocumentManaged_NotifyState_") : TEXT("AssetDocumentManaged_Notify_"), ESearchCase::CaseSensitive)) return false;
+   || !Notify->HasAnyFlags(RF_Transactional)) return false;
   // A staged object is not yet installed. Allocation provenance remains owned
   // by Animation's real per-operation allocation collection, not by this check.
   for (const auto& Event : Montage->Notifies)
@@ -180,7 +179,7 @@ FAssetDocumentPrimitiveOutcome ConfigureAssetDocumentEditorStagedMontageNotifyPr
  Identity.NotifyPath = ExactStagedNotify.GetPathName(); Identity.NotifyRevision = ExactStagedNotify.GetUniqueID();
  Identity.ClassPath = Identity.NotifyClass->GetPathName(); Identity.ClassRevision = Identity.NotifyClass->GetUniqueID();
  if (!Identity.Matches() || !RequestedObject(Invocation, ExactStagedNotify, Identity.bState, Properties))
-  return Reject(TEXT("EditorNativeState.StagedNotifyInvalidTarget"), TEXT("The staged notify family, direct owner, class, managed name or unpublished identity is invalid."));
+  return Reject(TEXT("EditorNativeState.StagedNotifyInvalidTarget"), TEXT("The staged notify family, direct owner, class or unpublished identity is invalid."));
  const auto Fields = GetAssetDocumentEditorAdmittedPropertyFields(*Identity.NotifyClass.Get());
  TArray<FPreparedField> Prepared;
  Prepared.Reserve(Properties.ObjectKeys.Num());

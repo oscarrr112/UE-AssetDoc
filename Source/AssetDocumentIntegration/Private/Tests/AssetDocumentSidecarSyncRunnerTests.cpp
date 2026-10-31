@@ -507,4 +507,85 @@ bool FSidecarSyncRunnerStatusCheapTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// A sidecar whose apply never returned (the editor crashed during it) is not applied again by the editor's own passes
+// at the next start: the start reconcile reports it (Sync.ApplyInterrupted, sidecar_sync_failed) and leaves the asset
+// alone, at every start, until the file changes. An explicit apply of that content runs and clears the record.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSidecarSyncRunnerInterruptedApplyTest,
+	"UEAssetDoc.SidecarSync.Runner.InterruptedApplyNotRepeated",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FSidecarSyncRunnerInterruptedApplyTest::RunTest(const FString& Parameters)
+{
+	using namespace SidecarSyncRunnerTestsLocal;
+	const FScopedMirrorSettings Settings;
+	const FTestFolder Folder;
+	const TCHAR* Name = TEXT("DA_Interrupted");
+	if (!Folder.Create(*this, Name, TEXT("\"TestString\":\"before\"")))
+	{
+		return false;
+	}
+	Runner().ReconcileNowForTest(Folder.Root);
+	Runner().DrainForTest();
+	const FString Target = Folder.Target(Name);
+	const FString Sidecar = Folder.Sidecar(Name);
+	auto EditSidecar = [&](const TCHAR* From, const TCHAR* To)
+	{
+		const FString Edited = Folder.Read(Name).Replace(From, To);
+		FFileHelper::SaveStringToFile(Edited, *Sidecar, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		return UE::AssetDocument::SidecarSync::DigestSidecarFile(Sidecar);
+	};
+	auto InterruptedNotice = [&]()
+	{
+		return FAssetDocumentPendingNotices::GetOpen().ContainsByPredicate([&](const FAssetDocumentPendingNotice& Notice)
+		{
+			return Notice.Kind == FAssetDocumentSidecarSync::FailedNotice && Notice.Code == FAssetDocumentSidecarSync::InterruptedApplyCode
+				&& Notice.File.EndsWith(TEXT("DA_Interrupted.assetdoc.json"), ESearchCase::IgnoreCase);
+		});
+	};
+	if (!TestTrue(TEXT("the mirror was written"), Folder.Read(Name).Contains(TEXT("\"before\""))))
+	{
+		return false;
+	}
+
+	// The sidecar was edited and its apply never returned: the editor was gone before the record was removed.
+	const FString Crashing = EditSidecar(TEXT("\"before\""), TEXT("\"crashing\""));
+	TestTrue(TEXT("the apply is recorded"), FAssetDocumentSidecarSync::BeginInFlightApply(Target, Sidecar, Crashing));
+	TestEqual(TEXT("the record names the content"), FAssetDocumentSidecarSync::FindInFlightApply(Target), Crashing);
+
+	// The next start's reconcile does not apply it, and reports it.
+	TestEqual(TEXT("the start reconcile takes the changed sidecar"), Runner().ReconcileNowForTest(Folder.Root), 1);
+	Runner().DrainForTest();
+	TestEqual(TEXT("the asset is not changed"), Folder.Value(Name, TEXT("TestString")), FString(TEXT("before")));
+	TestEqual(TEXT("the pass failed"), LastRunCount(TEXT("states"), TEXT("failed")), 1);
+	TestTrue(TEXT("a sidecar_sync_failed notice says the apply was interrupted"), InterruptedNotice());
+	TestEqual(TEXT("the record is kept"), FAssetDocumentSidecarSync::FindInFlightApply(Target), Crashing);
+	TestTrue(TEXT("the sidecar keeps the edited content"), Folder.Read(Name).Contains(TEXT("\"crashing\"")));
+
+	// And not at the start after that either.
+	Runner().ReconcileNowForTest(Folder.Root);
+	Runner().DrainForTest();
+	TestEqual(TEXT("again: the asset is not changed"), Folder.Value(Name, TEXT("TestString")), FString(TEXT("before")));
+
+	// New content is applied, and its apply leaves no record.
+	EditSidecar(TEXT("\"crashing\""), TEXT("\"fixed\""));
+	TestEqual(TEXT("the changed sidecar is taken"), Runner().ReconcileNowForTest(Folder.Root), 1);
+	Runner().DrainForTest();
+	TestEqual(TEXT("the new content is applied"), Folder.Value(Name, TEXT("TestString")), FString(TEXT("fixed")));
+	TestTrue(TEXT("no record is left"), FAssetDocumentSidecarSync::FindInFlightApply(Target).IsEmpty());
+	TestFalse(TEXT("the notice is resolved"), InterruptedNotice());
+
+	// An explicit apply of interrupted content runs it, and clears the record.
+	const FString Again = EditSidecar(TEXT("\"fixed\""), TEXT("\"explicit\""));
+	FAssetDocumentSidecarSync::BeginInFlightApply(Target, Sidecar, Again);
+	FAssetDocumentApplyFileRequest Apply;
+	Apply.FilePath = Sidecar;
+	Apply.bSaveAsset = true;
+	const FAssetDocumentResult Result = Service().ApplyFile(Apply);
+	TestTrue(FString::Printf(TEXT("the explicit apply succeeds: %s"), *Result.Message), Result.IsSuccess());
+	TestEqual(TEXT("the explicit apply changed the asset"), Folder.Value(Name, TEXT("TestString")), FString(TEXT("explicit")));
+	TestTrue(TEXT("the explicit apply cleared the record"), FAssetDocumentSidecarSync::FindInFlightApply(Target).IsEmpty());
+	return true;
+}
+
 #endif

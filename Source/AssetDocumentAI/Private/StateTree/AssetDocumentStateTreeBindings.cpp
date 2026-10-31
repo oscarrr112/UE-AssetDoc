@@ -404,11 +404,13 @@ void AppendBindingRecords(TArray<FValue>& Out, const UStateTreeEditorData& Edito
 			Value.AddString(TEXT("type"), PathOf(Function->Node.GetScriptStruct()));
 			TArray<FString> Defaults;
 			TArray<FString> Unsupported;
+			TArray<FString> Marked;
 			if (const UScriptStruct* InstanceStruct = Function->Instance.GetScriptStruct())
 			{
 				FInstancedStruct Default(InstanceStruct);
 				Value.Add(TEXT("instance"), EncodeValues(*InstanceStruct, Function->Instance.GetMemory(), Default.GetMemory(),
 					EValueOwner::InstanceStruct, Defaults, Unsupported));
+				Marked = MarkedValues(*InstanceStruct, Function->Instance.GetMemory(), Default.GetMemory(), EValueOwner::InstanceStruct);
 			}
 			else
 			{
@@ -416,6 +418,7 @@ void AppendBindingRecords(TArray<FValue>& Out, const UStateTreeEditorData& Edito
 			}
 			Value.Add(TEXT("instance_defaults"), MakeStringArray(Defaults));
 			Value.Add(TEXT("unsupported"), MakeStringArray(Unsupported));
+			Value.Add(TEXT("instance_marked"), MakeStringArray(Marked));
 			Record.Add(TEXT("function"), Value.Build());
 		}
 		Out.Add(Record.Build());

@@ -10,6 +10,7 @@
 #include "BehaviorTree/Blackboard/BlackboardKeyType_Enum.h"
 #include "BehaviorTree/Blackboard/BlackboardKeyType_Object.h"
 #include "BehaviorTree/Blackboard/BlackboardKeyType_Struct.h"
+#include "AssetDocumentRollbackAction.h"
 #include "StructUtils/InstancedStruct.h"
 
 
@@ -336,6 +337,23 @@ FAssetDocumentRuntimeValueDto LocalKeyNamesValue(TConstArrayView<FString> Names)
 
 using FChangedEntryField = TPair<FString, bool>;
 
+// The rollback of a key type the write leaves as stored: it is never written, so there is nothing to put back.
+class FKeptKeyTypeRollback final : public IAssetDocumentRollbackAction
+{
+public:
+	explicit FKeptKeyTypeRollback(FString InComponentId) : ComponentId(MoveTemp(InComponentId)) {}
+	virtual FStringView GetRollbackComponentId() const override { return ComponentId; }
+	virtual FAssetDocumentContractValidationResult Rollback(FStringView) override
+	{
+		FAssetDocumentContractValidationResult Result;
+		Result.bValid = true;
+		return Result;
+	}
+
+private:
+	FString ComponentId;
+};
+
 struct FEntryMetadataForwardWrite
 {
 	FKeyTypePropertyWrite KeyType;
@@ -348,6 +366,8 @@ struct FEntryMetadataForwardWrite
 	TOptional<AssetDocumentAIBlackboardKeyTypeStructCanonicalWrite::FPreparedWrite> StructWrite;
 	TArray<FString> OrderedLocalKeyNames;
 	TArray<FChangedEntryField> ChangedFields;
+	// The key-type properties are left as stored: no key-type write or snapshot.
+	bool bKeepKeyType = false;
 };
 
 bool ResolveEntryMetadataHandles(
@@ -460,27 +480,15 @@ bool ResolveEntryMetadataHandles(
 	return true;
 }
 
-bool PrepareEntryMetadataForwardWrite(
+// The typed write of the request's key-type properties (the Struct canonical write, or one PropertyEditor write per
+// leaf), prepared but not applied.
+bool PrepareEntryKeyTypeWrite(
 	UBlackboardData& Blackboard,
 	const FAssetDocumentAIBlackboardEntryMetadataForwardWriteRequest& Request,
 	IAssetDocumentAtomicTransaction& Transaction,
 	FEntryMetadataForwardWrite& OutWrite,
 	FAssetDocumentPrimitiveOutcome& OutFailure)
 {
-	if (Request.KeyName.IsEmpty() || Request.ExpectedClassPath.IsEmpty()
-		|| !IsAssetDocumentAICanonicalRuntimeValue(Request.CanonicalProperties))
-	{
-		OutFailure = Failure(TEXT("AIProvider.InvalidValueShape"),
-			TEXT("The private Blackboard entry metadata request is not canonical."));
-		return false;
-	}
-	if (!ResolveEntryMetadataHandles(Blackboard, Request.KeyName, OutWrite, OutFailure)) return false;
-	if (OutWrite.ExactKeyType->GetClass()->GetPathName() != Request.ExpectedClassPath)
-	{
-		OutFailure = Failure(TEXT("AIProvider.Blackboard.KeyClassMismatch"),
-			TEXT("The existing Blackboard key type does not match the requested exact class."));
-		return false;
-	}
 	if (OutWrite.ExactKeyType->GetClass() == UBlackboardKeyType_Struct::StaticClass())
 	{
 		using namespace AssetDocumentAIBlackboardKeyTypeStructCanonicalWrite;
@@ -532,9 +540,52 @@ bool PrepareEntryMetadataForwardWrite(
 			TEXT("The canonical Blackboard key-type leaves have no PropertyEditor write handles."));
 		return false;
 	}
+	return true;
+}
+
+bool PrepareEntryMetadataForwardWrite(
+	UBlackboardData& Blackboard,
+	const FAssetDocumentAIBlackboardEntryMetadataForwardWriteRequest& Request,
+	IAssetDocumentAtomicTransaction& Transaction,
+	FEntryMetadataForwardWrite& OutWrite,
+	FAssetDocumentPrimitiveOutcome& OutFailure)
+{
+	if (Request.KeyName.IsEmpty() || Request.ExpectedClassPath.IsEmpty()
+		|| !IsAssetDocumentAICanonicalRuntimeValue(Request.CanonicalProperties))
+	{
+		OutFailure = Failure(TEXT("AIProvider.InvalidValueShape"),
+			TEXT("The private Blackboard entry metadata request is not canonical."));
+		return false;
+	}
+	if (!ResolveEntryMetadataHandles(Blackboard, Request.KeyName, OutWrite, OutFailure)) return false;
+	if (OutWrite.ExactKeyType->GetClass()->GetPathName() != Request.ExpectedClassPath)
+	{
+		OutFailure = Failure(TEXT("AIProvider.Blackboard.KeyClassMismatch"),
+			TEXT("The existing Blackboard key type does not match the requested exact class."));
+		return false;
+	}
+	FAssetDocumentRuntimeValueDto StoredProperties;
+	const bool bStoredAsRequested =
+		BuildAssetDocumentAIBlackboardCanonicalKeyTypeProperties(*OutWrite.ExactKeyType, StoredProperties)
+		&& RuntimeValueEquals(StoredProperties, Request.CanonicalProperties);
+	if (!PrepareEntryKeyTypeWrite(Blackboard, Request, Transaction, OutWrite, OutFailure))
+	{
+		// The typed writes cannot take every value a key may hold (a marker, a null BaseClass, a raw Enum default). A
+		// request that leaves the key's properties as stored keeps them untouched and changes only the entry metadata.
+		if (!bStoredAsRequested || IsAssetDocumentAIBlackboardDirectValueKeyType(OutWrite.ExactKeyType->GetClass()))
+		{
+			return false;
+		}
+		OutWrite.KeyType = FKeyTypePropertyWrite();
+		OutWrite.StructWrite.Reset();
+		OutWrite.bKeepKeyType = true;
+		OutFailure = FAssetDocumentPrimitiveOutcome();
+	}
 	OutWrite.KeyType.KeyType = OutWrite.ExactKeyType;
 	FAssetDocumentRuntimeValueDto CurrentProperties;
-	const bool bCurrentPropertiesRead = OutWrite.StructWrite.IsSet()
+	const bool bCurrentPropertiesRead = OutWrite.bKeepKeyType
+		? (CurrentProperties = StoredProperties, true)
+		: OutWrite.StructWrite.IsSet()
 			? BuildAssetDocumentAIBlackboardCanonicalKeyTypeProperties(*OutWrite.ExactKeyType, CurrentProperties)
 			: BuildCanonicalKeyTypePropertyReadback(OutWrite.KeyType, CurrentProperties);
 	if (!bCurrentPropertiesRead)
@@ -561,6 +612,22 @@ bool PrepareEntryMetadataForwardWrite(
 	}
 	const bool bKeyTypePropertiesChanged =
 		!RuntimeValueEquals(CurrentProperties, Request.CanonicalProperties);
+	// A Struct default of another type changes the value's size, and instance sync decides whether components share
+	// the value: both change the layout a live component keeps.
+	const UBlackboardKeyType_Struct* StoredStruct = Cast<UBlackboardKeyType_Struct>(OutWrite.ExactKeyType);
+	const bool bStructTypeChanged = bKeyTypePropertiesChanged && OutWrite.StructWrite.IsSet() && StoredStruct != nullptr
+		&& OutWrite.StructWrite->GetScratch().GetScriptStruct() != StoredStruct->DefaultValue.GetScriptStruct();
+	bool bStoredInstanceSynced = false;
+	const bool bInstanceSyncChanged = OutWrite.InstanceSynced->GetValue(bStoredInstanceSynced) == FPropertyAccess::Success
+		&& bStoredInstanceSynced != Request.bInstanceSynced;
+	if (bStructTypeChanged || bInstanceSyncChanged)
+	{
+		if (TOptional<FAssetDocumentPrimitiveOutcome> InUse = RefuseLiveBlackboardLayoutChange(Blackboard))
+		{
+			OutFailure = MoveTemp(InUse.GetValue());
+			return false;
+		}
+	}
 	FString Description;
 	FName Category;
 	bool InstanceSynced = false;
@@ -581,7 +648,8 @@ bool PrepareEntryMetadataForwardWrite(
 	OutWrite.ChangedFields = {
 		{StableEntryPath + TEXT(".KeyTypeProperties"), bKeyTypePropertiesChanged},
 		{StableEntryPath + TEXT(".Description"), Description != Request.Description},
-		{StableEntryPath + TEXT(".Category"), Category.ToString() != Request.Category},
+		// No category is the empty string, as the entry readback reports it.
+		{StableEntryPath + TEXT(".Category"), (Category.IsNone() ? FString() : Category.ToString()) != Request.Category},
 		{StableEntryPath + TEXT(".bInstanceSynced"), InstanceSynced != Request.bInstanceSynced}};
 	#if WITH_DEV_AUTOMATION_TESTS
 	if (OutWrite.StructWrite.IsSet())
@@ -713,11 +781,20 @@ FAssetDocumentPrimitiveOutcome ApplyEntryMetadataForwardWriteChanges(
 		CaptureAndEnlistAssetDocumentAIBlackboardLocalKeysPreimage(
 			Lease, Blackboard, {MetadataComponent}, Transaction);
 	if (!MetadataCapture.bSucceeded) return FailureFromPreimage(MetadataCapture);
-	const FAssetDocumentEditorTypedPreimageResult KeyTypeCapture =
-		CaptureAndEnlistAssetDocumentAIBlackboardKeyTypePropertiesPreimage(
-			Lease, *Write.ExactKeyType, Write.KeyType.Rows.ToSharedRef(), Write.KeyType.Handles,
-			{KeyTypeComponent}, Transaction);
-	if (!KeyTypeCapture.bSucceeded) return FailureFromPreimage(KeyTypeCapture);
+	if (Write.bKeepKeyType)
+	{
+		const FAssetDocumentContractValidationResult Kept =
+			Transaction.EnlistRollbackAction(MakeShared<FKeptKeyTypeRollback>(KeyTypeComponent));
+		if (!Kept.bValid) return FailureFromValidation(Kept);
+	}
+	else
+	{
+		const FAssetDocumentEditorTypedPreimageResult KeyTypeCapture =
+			CaptureAndEnlistAssetDocumentAIBlackboardKeyTypePropertiesPreimage(
+				Lease, *Write.ExactKeyType, Write.KeyType.Rows.ToSharedRef(), Write.KeyType.Handles,
+				{KeyTypeComponent}, Transaction);
+		if (!KeyTypeCapture.bSucceeded) return FailureFromPreimage(KeyTypeCapture);
+	}
 	const FAssetDocumentContractValidationResult Enlisted = Transaction.EnlistFootprint({
 		MakeFootprint(EntryPath(Request.BlackboardPath, Request.KeyName)
 			+ TEXT(".LocalKeysMetadataAggregate"), MetadataComponent),
@@ -725,7 +802,15 @@ FAssetDocumentPrimitiveOutcome ApplyEntryMetadataForwardWriteChanges(
 	if (!Enlisted.bValid) return FailureFromValidation(Enlisted);
 	FAssetDocumentPrimitiveOutcome FailureOutcome;
 	FAssetDocumentRuntimeValueDto ActualProperties;
-	if (Write.StructWrite.IsSet())
+	if (Write.bKeepKeyType)
+	{
+		if (!BuildAssetDocumentAIBlackboardCanonicalKeyTypeProperties(*Write.ExactKeyType, ActualProperties))
+		{
+			return Failure(TEXT("AIProvider.Blackboard.DerivedRefreshFailed"),
+				TEXT("The kept Blackboard key-type properties have no readback."));
+		}
+	}
+	else if (Write.StructWrite.IsSet())
 	{
 		const AssetDocumentAIBlackboardKeyTypeStructCanonicalWrite::FApplyResult Applied =
 			AssetDocumentAIBlackboardKeyTypeStructCanonicalWrite::ApplyPreparedCanonicalWrite(

@@ -12,6 +12,8 @@
 //     unchanged file apply it once (direction doc §4.5).
 //   - WatcherFailureNotice: a failed file watcher apply is kept as a pending notice until the sidecar is applied
 //     again (get_editor_context, the next tool result).
+//   - AppendedStructElementSummary: appending one element to an array of structs whose elements leave members at
+//     their defaults is one change for Validate, not a removal of every omitted member; a shorter array removes one.
 //   - WatcherWriteBack: a Create applied from a sidecar is written back as CreateOrUpdate, so
 //     editing the written-back sidecar and letting the watcher apply it again succeeds.
 
@@ -993,5 +995,35 @@ bool FAssetDocumentApplySemanticsChangedValueSummaryTest::RunTest(const FString&
 	TestTrue(TEXT("the edit applies"), Updated.IsSuccess());
 	TestEqual(TEXT("an update returns the new base_revision"), PayloadString(Updated, TEXT("base_revision")), Revision(Table));
 	return true;
+}
+// Rewards elements name only RowName (DataTable stays at its default, None), as an extract writes them.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentApplySemanticsAppendedStructElementSummaryTest,
+	"UEAssetDoc.ApplySemantics.AppendedStructElementSummary",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentApplySemanticsAppendedStructElementSummaryTest::RunTest(const FString&)
+{
+	using namespace AssetDocumentEditorApplySemanticsTests;
+	const FTarget Target(TEXT("PickRewards"));
+	ON_SCOPE_EXIT { Target.Cleanup(); };
+	const auto Document = [&Target](const TCHAR* Rewards)
+	{
+		return FString::Printf(TEXT("{\"SchemaVersion\":1,\"AssetType\":\"GenericAsset\",\"Target\":\"%s\",")
+			TEXT("\"Class\":\"/Script/AssetDocumentTests.AssetDocumentPickTestAsset\",\"Action\":\"CreateOrUpdate\",")
+			TEXT("\"Properties\":{\"Rewards\":[%s]}}"), *Target.PackageName, Rewards);
+	};
+	if (!TestTrue(TEXT("two rewards apply"), Apply(*this, Target, Document(TEXT("{\"RowName\":\"Coin\"},{\"RowName\":\"Gem\"}")), TEXT("create")).IsSuccess()))
+	{
+		return false;
+	}
+	const FAssetDocumentResult Appended = Validate(*this, Document(TEXT("{\"RowName\":\"Coin\"},{\"RowName\":\"Gem\"},{\"RowName\":\"Key\"}")), TEXT("validate append"));
+	TestTrue(*FString::Printf(TEXT("appending one element removes nothing (%s)"), *Appended.Message),
+		Appended.IsSuccess() && !Appended.Message.Contains(TEXT("removing")));
+	TestEqual(TEXT("appending one element lists no removal"), PayloadArray(Appended, TEXT("removals")).Num(), 0);
+	TestEqual(TEXT("appending one element is one change"), PayloadArray(Appended, TEXT("changes")).Num(), 1);
+	const FAssetDocumentResult Shorter = Validate(*this, Document(TEXT("{\"RowName\":\"Coin\"}")), TEXT("validate removal"));
+	TestTrue(*FString::Printf(TEXT("dropping one element removes one entry (%s)"), *Shorter.Message),
+		Shorter.IsSuccess() && Shorter.Message.Contains(TEXT("removing 1 entry")) && Shorter.Message.Contains(TEXT("/Rewards/1")));
+	TestEqual(TEXT("dropping one element lists one removal"), PayloadArray(Shorter, TEXT("removals")).Num(), 1);
+	return !HasAnyErrors();
 }
 #endif

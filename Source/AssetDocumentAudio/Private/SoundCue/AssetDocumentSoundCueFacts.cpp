@@ -46,6 +46,88 @@ USoundNode* NewReferenceNode(UClass& Class, int32 Inputs)
 	return Node;
 }
 
+// Does the value hold an instanced subobject (an object the node owns, made by the Details panel's class picker)?
+bool HoldsInstancedObject(const FProperty& Property, const void* ValuePtr)
+{
+	if (!Property.HasAnyPropertyFlags(CPF_InstancedReference | CPF_ContainsInstancedReference))
+	{
+		return false;
+	}
+	for (int32 Index = 0; Index < Property.ArrayDim; ++Index)
+	{
+		const void* ElementPtr = static_cast<const uint8*>(ValuePtr) + Index * Property.GetElementSize();
+		if (const FObjectPropertyBase* Object = CastField<FObjectPropertyBase>(&Property))
+		{
+			if (Object->GetObjectPropertyValue(ElementPtr) != nullptr)
+			{
+				return true;
+			}
+		}
+		else if (const FArrayProperty* ArrayProp = CastField<FArrayProperty>(&Property))
+		{
+			FScriptArrayHelper Helper(ArrayProp, ElementPtr);
+			for (int32 Item = 0; Item < Helper.Num(); ++Item)
+			{
+				if (HoldsInstancedObject(*ArrayProp->Inner, Helper.GetRawPtr(Item)))
+				{
+					return true;
+				}
+			}
+		}
+		else if (const FSetProperty* SetProp = CastField<FSetProperty>(&Property))
+		{
+			FScriptSetHelper Helper(SetProp, ElementPtr);
+			for (FScriptSetHelper::FIterator Item(Helper); Item; ++Item)
+			{
+				if (HoldsInstancedObject(*SetProp->ElementProp, Helper.GetElementPtr(Item)))
+				{
+					return true;
+				}
+			}
+		}
+		else if (const FMapProperty* MapProp = CastField<FMapProperty>(&Property))
+		{
+			FScriptMapHelper Helper(MapProp, ElementPtr);
+			for (FScriptMapHelper::FIterator Item(Helper); Item; ++Item)
+			{
+				if (HoldsInstancedObject(*MapProp->KeyProp, Helper.GetKeyPtr(Item))
+					|| HoldsInstancedObject(*MapProp->ValueProp, Helper.GetValuePtr(Item)))
+				{
+					return true;
+				}
+			}
+		}
+		else if (const FStructProperty* Struct = CastField<FStructProperty>(&Property))
+		{
+			for (TFieldIterator<FProperty> Member(Struct->Struct); Member; ++Member)
+			{
+				if (HoldsInstancedObject(**Member, Member->ContainerPtrToValuePtr<void>(ElementPtr)))
+				{
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+}
+
+// A property value the document has no form for: an instanced subobject (its own Details are not read or written)
+// reads as a marker carrying the property's export text; apply keeps it.
+FValue EncodeNodePropertyValue(const FProperty& Property, const void* ValuePtr)
+{
+	if (!HoldsInstancedObject(Property, ValuePtr))
+	{
+		return EncodePropertyValue(Property, ValuePtr);
+	}
+	FString Text;
+	Property.ExportText_Direct(Text, ValuePtr, nullptr, nullptr, PPF_None);
+	return FObjectBuilder()
+		.AddString(TEXT("Unsupported"), TEXT("An instanced subobject has no document form (its own properties are not "
+			"read or written); AssetDoc keeps it."))
+		.AddString(TEXT("Text"), MoveTemp(Text))
+		.Build();
+}
+
 FValue EncodeObjectProperties(const UObject& Object, const UObject* Reference)
 {
 	FObjectBuilder Builder;
@@ -55,8 +137,8 @@ FValue EncodeObjectProperties(const UObject& Object, const UObject* Reference)
 		{
 			continue;
 		}
-		const FValue Value = EncodePropertyValue(**It, It->ContainerPtrToValuePtr<void>(&Object));
-		if (Reference != nullptr && ValueText(Value) == ValueText(EncodePropertyValue(**It, It->ContainerPtrToValuePtr<void>(Reference))))
+		const FValue Value = EncodeNodePropertyValue(**It, It->ContainerPtrToValuePtr<void>(&Object));
+		if (Reference != nullptr && ValueText(Value) == ValueText(EncodeNodePropertyValue(**It, It->ContainerPtrToValuePtr<void>(Reference))))
 		{
 			continue;
 		}

@@ -22,6 +22,8 @@
 
 #include "AssetDocumentGraphBlueprintRebuilder.h"
 
+#include "AssetDocumentExactBlueprintClasses.h"
+
 #include "AssetDocumentGraphAdapters.h"
 #include "AssetDocumentGraphProvider.h"
 
@@ -183,7 +185,9 @@ public:
 		// "<Graph>__AnimFunc" stub graphs by name on every compile, so transient objects
 		// must stay Derived (an Authored record would pin them while the compiler
 		// replaces them).
-		if (PrimaryAsset.GetClass() == UBlueprint::StaticClass() || PrimaryAsset.IsA<UAnimBlueprint>())
+		// A Blueprint subclass the Blueprint profile reads (an Editor Utility Blueprint, ...) is restored the same way.
+		if (PrimaryAsset.GetClass() == UBlueprint::StaticClass() || PrimaryAsset.IsA<UAnimBlueprint>()
+			|| FindAssetDocumentBlueprintProfileClass(PrimaryAsset.GetClass()) == UBlueprint::StaticClass())
 		{
 			return true;
 		}

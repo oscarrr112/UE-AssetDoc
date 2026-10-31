@@ -207,6 +207,11 @@ TArray<FString> CheckStable(FAutomationTestBase& Test, const FString& ObjectPath
 	}
 	for (const FAssetDocumentDiagnostic& Diagnostic : First.Diagnostics)
 	{
+		// Extract carries the read warnings (Inspect's ReadWarnings) and one Sequencer.Unrepresented per marker.
+		if (Diagnostic.Severity == TEXT("warning") && (IsKnownReadCode(Diagnostic.Code) || Diagnostic.Code == TEXT("Sequencer.Unrepresented")))
+		{
+			continue;
+		}
 		Problems.Add(FString::Printf(TEXT("extract diagnostic [%s] %s %s"), *Diagnostic.Code, *Diagnostic.Path, *Diagnostic.Message));
 	}
 	// Diff takes a writable target: engine / plugin content (outside /Game) is refused with Meta.ReadOnlyTarget.

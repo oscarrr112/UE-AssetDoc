@@ -35,6 +35,7 @@
 
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetDocumentExactBlueprintClasses.h"
 #include "Animation/AnimBlueprint.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/Skeleton.h"
@@ -397,9 +398,11 @@ FAssetDocumentPrimitiveOutcome HandleAssetDocumentEditorBlueprintScratchClone(
 		return Failure(TEXT("BlueprintLifecycle.HandleRejected"), TEXT("The source_asset handle could not be leased."), Lease.Diagnostics);
 	}
 	UBlueprint* Blueprint = Cast<UBlueprint>(LeasedAsset(*Lease.Lease));
-	if (Blueprint == nullptr || FindFactoryClass(Blueprint->GetClass()) == nullptr || Blueprint->ParentClass == nullptr)
+	// A Blueprint subclass read by one of these profiles (an Editor Utility Blueprint, ...) previews the same way.
+	if (Blueprint == nullptr || FindFactoryClass(FindAssetDocumentBlueprintProfileClass(Blueprint->GetClass())) == nullptr
+		|| Blueprint->ParentClass == nullptr)
 	{
-		return Failure(TEXT("BlueprintLifecycle.TargetClassMismatch"), TEXT("The source is not an exact UBlueprint, UWidgetBlueprint or UAnimBlueprint with a parent class."));
+		return Failure(TEXT("BlueprintLifecycle.TargetClassMismatch"), TEXT("The source is not a UBlueprint, UWidgetBlueprint or UAnimBlueprint (or a subclass read by their profile) with a parent class."));
 	}
 	return IssuePlaceholderScratch(*Blueprint->ParentClass.Get(), Handles);
 }

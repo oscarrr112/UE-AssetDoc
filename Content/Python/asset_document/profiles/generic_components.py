@@ -14,11 +14,19 @@ from types import MappingProxyType
 from typing import Mapping
 
 from asset_document.diagnostics import contract_error
-from asset_document.profiles.curve_float import CURVE_FLOAT_PROPERTIES
+from asset_document.profiles.curve_float import (
+    CURVE_FLOAT_PROPERTIES,
+    CURVE_LINEAR_COLOR_PROPERTIES,
+    CURVE_VECTOR_PROPERTIES,
+)
 from asset_document.regions.property_semantics import GenericPropertyComponent
 
 
-GENERIC_PROPERTY_COMPONENTS: tuple[GenericPropertyComponent, ...] = (CURVE_FLOAT_PROPERTIES,)
+GENERIC_PROPERTY_COMPONENTS: tuple[GenericPropertyComponent, ...] = (
+    CURVE_FLOAT_PROPERTIES,
+    CURVE_VECTOR_PROPERTIES,
+    CURVE_LINEAR_COLOR_PROPERTIES,
+)
 
 
 def _index(components: tuple[GenericPropertyComponent, ...]) -> Mapping[str, GenericPropertyComponent]:

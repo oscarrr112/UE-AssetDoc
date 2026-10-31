@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Mapping, Protocol
 
 
+from asset_document import markers
 from asset_document.canonical.document_codec import DocumentCodec, integral_numbers_as_integers
 from asset_document.diagnostics import (
     AssetDocumentContractError,
@@ -107,12 +108,13 @@ def _is_no_value(value: object) -> bool:
     return value is None or (type(value) is dict and not value)
 
 
-def _require_preflight_result(value: object, expected_value: JsonValue, path: str) -> None:
+def _require_preflight_result(value: object, expected_value: JsonValue, path: str, codec: object = None) -> None:
     if type(value) is not dict or set(value) != {"canonical_value", "feasible"}:
         _invalid_result(path, "preflight returned an invalid result shape")
     if value["feasible"] is not True:
         _invalid_result(path, "preflight did not report exact feasibility")
-    canonical_value = integral_numbers_as_integers(_json_snapshot(value["canonical_value"], path))
+    canonical_value = integral_numbers_as_integers(
+        _shaped_like_authored(codec, expected_value, _json_snapshot(value["canonical_value"], path)))
     authored_value = integral_numbers_as_integers(expected_value)
     if not canonical_equal(canonical_value, authored_value):
         differences = canonical_diff(authored_value, canonical_value)
@@ -195,6 +197,13 @@ class PropertyValueCodec(Protocol):
     def from_document(self, value: JsonValue, path: str) -> JsonValue: ...
 
     def to_document(self, value: JsonValue, path: str) -> JsonValue: ...
+
+
+def _shaped_like_authored(codec: object, authored: JsonValue, observed: JsonValue) -> JsonValue:
+    """``observed`` (native) in the shape of the authored native value, for a codec whose native value leaves parts
+    out that the write keeps (``shape_like``); other codecs' values as observed."""
+    shape_like = getattr(codec, "shape_like", None)
+    return shape_like(authored, observed) if shape_like is not None else observed
 
 
 @dataclass(frozen=True, slots=True)
@@ -593,23 +602,47 @@ def _read_property_value(
         arguments = {"as_authored": _json_snapshot(as_authored, path)}
     else:
         arguments = {"sparse": True} if sparse else {}
-    outcome = _successful_outcome(
-        context.invoke(
-            requirement=requirement(_READ_ID),
-            value_arguments=arguments,
-            handle_arguments=_handle_arguments(
-                asset=asset_handle,
-                property=item.property_handle,
-            ),
+    raw = context.invoke(
+        requirement=requirement(_READ_ID),
+        value_arguments=arguments,
+        handle_arguments=_handle_arguments(
+            asset=asset_handle,
+            property=item.property_handle,
         ),
-        path,
     )
+    if type(raw) is PrimitiveOutcome and raw.status is not PrimitiveOutcomeStatus.SUCCEEDED and raw.diagnostics:
+        raise _ValueUnreadable(_locate_value_diagnostic(raw.diagnostics[0]))
+    outcome = _successful_outcome(raw, path)
     _require_read_only_lanes(outcome, path)
     if outcome.value == {"editor_derived": True}:
         return _EDITOR_DERIVED
     if type(outcome.value) is not dict or set(outcome.value) != {"value"}:
         _invalid_result(path, "read must return exactly one value")
     return _json_snapshot(outcome.value["value"], path)
+
+
+class _ValueUnreadable(AssetDocumentContractError):
+    """The read primitive reported that one property's value cannot be read."""
+
+
+def _read_or_mark(
+    asset_handle: OpaqueHandleProxy,
+    item: AdmittedProperty,
+    context: GenericPrimitiveContext,
+    as_authored: JsonValue = None,
+    sparse: bool = False,
+) -> JsonValue:
+    """``_read_property_value``; a property whose value cannot be read is the marker of that failure (the read of the
+    other properties goes on; apply keeps the value)."""
+    try:
+        return _read_property_value(asset_handle, item, context, as_authored, sparse)
+    except _ValueUnreadable as failure:
+        diagnostic = failure.diagnostic
+        return markers.marker(f"The value could not be read ({diagnostic.code}: {diagnostic.message}); AssetDoc keeps it.")
+
+
+def _without_markers(properties: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    return {name: value for name, value in properties.items() if not markers.is_marker(value)}
 
 
 # An asset's import record (``AssetImportData``) is made by the asset itself on creation (PostInitProperties; the class
@@ -689,7 +722,7 @@ class PropertySemanticAdapter:
                     self._codecs[name].from_document(value, _property_path(name)),
                     _property_path(name),
                 )
-                if name in self._codecs
+                if name in self._codecs and not markers.is_marker(value)
                 else integral_numbers_as_integers(value)
             )
             for name, value in properties.items()
@@ -722,7 +755,7 @@ class PropertySemanticAdapter:
         admitted: tuple[AdmittedProperty, ...],
     ) -> None:
         authored, _ = _validate_authored(properties, admitted)
-        self.to_native(authored)
+        self.to_native(_without_markers(authored))
 
     def preflight(
         self,
@@ -738,7 +771,7 @@ class PropertySemanticAdapter:
                 "property preflight requires PREFLIGHT",
             )
         authored, by_name = _validate_authored(properties, admitted)
-        native = self.to_native(authored)
+        native = self.to_native(_without_markers(authored))
         for name in sorted(native):
             outcome = _successful_outcome(
                 _invoke_preflight(
@@ -750,7 +783,7 @@ class PropertySemanticAdapter:
                 _property_path(name),
             )
             _require_read_only_lanes(outcome, _property_path(name))
-            _require_preflight_result(outcome.value, native[name], _property_path(name))
+            _require_preflight_result(outcome.value, native[name], _property_path(name), self._codecs.get(name))
 
     def apply(
         self,
@@ -769,7 +802,9 @@ class PropertySemanticAdapter:
                 "mutation phase must match the bound context",
             )
         authored, _ = _validate_authored(properties, admitted)
-        native = self.to_native(authored)
+        # A property marked by the read is not written (its value is kept); the read-back after the apply compares
+        # the marker, so an edited one fails the apply.
+        native = self.to_native(_without_markers(authored))
         batch = _enumerate_batch(read_asset_handle, context, self._declared)
         _validate_authored(native, batch.properties)
         outcome = _successful_outcome(
@@ -810,20 +845,26 @@ class PropertySemanticAdapter:
         native_authored = self.to_native({
             name: value
             for name, value in (authored or {}).items()
-            if type(value) in (dict, list)
+            if type(value) in (dict, list) and not markers.is_marker(value)
         })
         # Only writable rows are extracted: Apply rejects non-writable properties
         # (Generic.NonWritableProperty), so an extracted document must stay appliable.
         readable = tuple(sorted((item for item in admitted if item.readable and item.writable), key=lambda item: item.name))
         output: dict[str, JsonValue] = {}
         for item in readable:
-            value = _read_property_value(asset_handle, item, context, native_authored.get(item.name))
+            value = _read_or_mark(asset_handle, item, context, native_authored.get(item.name))
             if value is _EDITOR_DERIVED:
+                continue
+            if item.name in native_authored and not markers.is_marker(value):
+                value = _shaped_like_authored(self._codecs.get(item.name), native_authored[item.name], value)
+            if markers.is_marker(value):
+                markers.warn(_property_path(item.name), "Generic", value)
+                output[item.name] = value
                 continue
             if item.name in native_authored or _include_extracted_value(value, item, include_defaults):
                 if not include_defaults and item.name not in native_authored and item.name not in self._codecs \
                         and type(value) in (dict, list):
                     # diff_only: a struct (also inside arrays) lists only its members that differ from the default.
-                    value = _read_property_value(asset_handle, item, context, sparse=True)
-                output[item.name] = self.to_document(item.name, value)
+                    value = _read_or_mark(asset_handle, item, context, sparse=True)
+                output[item.name] = value if markers.is_marker(value) else self.to_document(item.name, value)
         return output

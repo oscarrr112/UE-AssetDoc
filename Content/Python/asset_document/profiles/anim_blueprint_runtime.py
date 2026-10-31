@@ -40,13 +40,14 @@ from __future__ import annotations
 import re
 
 from asset_document.canonical.document_codec import DocumentCodec
+from asset_document import class_routing
 from asset_document.diagnostics import contract_error, with_diagnostics
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.dto import PrimitiveRequirement
 from asset_document.graphs.extract import extract_graphs
 from asset_document.graphs.reconcile import PlanOp
 from asset_document.graphs.schemas.anim import (
-    ANIM_ADAPTER, anim_label, decode_anim_graph, decode_anim_layers, encode_anim_graph,
+    ANIM_ADAPTER, anim_label, check_shared_rules, decode_anim_graph, decode_anim_layers, encode_anim_graph, resolve_getter_sources,
 )
 from asset_document.graphs.schemas.k2 import SECTIONS, SECTION_BY_ROLE, decode_body, encode_graph
 from asset_document.graphs.executor import LINK_CHECK, GraphExecutor, graph_requirements
@@ -61,8 +62,8 @@ from asset_document.profiles import blueprint_renames as renames
 from asset_document.profiles import ublueprint_members as members
 from asset_document.profiles.ublueprint_graph_compare import _refine, _shape, graphs_match, section_mismatches, _is_stub
 from asset_document.profiles.ublueprint_runtime import (
-    PENDING_RELAYOUT, _Members as _BlueprintMembers, _invoke as _blueprint_invoke, read_live_with_relayout,
-    relayout_differences, trial_parent_context, validate_links,
+    PENDING_RELAYOUT, _Members as _BlueprintMembers, _invoke as _blueprint_invoke, layout_warnings,
+    read_live_with_relayout, relayout_differences, trial_parent_context, validate_links,
 )
 from asset_document.regions.primitive_catalog import NamedOpaqueHandleArgument, _optional_handle, _single_handle
 from asset_document.read_only_extract import admits_read_only
@@ -173,8 +174,8 @@ def _validate_header(document) -> None:
     if type(document.get("SchemaVersion")) is not int or document["SchemaVersion"] != 1:
         raise _error("/SchemaVersion", "SchemaVersion must be 1.", "Meta.InvalidSchemaVersion")
     _require_target(document.get("Target"))
-    if document.get("Class") != ANIM_BLUEPRINT_CLASS:
-        raise _error("/Class", "Class must be /Script/Engine.AnimBlueprint.", "AnimBlueprint.ClassMismatch")
+    if not class_routing.accepts(ANIM_BLUEPRINT_CLASS, document.get("Class")):
+        raise _error("/Class", f"Class must be {class_routing.document_class(ANIM_BLUEPRINT_CLASS)}.", "AnimBlueprint.ClassMismatch")
     if document.get("Action") not in {item.value for item in DocumentAction}:
         raise _error("/Action", "Action is Create, Update or CreateOrUpdate.", "AnimBlueprint.InvalidAction")
     for key in ("Definitions", "Properties"):
@@ -312,10 +313,13 @@ def canonicalize(document) -> dict:
     target = document["Target"]
     if out.get("ParentClass") == LAYER_INTERFACE:
         validate_interface_body(body, target)
-    for key, decode in (("AnimGraph", decode_anim_graph), ("AnimLayers", decode_anim_layers)):
+    decoded = []
+    for key, decode in (("AnimGraph", lambda value, **kw: (decode_anim_graph(value, **kw),)),
+                        ("AnimLayers", decode_anim_layers)):
         if body.get(key) is not None:
-            decode(body[key], self_class=self_class(target))
+            decoded.extend(decode(body[key], self_class=self_class(target)))
             out[key] = body[key]
+    check_shared_rules(decoded)
     for section in K2_SECTIONS:
         if body.get(section) is not None:
             decode_body({section: body[section]}, self_class=self_class(target))
@@ -463,7 +467,9 @@ def apply(document, read, mutable, context) -> tuple:
     body = document["Body"]
     target = document["Target"]
     blueprint = _Members(context, read, mutable)
-    blueprint.run(plan_header(document, blueprint.query()))
+    first = blueprint.query()
+    members.refuse_unrepresented_graphs(first)
+    blueprint.run(plan_header(document, first))
     query = blueprint.query()
     blueprint.run(renames.plan_renames(body, query) + dispatchers.plan_removes(body, query) + members.plan_interfaces(body, query)
                   + members.plan_variables(body, query) + dispatchers.plan_sets(body, query))
@@ -554,7 +560,9 @@ def _extract(target, read, context, include_defaults: bool = False, authored_bod
         body[section] = [encode_graph(graph) for graph in graphs if graph.id.startswith(section + "/")]
     body.update(_settings_from_query(settings))
     properties = {key: value for key, value in query.get("properties", {}).items() if key != "TargetSkeleton"}
-    return {"SchemaVersion": 1, "Target": target, "Class": ANIM_BLUEPRINT_CLASS,
+    members.warn_markers(body, properties)
+    members.warn_unrepresented(query)
+    return {"SchemaVersion": 1, "Target": target, "Class": class_routing.document_class(ANIM_BLUEPRINT_CLASS),
             "Action": DocumentAction.CREATE_OR_UPDATE.value, "Definitions": {},
             "Properties": properties, "Body": body}, pending
 
@@ -586,6 +594,7 @@ def with_known_defaults(value):
 
 
 def _graph_list_mismatches(key: str, wanted, have, strict: bool) -> list[str]:
+    wanted = resolve_getter_sources(tuple(wanted), tuple(have))
     remaining = {graph.name.casefold(): graph for graph in have}
     out = []
     for graph in wanted:
@@ -595,7 +604,11 @@ def _graph_list_mismatches(key: str, wanted, have, strict: bool) -> list[str]:
     return out + [graph.name for graph in remaining.values() if not _is_stub(graph)]
 
 
-_STRUCTURAL_SETTINGS = frozenset(("Samples", "LayerGroup"))
+# Settings an omission keeps (no reported default): structural ones, bound node functions and transition sharing.
+_STRUCTURAL_SETTINGS = frozenset(("Samples", "LayerGroup", "SharedRules", "SharedCrossfade"))
+_KEPT_PREFIXES = ("BlendSpace.", "Functions.")
+# Nodes whose exposed variables (ShowPin.*) an omission keeps: linked graphs and layers.
+_KEPT_PIN_ACTIONS = ("Anim:LinkedAnimGraph", "Anim:LinkedAnimLayer")
 
 
 def _leftover_settings(live_node, authored_node, authored_graph) -> set:
@@ -609,9 +622,10 @@ def _leftover_settings(live_node, authored_node, authored_graph) -> set:
     linked |= {str(name).casefold() for name in (bindings if hasattr(bindings, "keys") else ())}
     out = set()
     for key in live_node.properties.node:
-        if key in authored_node.properties.node or key in _STRUCTURAL_SETTINGS or key.startswith("BlendSpace."):
+        if key in authored_node.properties.node or key in _STRUCTURAL_SETTINGS or key.startswith(_KEPT_PREFIXES):
             continue
-        if key.startswith("ShowPin.") and key[len("ShowPin."):].casefold() in linked:
+        if key.startswith("ShowPin.") and (key[len("ShowPin."):].casefold() in linked
+                                           or (live_node.action or "").startswith(_KEPT_PIN_ACTIONS)):
             continue
         out.add(key)
     return out
@@ -730,7 +744,7 @@ class AnimBlueprintRuntimeProfile:
                                                                  if key not in EMPTY_ONLY_KEYS and key != dispatchers.ALIAS]}
 
     def create_template(self, target: str) -> dict:
-        return {"SchemaVersion": 1, "Target": _require_target(target), "Class": ANIM_BLUEPRINT_CLASS,
+        return {"SchemaVersion": 1, "Target": _require_target(target), "Class": class_routing.document_class(ANIM_BLUEPRINT_CLASS),
                 "Action": DocumentAction.CREATE_OR_UPDATE.value, "Definitions": {}, "Properties": {},
                 "Body": {"ParentClass": DEFAULT_PARENT, "TargetSkeleton": None, "ImplementedInterfaces": [],
                          "Variables": [], "ClassDefaults": {}, "AnimGraph": {"Nodes": [], "Links": []},
@@ -745,6 +759,11 @@ class AnimBlueprintRuntimeProfile:
 
     def create_target_context(self, document, context):
         document = canonicalize(document)
+        routed = class_routing.routed_class(ANIM_BLUEPRINT_CLASS)
+        if routed is not None:
+            raise _error("/Class", f"AssetDoc reads and edits existing {routed} assets with this profile but does not "
+                         "create them: make the asset in the editor, then extract it and apply with Action Update.",
+                         "AnimBlueprint.SubclassCreateUnsupported")
         body = document["Body"]
         parent = body.get("ParentClass", DEFAULT_PARENT)
         outcome = _invoke(context, CLASS_RESOLVE, {"class": parent, "expected_base": None}, (),
@@ -773,8 +792,13 @@ class AnimBlueprintRuntimeProfile:
         """Validate's graph check of the K2 graph sections (UbergraphPages, FunctionGraphs, MacroGraphs; the UBlueprint
         Profile's ublueprint_link_check): node keys, pin names and links, read on the existing target, or on a
         transient template Animation Blueprint of the parent class for a new one (validate_trial_context). AnimGraph
-        and AnimLayers are not checked this way: Apply reports their nodes."""
-        validate_links(canonicalize(document), read_asset_handle, context, requirements=BY_ID)
+        and AnimLayers are not checked this way: Apply reports their nodes. Returns the link check's warnings, then the
+        K2 graphs' layout warnings."""
+        document = canonicalize(document)
+        warnings = tuple(validate_links(document, read_asset_handle, context, requirements=BY_ID))
+        executor = _graph_executor(context, read_asset_handle, None, document["Target"])
+        return with_diagnostics((), warnings + tuple(layout_warnings(document, read_asset_handle, context, executor,
+                                                                     requirements=BY_ID)))
 
     def validate_trial_context(self, document, context):
         return trial_parent_context(context, canonicalize(document)["Body"])
@@ -786,7 +810,7 @@ class AnimBlueprintRuntimeProfile:
         return extract(_require_target(target), asset_handle, context, include_defaults)
 
     def inspect(self, *, mode, exact_class_path, exact_asset_object_path, editor_asset_handle, context):
-        if mode != "live_asset" or exact_class_path != ANIM_BLUEPRINT_CLASS or editor_asset_handle is None:
+        if mode != "live_asset" or not class_routing.accepts(ANIM_BLUEPRINT_CLASS, exact_class_path) or editor_asset_handle is None:
             raise _error("/Inspect", "AnimBlueprint inspection reads a live Animation Blueprint asset.",
                          "AnimBlueprint.InspectNotAdmitted")
         return self.canonicalize(self.extract(target=exact_asset_object_path.rsplit(".", 1)[0],

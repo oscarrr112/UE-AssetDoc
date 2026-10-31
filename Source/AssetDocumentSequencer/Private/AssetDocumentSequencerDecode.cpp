@@ -5,12 +5,14 @@
 // frames of the context's time base (rounded to the nearest tick), binding IDs are binding paths ({"Binding": path},
 // "Fixed" for a fixed ID, the raw {Guid, SequenceID, ParentIndex} form of a reference into another sequence), time-warp
 // play rates {"PlayRate"}, engine structs member by member, everything else through the Editor typed value codec. A
-// value read as {"Unsupported": <export text>} is kept as it is when the text is unchanged and imported from the text
-// otherwise. An authored value equal to what the read gives for the current value is not written (so re-applying an
-// extract writes nothing and instanced values the codec cannot rebuild stay as they are).
+// value read as the marker {"Unsupported": <reason>, "Text": <export text>} (or the older {"Unsupported": <export text>})
+// is kept as it is when the text is the current value's; another text is refused (Sequencer.UnrepresentedValue). An
+// authored value equal to what the read gives for the current value is not written (so re-applying an extract writes
+// nothing and instanced values the codec cannot rebuild stay as they are).
 
 #include "AssetDocumentSequencerPrimitives.h"
 
+#include "AssetDocumentEditorMarkerText.h"
 #include "AssetDocumentEditorPropertyValueCodec.h"
 #include "Channels/MovieSceneChannel.h"
 #include "Channels/MovieSceneEvent.h"
@@ -43,30 +45,40 @@ double NumberOf(const FValue& Value)
 	return Value.Kind == EAssetDocumentRuntimeValueKind::Integer ? static_cast<double>(Value.IntegerValue) : Value.NumberValue;
 }
 
-// {"Unsupported": text} (the read's form of a value the codec cannot represent).
+// The export text of a marker (the read's form of a value the codec cannot represent): {"Unsupported": reason, "Text":
+// text}, or the older {"Unsupported": text}.
 const FValue* UnsupportedText(const FValue& Value)
 {
-	if (Value.Kind != EAssetDocumentRuntimeValueKind::Object || Value.ObjectKeys.Num() != 1 || Value.ObjectKeys[0] != TEXT("Unsupported"))
+	if (Value.Kind != EAssetDocumentRuntimeValueKind::Object)
 	{
 		return nullptr;
 	}
-	return Value.Elements[0].Kind == EAssetDocumentRuntimeValueKind::String ? &Value.Elements[0] : nullptr;
+	const FValue* Reason = FindField(Value, TEXT("Unsupported"));
+	if (Reason == nullptr || Reason->Kind != EAssetDocumentRuntimeValueKind::String)
+	{
+		return nullptr;
+	}
+	if (Value.ObjectKeys.Num() == 1)
+	{
+		return Reason;
+	}
+	const FValue* Text = FindField(Value, TEXT("Text"));
+	return Value.ObjectKeys.Num() == 2 && Text != nullptr && Text->Kind == EAssetDocumentRuntimeValueKind::String ? Text : nullptr;
 }
 
+// A marker keeps the value it stands for; it never writes one.
 bool DecodeUnsupported(const FProperty& Property, const FString& Text, void* ValuePtr, FDecodeContext& Context)
 {
 	FString Current;
 	Property.ExportTextItem_Direct(Current, ValuePtr, nullptr, nullptr, PPF_None);
-	if (Current == Text)
+	// Paths into the asset compare as the asset's own path names them (a moved asset, Validate's copy).
+	if (Current == Text || UE::AssetDocument::EditorMarkerText::IsSameText(Text, Current, Context.Owner))
 	{
 		return true;
 	}
-	if (Property.ImportText_Direct(*Text, ValuePtr, Context.Owner, PPF_None) == nullptr)
-	{
-		return Context.Reader.Fail(TEXT("Sequencer.UnsupportedValue"), FString::Printf(TEXT("'%s' (%s) is kept as export text in documents and the "
-			"text does not import."), *Property.GetName(), *Property.GetCPPType()), Context.Path);
-	}
-	return true;
+	return Context.Reader.Fail(TEXT("Sequencer.UnrepresentedValue"), FString::Printf(TEXT("'%s' (%s) has no document form, so it cannot be "
+		"written: leave its \"Unsupported\" marker as extracted, or omit it to keep the value."), *Property.GetName(), *Property.GetCPPType()),
+		Context.Path);
 }
 
 bool DecodeCodec(const FProperty& Property, const FValue& Value, void* ValuePtr, FDecodeContext& Context)

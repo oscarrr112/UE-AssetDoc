@@ -17,12 +17,13 @@
 //   compile          {compile: {Status, Messages}}                  (inspect only)
 //   user_parameter   {name, type, value?, data_interface?, object?, description?, category?}
 //   emitter          {name, enabled, mode, parent?, properties, stateless?}
-//   module           {emitter, group, stage?, event?, name, script?, assign?, version?, enabled, display_name?,
+//   module           {emitter, group, stage?, stage_index?, event?, name, script?, assign?, version?, enabled, display_name?,
 //                     note?, inherited?, inputs: [input]}
 //   renderer         {emitter, name, class, enabled, properties}
 //   event_handler    {emitter, index, properties}                    (properties.SourceEmitter: a handle name)
 //   declared_parameter {name, type, description?}                    (the Parameters panel's declared parameters)
-//   simulation_stage {emitter, name, class, enabled, properties}
+//   simulation_stage {emitter, name, class, enabled, properties}   (in stage order; a module's stage_index is the
+//                                                                   position among them, its stage the stage's name)
 //   library          {group, scripts}                                (inspect only)
 //   script, parameter, node, link, pin_default  (scratch pads, with "scope"; AssetDocumentNiagaraScriptRead.cpp)
 // input: {name, type, mode, overridden, value? | link? (+ link_type when it differs from type) | dynamic? {script, version?, inputs} | expression? |
@@ -106,6 +107,24 @@ const TCHAR* UsageGroup(ENiagaraScriptUsage Usage)
 
 // Module script reference: the asset path, or "ScratchPad:<name>" for a scratch pad script (a subobject of
 // the system or of the emitter's scratch pad container).
+// A user or declared parameter's Details: "description" (Metadata.Description) and "meta", the rest of its
+// metadata sparse against the defaults (left out when all default); a member the codec has no form for is a marker.
+void AddVariableDetails(const UNiagaraScriptVariable& Variable, FObjectBuilder& Row)
+{
+	if (!Variable.Metadata.Description.IsEmpty())
+	{
+		Row.AddString(TEXT("description"), Variable.Metadata.Description.ToString());
+	}
+	const FNiagaraVariableMetaData Defaults;
+	const FName WrittenElsewhere[] = {GET_MEMBER_NAME_CHECKED(FNiagaraVariableMetaData, Description)};
+	FValue Meta = SparseProperties(*FNiagaraVariableMetaData::StaticStruct(), &Variable.Metadata, &Defaults, WrittenElsewhere,
+		nullptr, EUnencodable::Mark);
+	if (Meta.ObjectKeys.Num() > 0)
+	{
+		Row.Add(TEXT("meta"), MoveTemp(Meta));
+	}
+}
+
 FString ScriptReference(const UNiagaraScript* Script)
 {
 	if (Script == nullptr)
@@ -304,7 +323,7 @@ public:
 		case EValueMode::Data:
 			if (const UNiagaraDataInterface* DataInterface = Input.GetDataValueObject())
 			{
-				Row.Add(TEXT("data_interface"), DescribeDataInterface(*DataInterface));
+				Row.Add(TEXT("data_interface"), DescribeDataInterface(*DataInterface, EUnencodable::Mark));
 			}
 			break;
 		case EValueMode::ObjectAsset:
@@ -326,7 +345,8 @@ public:
 		return Row.Build();
 	}
 
-	// Event handlers are identified by position, simulation stages by name (design §3.3).
+	// Event handlers and simulation stages are identified by position (stage names may repeat: the stack's "+" adds
+	// stages named None); a stage's name is listed too.
 	static bool AddGroupIdentity(ENiagaraScriptUsage Usage, const FGuid& UsageId, const FVersionedNiagaraEmitterData* EmitterData,
 		FObjectBuilder& Where)
 	{
@@ -348,13 +368,20 @@ public:
 		{
 			if (EmitterData != nullptr)
 			{
+				int32 Position = 0;
 				for (const UNiagaraSimulationStageBase* Stage : EmitterData->GetSimulationStages())
 				{
-					if (Stage != nullptr && Stage->Script != nullptr && Stage->Script->GetUsageId() == UsageId)
+					if (Stage == nullptr)
+					{
+						continue;
+					}
+					if (Stage->Script != nullptr && Stage->Script->GetUsageId() == UsageId)
 					{
 						Where.AddString(TEXT("stage"), Stage->SimulationStageName.ToString());
+						Where.AddInt(TEXT("stage_index"), Position);
 						return true;
 					}
+					++Position;
 				}
 			}
 			return false;
@@ -425,7 +452,8 @@ public:
 			Row.Add(TEXT("parent"), ParentRow.Build());
 		}
 		const FVersionedNiagaraEmitterData Defaults;
-		Row.Add(TEXT("properties"), SparseProperties(*FVersionedNiagaraEmitterData::StaticStruct(), Data, &Defaults));
+		Row.Add(TEXT("properties"), SparseProperties(*FVersionedNiagaraEmitterData::StaticStruct(), Data, &Defaults, {}, nullptr,
+			EUnencodable::Mark));
 		Rows.Add(Row.Build());
 
 		for (const UNiagaraRendererProperties* Renderer : Data->GetRenderers())
@@ -444,7 +472,7 @@ public:
 			Handler.AddString(TEXT("emitter"), Name);
 			Handler.AddInt(TEXT("index"), Index);
 			FValue Properties = SparseProperties(*FNiagaraEventScriptProperties::StaticStruct(), &Handlers[Index], &EventDefaults,
-				{TEXT("Script"), TEXT("SourceEmitterID")});
+				{TEXT("Script"), TEXT("SourceEmitterID")}, nullptr, EUnencodable::Mark);
 			// The source emitter's dropdown shows a handle name ("" = this emitter): its id is not authored.
 			if (Handlers[Index].SourceEmitterID.IsValid())
 			{
@@ -468,7 +496,8 @@ public:
 			StageRow.AddString(TEXT("name"), Stage->SimulationStageName.ToString());
 			StageRow.AddString(TEXT("class"), ClassLabel(Stage->GetClass(), TEXT("NiagaraSimulationStage"), TEXT("")));
 			StageRow.AddBool(TEXT("enabled"), Stage->bEnabled != 0);
-			StageRow.Add(TEXT("properties"), SparseObjectProperties(*Stage, {TEXT("SimulationStageName"), TEXT("bEnabled")}));
+			StageRow.Add(TEXT("properties"), SparseObjectProperties(*Stage, {TEXT("SimulationStageName"), TEXT("bEnabled")}, nullptr,
+				EUnencodable::Mark));
 			Rows.Add(StageRow.Build());
 		}
 		if (Data->ScratchPads != nullptr)
@@ -491,7 +520,7 @@ public:
 		Row.AddString(TEXT("name"), Renderer.GetName());
 		Row.AddString(TEXT("class"), ClassLabel(Renderer.GetClass(), TEXT("Niagara"), TEXT("Properties")));
 		Row.AddBool(TEXT("enabled"), Renderer.GetIsEnabled());
-		Row.Add(TEXT("properties"), SparseObjectProperties(Renderer, {TEXT("bIsEnabled")}));
+		Row.Add(TEXT("properties"), SparseObjectProperties(Renderer, {TEXT("bIsEnabled")}, nullptr, EUnencodable::Mark));
 		return Row.Build();
 	}
 
@@ -501,7 +530,7 @@ public:
 	{
 		FObjectBuilder Out;
 		const TArray<FName> Lists = {TEXT("Modules"), TEXT("RendererProperties")};
-		Out.Add(TEXT("Properties"), SparseObjectProperties(Emitter, Lists));
+		Out.Add(TEXT("Properties"), SparseObjectProperties(Emitter, Lists, nullptr, EUnencodable::Mark));
 		auto ReadObjects = [&Emitter](const TCHAR* PropertyName, const TCHAR* Prefix, const TCHAR* Suffix, bool bNamed)
 		{
 			TArray<FValue> Items;
@@ -525,7 +554,7 @@ public:
 					Row.AddString(TEXT("Name"), Item->GetName());
 				}
 				Row.AddString(TEXT("Class"), ClassLabel(Item->GetClass(), Prefix, Suffix));
-				Row.Add(TEXT("Properties"), SparseObjectProperties(*Item));
+				Row.Add(TEXT("Properties"), SparseObjectProperties(*Item, {}, nullptr, EUnencodable::Mark));
 				Items.Add(Row.Build());
 			}
 			return Items;
@@ -538,10 +567,10 @@ public:
 	void ReadUserParameters(const UNiagaraSystem& System)
 	{
 		const FNiagaraUserRedirectionParameterStore& Store = System.GetExposedParameters();
-		TMap<FName, FString> Descriptions;
+		TMap<FName, const UNiagaraScriptVariable*> Details;
 		if (const UNiagaraSystemEditorData* EditorData = Cast<UNiagaraSystemEditorData>(System.GetEditorData()))
 		{
-			// The user parameter panel's metadata (description); read through reflection (the list is not public).
+			// The user parameter panel's metadata (description and the rest of its Details); read through reflection (the list is not public).
 			const FArrayProperty* MetaData = CastField<FArrayProperty>(UNiagaraSystemEditorData::StaticClass()->FindPropertyByName(TEXT("UserParameterMetaData")));
 			const FObjectPropertyBase* Inner = MetaData != nullptr ? CastField<FObjectPropertyBase>(MetaData->Inner) : nullptr;
 			if (Inner != nullptr)
@@ -551,10 +580,7 @@ public:
 				{
 					if (const UNiagaraScriptVariable* Variable = Cast<UNiagaraScriptVariable>(Inner->GetObjectPropertyValue(Helper.GetRawPtr(Index))))
 					{
-						if (!Variable->Metadata.Description.IsEmpty())
-						{
-							Descriptions.Add(Variable->Variable.GetName(), Variable->Metadata.Description.ToString());
-						}
+						Details.Add(Variable->Variable.GetName(), Variable);
 					}
 				}
 			}
@@ -579,7 +605,7 @@ public:
 			{
 				if (const UNiagaraDataInterface* DataInterface = Store.GetDataInterface(Parameter.Offset))
 				{
-					Row.Add(TEXT("data_interface"), DescribeDataInterface(*DataInterface));
+					Row.Add(TEXT("data_interface"), DescribeDataInterface(*DataInterface, EUnencodable::Mark));
 				}
 			}
 			else if (Parameter.GetType().IsUObject())
@@ -594,9 +620,9 @@ public:
 					Row.Add(TEXT("value"), MoveTemp(Value));
 				}
 			}
-			if (const FString* Description = Descriptions.Find(Parameter.GetName()))
+			if (const UNiagaraScriptVariable* const* Variable = Details.Find(Parameter.GetName()))
 			{
-				Row.AddString(TEXT("description"), *Description);
+				AddVariableDetails(**Variable, Row);
 			}
 			if (const FString* Category = Categories.Find(Parameter.GetName()))
 			{
@@ -620,10 +646,7 @@ public:
 			Row.AddString(TEXT("kind"), TEXT("declared_parameter"));
 			Row.AddString(TEXT("name"), Variable->Variable.GetName().ToString());
 			Row.AddString(TEXT("type"), TypeToken(Variable->Variable.GetType()));
-			if (!Variable->Metadata.Description.IsEmpty())
-			{
-				Row.AddString(TEXT("description"), Variable->Metadata.Description.ToString());
-			}
+			AddVariableDetails(*Variable, Row);
 			Rows.Add(Row.Build());
 		}
 	}

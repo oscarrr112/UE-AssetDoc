@@ -20,11 +20,16 @@ Document (MCP/schemas/assetdocument/IKRig.md)::
   solvers are an ordered stack. Settings, goal settings, bone settings and goal Details are sparse: an omitted field
   has the value a new solver / goal of that type has.
 * Extract reads the rig as stored (no re-initialization): ``Offset`` is the goal's gizmo offset from its bone.
+  A solver whose type does not load is a marked element ``{"Type": null, "Unsupported": ...}``; a settings field
+  the document has no form for (a TFieldPath, a TOptional, ...) reads in place as the marker
+  ``{"Unsupported": ..., "Text": <export text>}``. Each marker warns ``IKRig.Unrepresented``; apply keeps a marker
+  left as read or omitted and refuses an edited one (``IKRig.UnrepresentedValue``).
 * Apply (``ik_rig_apply``) makes the IK Rig editor's edits; Create makes the rig with the Content Browser's factory
   and sets ``PreviewMesh`` first.
 """
 from __future__ import annotations
 
+from asset_document import markers
 from asset_document.meta import (
     ComparisonPolicy, DefaultPolicy, DeletePolicy, IdentityPolicy, OmissionPolicy, OrderPolicy, ProfileMeta,
     RegionMeta, RegionOwnership,
@@ -93,6 +98,13 @@ def validate_body(body):
             raise error(f"{path}/Solvers", "Solvers is an ordered list of solvers.", "IKRig.InvalidBody")
         for index, entry in enumerate(body["Solvers"]):
             where = f"{path}/Solvers/{index}"
+            if markers.is_marker(entry):
+                # A solver whose type does not load: kept by position while the document lists it.
+                ik.check_keys(entry, ("Type", markers.KEY, markers.TEXT), where, "solver", PREFIX)
+                if entry.get("Type") is not None:
+                    raise error(f"{where}/Type", "A marked solver has Type null (its type does not load).",
+                                "IKRig.UnrepresentedValue")
+                continue
             ik.check_keys(ik.object_value(entry, where, "A solver", PREFIX), SOLVER_KEYS, where, "solver", PREFIX)
             ik.name_value(entry.get("Type"), f"{where}/Type", "A solver's Type", PREFIX)
             for key in ("Settings", "Goals", "Bones"):
@@ -177,6 +189,8 @@ def read_body(calls, detail="document"):
 
 def extract(target, read, context, include_defaults=True):
     body, _ = read_body(ik.RigCalls(context, read, prefix=PREFIX))
+    markers.warn_all(body.get("Goals", {}), PREFIX, "/Body/Goals")
+    markers.warn_all(body.get("Solvers", []), PREFIX, "/Body/Solvers")
     return common.document(target, CLASS, _properties().extract(read, context, include_defaults), body)
 
 

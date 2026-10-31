@@ -6,7 +6,7 @@ from __future__ import annotations
 import unittest
 
 from asset_document.diagnostics import AssetDocumentContractError
-from asset_document.graphs.actions import actions_equal, normalize_action, preferred_alias
+from asset_document.graphs.actions import actions_equal, names_factory_class, normalize_action, preferred_alias
 from asset_document.graphs.model import PinType
 from asset_document.graphs.schemas import k2
 from asset_document.tests.graph_support import ACTOR_CLASS, PRINT
@@ -90,6 +90,35 @@ class ActionAliasTests(unittest.TestCase):
     def test_disambiguated_live_keys_match_plain_desired_keys(self):
         self.assertTrue(actions_equal("K2:CallFunction:/X.Y:F", "K2:CallFunction:/X.Y:F#0A1B2C3D"))
         self.assertFalse(actions_equal("K2:CallFunction:/X.Y:F#FFFFFFFF", "K2:CallFunction:/X.Y:F#0A1B2C3D"))
+
+    def test_factory_class_key_names_the_async_task_node_keyed_by_its_factory(self):
+        live = "K2:AsyncAction:/Script/Engine.AsyncActionHandleSaveGame:AsyncLoadGameFromSlot"
+        self.assertTrue(names_factory_class("K2:AsyncAction:/Script/Engine.AsyncActionHandleSaveGame", live))
+        self.assertTrue(names_factory_class("K2:AsyncAction:/script/engine.asyncactionhandlesavegame",
+                                            live + "#0A1B2C3D"))
+        self.assertFalse(names_factory_class(live, live))  # the same key is actions_equal's case
+        self.assertFalse(names_factory_class("K2:AsyncAction:/Script/Engine.Other", live))
+        self.assertFalse(names_factory_class("K2:LatentAbilityCall:/Script/Engine.AsyncActionHandleSaveGame", live))
+        self.assertFalse(names_factory_class("K2:AsyncAction:/Script/Engine.AsyncActionHandleSaveGame#0A1B2C3D", live))
+        self.assertFalse(names_factory_class("K2:ComponentBoundEvent:/Script/Engine.A",
+                                             "K2:ComponentBoundEvent:/Script/Engine.A:OnHit@Box"))
+        self.assertFalse(names_factory_class(None, live))
+        self.assertFalse(names_factory_class("K2:AsyncAction:/Script/Engine.AsyncActionHandleSaveGame", None))
+
+    def test_post_apply_compare_reads_the_factory_class_key_as_the_same_node(self):
+        from asset_document.profiles.ublueprint_graph_compare import section_mismatches
+        from asset_document.tests.graph_support import ACTOR_CLASS
+        guid = "A" * 32
+        live = "K2:AsyncAction:/Script/Engine.AsyncActionHandleSaveGame:AsyncLoadGameFromSlot"
+
+        def page(action, node_guid):
+            return [{"Name": "EventGraph", "Nodes": [{"Id": "Load", "Action": action, "NodeGuid": node_guid}]}]
+        extracted = page(live, guid)
+        older = "K2:AsyncAction:/Script/Engine.AsyncActionHandleSaveGame"
+        self.assertEqual(section_mismatches("UbergraphPages", page(older, guid), extracted, self_class=ACTOR_CLASS), [])
+        self.assertEqual(section_mismatches("UbergraphPages", page(live, guid), extracted, self_class=ACTOR_CLASS), [])
+        self.assertEqual(section_mismatches("UbergraphPages", page(older, "B" * 32), extracted, self_class=ACTOR_CLASS),
+                         ["EventGraph"])
 
 
 class K2CodecTests(unittest.TestCase):

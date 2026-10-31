@@ -41,8 +41,8 @@ FAssetDocumentContractValidationResult CheckMontageTimeline(UAnimMontage& Target
   FStructuralIntent Intent;
   auto Valid = ParseMontageStructuralArguments(Structure, Structure.ObjectKeys.Contains(TEXT("slots")) ? SlotsPrimitive : SectionsPrimitive, Intent);
   if (!Valid.bValid) return Valid;
-  Intent.ReplaceManagedFamilies = !bNotify ? EManagedNotifyReplacement::None : bStates ? EManagedNotifyReplacement::States
-   : bReplaceStates ? EManagedNotifyReplacement::Both : EManagedNotifyReplacement::Events;
+  Intent.bReplaceNotifies = bNotify && !bStates;
+  Intent.bReplaceNotifyStates = bReplaceStates;
   Valid = PrepareMontageStructuralEdit(Target, Intent, Invocation.RequestId, Invocation.RuntimeRevision, Prepared);
   if (!Valid.bValid) return Valid;
  }

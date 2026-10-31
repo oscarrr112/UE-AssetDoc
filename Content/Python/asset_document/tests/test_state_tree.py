@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import unittest
 
-from asset_document.diagnostics import AssetDocumentContractError
+from asset_document import tolerance
+from asset_document.diagnostics import AssetDocumentContractError, collecting_read_warnings
 from asset_document.profiles import state_tree as st
 
 TARGET = "/Game/AI/ST_Test"
@@ -118,7 +119,7 @@ class ValidationTests(unittest.TestCase):
         return raised.exception.diagnostic
 
     def test_paths_name_the_document_location(self):
-        self.assertEqual(self._code({"States": [{"Name": "A/B"}]}).code, "StateTree.InvalidStateName")
+        self.assertEqual(self._code({"States": [{"Name": "A" * 1024}]}).code, "StateTree.InvalidStateName")
         self.assertEqual(self._code({"States": [{"Name": "A"}, {"Name": "A"}]}).code, "StateTree.DuplicateStateName")
         diagnostic = self._code({"States": [{"Name": "A", "Tasks": [{"Name": "x"}]}]})
         self.assertEqual(diagnostic.path, "/Body/States/0/Tasks/0/Type")
@@ -285,13 +286,13 @@ class PlanningTests(unittest.TestCase):
         _, ops = _plan({"Schema": {"Class": SCHEMA, "Properties": {"ContextActorClass": "/Script/Engine.Pawn"}}})
         self.assertEqual(ops[0][0], {"op": "schema", "values": {"ContextActorClass": "/Script/Engine.Pawn"}})
 
-    def test_kept_state_name_clash_is_reported(self):
+    def test_same_named_siblings_are_numbered_in_paths(self):
         body = {"States": [{"Name": "Root", "Children": [{"Name": "Idle", "RenamedFrom": "Walk"}]}]}
         planner, ops = _plan({"States": [{"Name": "Root", "Children": [{"Name": "Idle"}]}]})
         self.assertEqual(planner.paths["Root/Idle"], IDLE)
-        with self.assertRaises(AssetDocumentContractError):
-            # Walk renamed to Idle while the live Idle is not listed (removed) is fine; listed twice is not.
-            _plan({"States": [{"Name": "Root", "Children": [{"Name": "Idle"}, {"Name": "Idle", "RenamedFrom": "Walk"}]}]})
+        # Walk renamed to Idle next to the live Idle: the second Idle is Root/Idle#2.
+        planner, _ = _plan({"States": [{"Name": "Root", "Children": [{"Name": "Idle"}, {"Name": "Idle", "RenamedFrom": "Walk"}]}]})
+        self.assertEqual((planner.paths["Root/Idle"], planner.paths["Root/Idle#2"]), (IDLE, WALK))
         _, ops = _plan(body)
         self.assertEqual(ops[0][0]["op"], "hierarchy")
 
@@ -357,6 +358,271 @@ class BindingTests(unittest.TestCase):
         self.assertEqual(task["Bindings"]["Node:Text"], "Evaluators/Sensor:Out")
         self.assertEqual(task["Bindings"]["RandomDeviation"]["Bindings"], {"Left": "Parameters:WaitTime"})
         self.assertEqual(st.diff(st.canonicalize(_document(body)), st.canonicalize(_document(extracted)), False), ())
+
+    def test_output_bindings_read_only(self):
+        live = self._live([{"kind": "binding", "source": {"struct": WAIT, "path": "Result"},
+                            "target": {"struct": ROOT_PARAMS, "path": "WaitTime"}, "output": True}])
+        extracted = st.body_from_live(live)
+        task = extracted["States"][0]["Children"][0]["Tasks"][0]
+        self.assertEqual(task["OutputBindings"], {"Result": "Parameters:WaitTime"})
+        self.assertNotIn("Bindings", task)
+        planner, _ = _plan(extracted, live)
+        self.assertEqual(planner.plan_bindings(live), [])
+        self.assertEqual(st.diff(st.canonicalize(_document(extracted)), st.canonicalize(_document(extracted)), False), ())
+        task["OutputBindings"] = {"Result": "Root/Idle/Parameters:Other"}
+        planner, _ = _plan(extracted, live)
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            planner.plan_bindings(live)
+        self.assertEqual(raised.exception.diagnostic.code, "StateTree.OutputBindingsReadOnly")
+        # The same property path on another struct is another binding.
+        task["OutputBindings"] = {"Result": "Root/Idle/Parameters:WaitTime"}
+        planner, _ = _plan(extracted, live)
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            planner.plan_bindings(live)
+        self.assertEqual(raised.exception.diagnostic.code, "StateTree.OutputBindingsReadOnly")
+        self.assertNotEqual(st.diff(st.canonicalize(_document(extracted)), st.canonicalize(_document(st.body_from_live(live))),
+                                    False), ())
+
+    def test_delegate_listener_read_only(self):
+        transition = _transition(_id(20), to_state=WALK, trigger="OnDelegate", delegate=True)
+        live = _live([{"kind": "binding", "source": {"struct": _id(40), "path": "OnDone"},
+                       "target": {"struct": _id(20), "path": "DelegateListener"}, "output": False},
+                      _node(_id(40), "evaluators", name="Sensor", node_type="/Script/M.Eval"),
+                      _node(_id(41), "evaluators", name="Clock", node_type="/Script/M.Eval")], transitions=[transition])
+        extracted = st.body_from_live(live)
+        row = extracted["States"][0]["Children"][0]["Transitions"][0]
+        self.assertEqual(row["Delegate"], {"Source": "Evaluators/Sensor:OnDone"})
+        planner, ops = _plan(extracted, live)
+        self.assertEqual([op for op, _ in ops if op.get("op") == "transitions"], [])
+        self.assertEqual(st.diff(st.canonicalize(_document(extracted)), st.canonicalize(_document(extracted)), False), ())
+        row["Delegate"] = {"Source": "Evaluators/Sensor:OnOther"}
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            _plan(extracted, live)
+        self.assertEqual(raised.exception.diagnostic.code, "StateTree.DelegateReadOnly")
+        # The index of the same evaluator names the same listener; another evaluator's OnDone is a rebind.
+        row["Delegate"] = {"Source": "Evaluators/0:OnDone"}
+        self.assertEqual([op for op, _ in _plan(extracted, live)[1] if op.get("op") == "transitions"], [])
+        self.assertEqual(st.diff(st.canonicalize(_document(extracted)), st.canonicalize(_document(st.body_from_live(live))),
+                                 False), ())
+        row["Delegate"] = {"Source": "Evaluators/1:OnDone"}
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            _plan(extracted, live)
+        self.assertEqual(raised.exception.diagnostic.code, "StateTree.DelegateReadOnly")
+        self.assertNotEqual(st.diff(st.canonicalize(_document(extracted)), st.canonicalize(_document(st.body_from_live(live))),
+                                    False), ())
+        del row["Delegate"]
+        self.assertEqual([op for op, _ in _plan(extracted, live)[1] if op.get("op") == "transitions"], [])
+
+
+class TolerantTests(unittest.TestCase):
+    """Editor-made trees: same-named siblings, names with '/' or ':', nested property functions, values the
+    document codec has no form for, and records the read splits across pages."""
+
+    PATROL, PATROL2, PHASE = _id(4), _id(5), _id(6)
+
+    def _live(self, extra=()):
+        records = [_tree(), _params(), _state(ROOT, "Root"),
+                   _state(self.PATROL, "Patrol", ROOT, 0, transitions=[_transition(_id(21), to_state=self.PATROL2)]),
+                   _state(self.PATROL2, "Patrol", ROOT, 1, transitions=[_transition(_id(22), to_state=self.PHASE)]),
+                   _state(self.PHASE, "Stage 1: Approach/Hold", ROOT, 2),
+                   _node(_id(30), "tasks", self.PATROL, name="Wait"), _node(_id(31), "tasks", self.PATROL, index=1, name="Wait")]
+        return st.Live(records + list(extra))
+
+    def _settle(self, body, live_body):
+        with tolerance.authoring() as findings:
+            document = st.canonicalize(_document(body))
+        with tolerance.reading_live():
+            current = st.canonicalize(_document(live_body))
+        tolerance.settle(findings, document, current)
+        return document
+
+    def test_duplicate_and_special_names_read_and_reapply(self):
+        live = self._live()
+        body = st.body_from_live(live)
+        children = body["States"][0]["Children"]
+        self.assertEqual([child["Name"] for child in children], ["Patrol", "Patrol", "Stage 1: Approach/Hold"])
+        self.assertEqual(children[0]["Transitions"][0]["To"], "Root/Patrol#2")
+        self.assertEqual(children[1]["Transitions"][0]["To"], "Root/Stage 1~2 Approach~1Hold")
+        with tolerance.reading_live(), collecting_read_warnings() as warnings:
+            st.canonicalize(_document(body))
+        self.assertEqual(sorted(item.code for item in warnings), ["StateTree.DuplicateNodeName", "StateTree.DuplicateStateName"])
+        self._settle(body, body)
+        planner, ops = _plan(body, live)
+        self.assertEqual(ops, [])
+        self.assertEqual(planner.paths["Root/Patrol#2"], self.PATROL2)
+        # A new duplicate is still refused.
+        added = st.body_from_live(live)
+        added["States"][0]["Children"].append({"Name": "Patrol"})
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            self._settle(added, body)
+        self.assertEqual(raised.exception.diagnostic.code, "StateTree.DuplicateStateName")
+        self.assertEqual(raised.exception.diagnostic.path, "/Body/States/0/Children/3/Name")
+
+    def test_binding_sources_escape_state_and_node_names(self):
+        live = self._live([_node(_id(32), "tasks", self.PHASE, name="Look: Ahead"),
+                           _node(_id(33), "tasks", self.PATROL2, name="Use")])
+        refs = st.SourceRefs(None, live)
+        self.assertEqual(refs.name(_id(32)), "Root/Stage 1~2 Approach~1Hold/Tasks/Look~2 Ahead")
+        self.assertEqual(refs.name(_id(30)), "Root/Patrol/Tasks/0")
+        self.assertEqual(refs.resolve("Root/Stage 1~2 Approach~1Hold/Tasks/Look~2 Ahead", "/x"), _id(32))
+        self.assertEqual(refs.resolve("Root/Patrol#2/Tasks/Use", "/x"), _id(33))
+
+    def _nested(self, marked=()):
+        add, multiply = _id(70), _id(72)
+        function = {"id": add, "node_id": _id(71), "type": "/Script/StateTreeModule.StateTreeAddFloatPropertyFunction",
+                    "instance": {"Right": 0}, "instance_defaults": [], "instance_marked": list(marked)}
+        inner = {"id": multiply, "node_id": _id(73), "type": "/Script/StateTreeModule.StateTreeMultiplyFloatPropertyFunction",
+                 "instance": {"Right": 2}, "instance_defaults": [], "instance_marked": []}
+        return [
+            {"kind": "binding", "source": {"struct": add, "path": "Result"}, "target": {"struct": WAIT, "path": "Duration"},
+             "output": False, "function": function},
+            {"kind": "binding", "source": {"struct": multiply, "path": "Result"}, "target": {"struct": add, "path": "Left"},
+             "output": False, "function": inner},
+            {"kind": "binding", "source": {"struct": ROOT_PARAMS, "path": "WaitTime"}, "target": {"struct": multiply, "path": "Left"},
+             "output": False}]
+
+    def test_nested_property_functions_read_and_reapply(self):
+        live = _live(self._nested())
+        body = st.body_from_live(live)
+        bindings = body["States"][0]["Children"][0]["Tasks"][0]["Bindings"]
+        self.assertEqual(bindings, {"Duration": {
+            "Function": "/Script/StateTreeModule.StateTreeAddFloatPropertyFunction", "Instance": {"Right": 0},
+            "Bindings": {"Left": {"Function": "/Script/StateTreeModule.StateTreeMultiplyFloatPropertyFunction",
+                                  "Instance": {"Right": 2}, "Bindings": {"Left": "Parameters:WaitTime"}}}}})
+        planner, ops = _plan(body, live)
+        self.assertEqual(ops, [])
+        self.assertEqual(planner.plan_bindings(live), [])
+        self.assertEqual(st.diff(st.canonicalize(_document(body)), st.canonicalize(_document(body)), False), ())
+        bindings["Duration"]["Bindings"]["Left"]["Instance"]["Right"] = 3
+        (op, _), = _plan(body, live)[0].plan_bindings(live)
+        inner = op["bindings"][0]["function"]["bindings"][0]
+        self.assertEqual(inner["target"], {"path": "Left"})
+        self.assertEqual(inner["function"]["instance"], {"Right": 3})
+        self.assertEqual(inner["function"]["bindings"], [{"target": {"path": "Left"}, "source": {"struct": ROOT_PARAMS, "path": "WaitTime"}}])
+
+    def test_values_without_a_document_form_are_markers_kept_on_apply(self):
+        live = _live(self._nested(marked=("Curve",)))
+        task = live.node_list("tasks", IDLE)[0]
+        task["instance_marked"] = ["Config"]
+        live.root_params["props"].append(dict(_prop("Shape", _id(51)), supported=False))
+        body = st.body_from_live(live)
+        self.assertEqual(body["Parameters"][1]["Value"], st.VALUE_MARKER)
+        node = body["States"][0]["Children"][0]["Tasks"][0]
+        self.assertEqual(node["Instance"]["Config"], st.VALUE_MARKER)
+        self.assertEqual(node["Bindings"]["Duration"]["Instance"]["Curve"], st.VALUE_MARKER)
+        planner, ops = _plan(body, live)
+        self.assertEqual(ops, [])
+        self.assertEqual(planner.plan_bindings(live), [])
+        # Another value of the node changes; the marker is not written.
+        node["Instance"]["Duration"] = 4
+        (op, _), = _plan(body, live)[1]
+        self.assertEqual(op["nodes"][0]["instance"], {"Duration": 4})
+        # An edited marker, or a marker where the asset has a value, is refused.
+        for place, value in ((node["Instance"], "Config"), (node["Instance"], "RandomDeviation"), (body["Parameters"][1], "Value")):
+            edited = dict(place)
+            place[value] = {"Unsupported": "edited"}
+            with self.assertRaises(AssetDocumentContractError) as raised:
+                _plan(body, live)
+            self.assertEqual(raised.exception.diagnostic.code, "StateTree.UnrepresentedValue")
+            place.clear()
+            place.update(edited)
+
+    # The marker the shared value codec reads a NaN float as (not listed in the record's *_marked names).
+    NAN = {"Unsupported": "float has no document form; AssetDoc keeps the value.", "Text": "NaN"}
+
+    def test_codec_markers_in_values_are_kept_on_apply(self):
+        live = _live([_node(_id(11), "tasks", WALK, name="Move", instance={"Duration": 3})])
+        task = live.node_list("tasks", IDLE)[0]
+        task["instance"]["Threshold"] = dict(self.NAN)
+        task["instance_reset"] = {"Threshold": 0.0}
+        live.root_params["props"][0]["value"] = dict(self.NAN)
+        body = st.body_from_live(live)
+        node = body["States"][0]["Children"][0]["Tasks"][0]
+        self.assertEqual(node["Instance"]["Threshold"], self.NAN)
+        self.assertEqual(body["Parameters"][0]["Value"], self.NAN)
+        planner, ops = _plan(body, live)
+        self.assertEqual(ops, [])
+        # Another value of the node changes: the marked value is neither written nor reset.
+        node["Instance"]["Duration"] = 4
+        (op, _), = _plan(body, live)[1]
+        self.assertEqual(op["nodes"][0]["instance"], {"Duration": 4})
+        node["Instance"]["Duration"] = 1
+        # Another node changes.
+        body["States"][0]["Children"][1]["Tasks"][0]["Instance"]["Duration"] = 5
+        (op, _), = _plan(body, live)[1]
+        self.assertEqual(op["state"], WALK)
+        self.assertEqual(op["nodes"][0]["instance"], {"Duration": 5})
+        body["States"][0]["Children"][1]["Tasks"][0]["Instance"]["Duration"] = 3
+        # The marker omitted: kept, not reset to the default (apply and Diff agree).
+        del node["Instance"]["Threshold"]
+        self.assertEqual(_plan(body, live)[1], [])
+        full, facts = st.body_and_facts(live)
+        self.assertEqual(st.diff(st.canonicalize(_document(body)), st.canonicalize(_document(full)), False, facts), ())
+        # An edited marker is refused.
+        for place, name in ((node["Instance"], "Threshold"), (body["Parameters"][0], "Value")):
+            place[name] = {**self.NAN, "Text": "0.5"}
+            with self.assertRaises(AssetDocumentContractError) as raised:
+                _plan(body, live)
+            self.assertEqual(raised.exception.diagnostic.code, "StateTree.UnrepresentedValue")
+            place[name] = dict(self.NAN)
+
+    def test_codec_markers_in_function_and_linked_values_are_kept(self):
+        link = _id(7)
+        live = _live([_state(link, "Link", ROOT, 2, type="Linked", linked_subtree=WALK,
+                             selection="TryEnterState"),
+                      {**_params(link, _id(63), props=[_prop("Speed", _id(80), value=dict(self.NAN)),
+                                                       _prop("Count", _id(81), "int", "", value=3)]),
+                       "fixed": True, "overrides": [_id(80), _id(81)]}]
+                     + self._nested())
+        live.bindings[0]["function"]["instance"]["Right"] = dict(self.NAN)
+        body = st.body_from_live(live)
+        linked = body["States"][0]["Children"][2]
+        self.assertEqual(linked["ParameterValues"], {"Speed": self.NAN, "Count": 3})
+        duration = body["States"][0]["Children"][0]["Tasks"][0]["Bindings"]["Duration"]
+        self.assertEqual(duration["Instance"]["Right"], self.NAN)
+        planner, ops = _plan(body, live)
+        self.assertEqual(ops, [])
+        self.assertEqual(planner.plan_bindings(live), [])
+        self.assertEqual(planner.plan_parameter_values(live), [])
+        linked["ParameterValues"]["Count"] = 4
+        (op, _), = _plan(body, live)[0].plan_parameter_values(live)
+        self.assertEqual((op["values"], op["kept"]), ({"Count": 4}, ["Speed"]))
+        # A function input changes; the marked instance value is not written.
+        duration["Bindings"]["Left"]["Instance"]["Right"] = 3
+        (op, _), = _plan(body, live)[0].plan_bindings(live)
+        self.assertEqual(op["bindings"][0]["function"]["instance"], {})
+        for place, name in ((linked["ParameterValues"], "Speed"), (duration["Instance"], "Right")):
+            place[name] = {**self.NAN, "Text": "1.0"}
+            with self.assertRaises(AssetDocumentContractError) as raised:
+                planner = _plan(body, live)[0]
+                planner.plan_parameter_values(live)
+                planner.plan_bindings(live)
+            self.assertEqual(raised.exception.diagnostic.code, "StateTree.UnrepresentedValue")
+            place[name] = dict(self.NAN)
+
+    def test_marked_value_with_a_reset_default_is_not_reset(self):
+        live = _live()
+        task = live.node_list("tasks", IDLE)[0]
+        task["instance_marked"] = ["Config"]
+        task["instance_reset"] = {"Config": {"Mode": "Default"}, "RandomDeviation": 0}
+        task["instance"]["RandomDeviation"] = 2
+        body = st.body_from_live(live)
+        node = body["States"][0]["Children"][0]["Tasks"][0]
+        self.assertEqual(node["Instance"]["Config"], st.VALUE_MARKER)
+        self.assertEqual(_plan(body, live)[1], [])
+        # The marker left or omitted while an omitted value is reset: only that one is written.
+        for leave in (True, False):
+            node["Instance"] = {"Duration": 1, **({"Config": st.VALUE_MARKER} if leave else {})}
+            (op, _), = _plan(body, live)[1]
+            self.assertEqual(op["nodes"][0]["instance"], {"RandomDeviation": 0})
+
+    def test_records_split_across_pages_merge(self):
+        records = [_node(_id(30), "tasks", IDLE, instance={}), {"kind": "part", "field": "instance", "values": {"A": 1}},
+                   {"kind": "part", "field": "instance", "name": "Points", "items": [1, 2]},
+                   {"kind": "part", "field": "instance", "name": "Points", "items": [3]}, _state(ROOT, "Root")]
+        merged = st.merge_parts(records)
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[0]["instance"], {"A": 1, "Points": [1, 2, 3]})
 
 
 class ExtractDiffTests(unittest.TestCase):

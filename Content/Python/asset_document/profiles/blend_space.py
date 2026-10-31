@@ -13,7 +13,8 @@ Document (docs/architecture/asset-document-animation-assets-matrix.md)::
       "Axes": {
         "X": {"Name": "Direction", "Min": -180, "Max": 180, "GridDivisions": 4, "SnapToGrid": true,
               "WrapInput": false},
-        "Y": {"Name": "Speed", "Min": 0, "Max": 600, "GridDivisions": 4}   # 1D classes: X only
+        "Y": {"Name": "Speed", "Min": 0, "Max": 600, "GridDivisions": 4,   # 1D classes: X only
+              "Analysis": {"Function": "Velocity", "Properties": {"FunctionAxis": "PlusY", ...}}}
       },
       "Samples": [                                                         # the full sample list
         {"Animation": "/Game/Anims/Idle.Idle", "X": 0, "Y": 0},
@@ -24,7 +25,10 @@ Document (docs/architecture/asset-document-animation-assets-matrix.md)::
 
 * ``Skeleton`` is required to create (BlendSpaceFactoryNew / BlendSpaceFactory1D TargetSkeleton) and
   cannot change afterwards (``BlendSpace.SkeletonImmutable``).
-* ``Axes``: omitted fields keep their value.  Min < Max; GridDivisions 1..1000.
+* ``Axes``: omitted fields keep their value.  Min < Max; GridDivisions 1..1000.  ``Analysis`` is the axis's
+  analysis function (the Details panel's function picker) and its settings rows; listed when the axis has one,
+  null removes it, omitted keeps it; omitted settings keep their value (a new function starts from the
+  settings the previous one leaves, as in the editor).
 * ``Samples`` are identified by their position (X, Y; 1D: X), which the editor keeps unique: a moved
   sample is a removed sample plus a new one.  Positions must lie inside the axis range
   (``BlendSpace.SampleOutOfRange``; the grid only offers positions inside it) and, on axes with
@@ -41,6 +45,8 @@ target); preflight returns ``SNAPSHOT_COVERED``.
 """
 from __future__ import annotations
 
+from asset_document import tolerance
+from asset_document.diagnostics import DiagnosticSeverity, RuntimeDiagnostic, with_diagnostics
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.meta import (
     ComparisonPolicy, DefaultPolicy, DeletePolicy, IdentityPolicy, OmissionPolicy, OrderPolicy, ProfileMeta,
@@ -73,7 +79,7 @@ REQUIREMENTS = (anim.requirements(anim.CLASS_RESOLVE, anim.RESOLVE, anim.REFEREN
                 + lifecycle_requirements(LIFECYCLE))
 BY_ID = {item.primitive_id: item for item in REQUIREMENTS}
 BODY_OWNED = {"BlendParameters": "Body.Axes", "SampleData": "Body.Samples", "Skeleton": "Body.Skeleton",
-              "PreviewSkeletalMesh": "Body.PreviewMesh"}
+              "PreviewSkeletalMesh": "Body.PreviewMesh", "AnalysisProperties": "Body.Axes.<axis>.Analysis"}
 
 
 def _error(path, message, code):
@@ -94,8 +100,12 @@ def _axis(value, path):
     out = {}
     for key, item in value.items():
         where = f"{path}/{common.escape(key)}"
+        if key == "Analysis":
+            out[key] = _analysis(item, where)
+            continue
         if key not in AXIS_KEYS:
-            raise _error(where, f"Unknown axis key '{key}'. Keys: {', '.join(AXIS_KEYS)}.", "BlendSpace.InvalidAxis")
+            raise _error(where, f"Unknown axis key '{key}'. Keys: {', '.join(AXIS_KEYS)}, Analysis.",
+                         "BlendSpace.InvalidAxis")
         if key == "Name":
             if type(item) is not str:
                 raise _error(where, "Name (the axis label) is a string.", "BlendSpace.InvalidAxis")
@@ -113,6 +123,34 @@ def _axis(value, path):
     return out
 
 
+def _analysis(value, path):
+    """null (no analysis function) or {"Function": name, "Properties"?: {setting: value}}."""
+    if value is None:
+        return None
+    if type(value) is not dict or any(key not in ("Function", "Properties") for key in value):
+        raise _error(path, "Analysis is null or an object with Function and optional Properties.",
+                     "BlendSpace.InvalidAnalysis")
+    if type(value.get("Function")) is not str or value["Function"] in ("", "None"):
+        raise _error(f"{path}/Function", "Function is the name of an analysis function such as Position, Velocity or "
+                     "Orientation; null Analysis removes it.", "BlendSpace.InvalidAnalysis")
+    out = {"Function": value["Function"]}
+    if "Properties" in value:
+        if type(value["Properties"]) is not dict:
+            raise _error(f"{path}/Properties", "Properties is an object of analysis settings.",
+                         "BlendSpace.InvalidAnalysis")
+        out["Properties"] = dict(value["Properties"])
+    return out
+
+
+def analysis_matches(authored, live, exact=False):
+    """The authored analysis holds on the live one: the same function (or both none), every authored setting equal."""
+    if authored is None or live is None:
+        return authored is None and live is None
+    return authored["Function"] == live["Function"] and all(
+        name in live.get("Properties", {}) and common.same(value, live["Properties"][name], exact)
+        for name, value in authored.get("Properties", {}).items())
+
+
 def _sample(row, path, axes):
     if type(row) is not dict:
         raise _error(path, "A sample is an object with Animation and its position.", "BlendSpace.InvalidSample")
@@ -120,8 +158,8 @@ def _sample(row, path, axes):
         if key not in SAMPLE_KEYS or (key == "Y" and "Y" not in axes):
             raise _error(f"{path}/{common.escape(key)}", f"Unknown sample key '{key}'. Keys: Animation, "
                          f"{', '.join(axes)}, RateScale, SingleFrame, IncludeInAnalyseAll.", "BlendSpace.InvalidSample")
-    item = {"Animation": anim.object_path(row.get("Animation"), f"{path}/Animation", "BlendSpace.InvalidSample",
-                                          "Animation")}
+    item = {"Animation": anim.reference(row.get("Animation"), f"{path}/Animation", "BlendSpace.InvalidSample",
+                                        "Animation", PREFIX)}
     for axis in axes:
         if axis not in row:
             raise _error(f"{path}/{axis}", f"A sample needs its {axis} position.", "BlendSpace.InvalidSample")
@@ -152,7 +190,8 @@ def canonical_body(body, class_path):
     axes = axis_names(class_path)
     out = {}
     if "Skeleton" in body:
-        out["Skeleton"] = anim.object_path(body["Skeleton"], "/Body/Skeleton", "BlendSpace.InvalidSkeleton", "Skeleton")
+        out["Skeleton"] = anim.reference(body["Skeleton"], "/Body/Skeleton", "BlendSpace.InvalidSkeleton", "Skeleton",
+                                         PREFIX)
     if "PreviewMesh" in body:
         out["PreviewMesh"] = anim.optional_path(body["PreviewMesh"], "/Body/PreviewMesh", "BlendSpace.InvalidPreviewMesh",
                                                 "PreviewMesh")
@@ -202,16 +241,23 @@ def read_live(calls):
     return calls.query(anim.BLEND_SPACE_READ)
 
 
+def _live_axis(row):
+    axis = {key: row[field] for key, field in AXIS_KEYS.items()}
+    analysis = row.get("analysis")
+    if analysis is not None:
+        axis["Analysis"] = {"Function": analysis["function"], "Properties": dict(analysis.get("properties", {}))}
+    return axis
+
+
 def live_axes(live, class_path):
-    return {name: {key: row[field] for key, field in AXIS_KEYS.items()}
-            for name, row in zip(axis_names(class_path), live.get("axes", []))}
+    return {name: _live_axis(row) for name, row in zip(axis_names(class_path), live.get("axes", []))}
 
 
 def live_samples(live, class_path):
     axes = axis_names(class_path)
     samples = []
     for row in live.get("samples", []):
-        item = {"Animation": row["animation"], "X": row["x"]}
+        item = {"Animation": anim.live_reference(row["animation"]), "X": row["x"]}
         if "Y" in axes:
             item["Y"] = row["y"]
         item.update({"RateScale": row["rate_scale"], "SingleFrame": row["single_frame"],
@@ -221,7 +267,7 @@ def live_samples(live, class_path):
 
 
 def body_from_live(live, class_path):
-    return {"Skeleton": live.get("skeleton", ""), "PreviewMesh": live.get("preview_mesh", ""),
+    return {"Skeleton": anim.live_reference(live.get("skeleton")), "PreviewMesh": live.get("preview_mesh", ""),
             "Axes": live_axes(live, class_path), "Samples": live_samples(live, class_path)}
 
 
@@ -235,28 +281,41 @@ def effective_axes(body, live, class_path):
     return axes
 
 
-def check_samples(body, axes, class_path):
-    """Positions inside the axis range and, when snapping, on a grid point (before any edit)."""
+def check_samples(body, axes, class_path, current=None):
+    """Positions inside the axis range and, when snapping, on a grid point (before any edit). A sample the asset
+    already holds unchanged (``current``: the live samples) is not refused: the editor keeps such a sample (shown red)
+    when an axis changes, so it gives an Info diagnostic instead (returned)."""
     names = axis_names(class_path)
     for name in names:
         if not axes[name]["Min"] < axes[name]["Max"]:
             raise _error(f"/Body/Axes/{name}/Min", f"Axis {name}: Min ({axes[name]['Min']}) must be below Max "
                          f"({axes[name]['Max']}).", "BlendSpace.InvalidAxis")
     snapping = all(axes[name]["SnapToGrid"] for name in names)
-    for index, sample in enumerate(body.get("Samples", [])):
+    samples = body.get("Samples", [])
+    changed = set(range(len(samples))) if current is None else set(tolerance.changed_indices(samples, current))
+    notes = []
+    for index, sample in enumerate(samples):
         for name in names:
             axis, value = axes[name], sample[name]
             where = f"/Body/Samples/{index}/{name}"
+            problem = None
             if not axis["Min"] - GRID_TOLERANCE <= value <= axis["Max"] + GRID_TOLERANCE:
-                raise _error(where, f"Sample {name}={value} is outside axis {name} ({axis['Min']}..{axis['Max']}); widen "
-                             "the axis in Body.Axes or move the sample.", "BlendSpace.SampleOutOfRange")
-            if snapping:
+                problem = (f"Sample {name}={value} is outside axis {name} ({axis['Min']}..{axis['Max']}); widen the "
+                           "axis in Body.Axes or move the sample.", "BlendSpace.SampleOutOfRange")
+            elif snapping:
                 step = (axis["Max"] - axis["Min"]) / axis["GridDivisions"]
                 cells = (value - axis["Min"]) / step
                 if abs(cells - round(cells)) > GRID_TOLERANCE:
-                    raise _error(where, f"Axis {name} snaps to its grid (step {step:g} from {axis['Min']}); "
-                                 f"{name}={value} is not a grid point, so the editor would move the sample. Use a grid "
-                                 "point or set SnapToGrid false.", "BlendSpace.SampleOffGrid")
+                    problem = (f"Axis {name} snaps to its grid (step {step:g} from {axis['Min']}); {name}={value} is "
+                               "not a grid point, so the editor would move the sample. Use a grid point or set "
+                               "SnapToGrid false.", "BlendSpace.SampleOffGrid")
+            if problem is None:
+                continue
+            if index in changed:
+                raise _error(where, *problem)
+            notes.append(RuntimeDiagnostic(path=where, code=problem[1], message=problem[0] + " The sample is kept "
+                                           "unchanged, as the editor keeps it.", severity=DiagnosticSeverity.INFO))
+    return notes
 
 
 def _axis_ops(body, live, class_path):
@@ -265,10 +324,31 @@ def _axis_ops(body, live, class_path):
     for index, name in enumerate(axis_names(class_path)):
         wanted = body.get("Axes", {}).get(name, {})
         change = {AXIS_KEYS[key]: value for key, value in wanted.items()
-                  if not common.same(value, current[name][key], exact=False)}
+                  if key in AXIS_KEYS and not common.same(value, current[name][key], exact=False)}
         if change:
             ops.append(({"op": "axis", "axis": index, **change}, f"/Body/Axes/{name}"))
+        if "Analysis" in wanted:
+            op = _analysis_op(wanted["Analysis"], current[name].get("Analysis"))
+            if op:
+                ops.append(({"op": "analysis", "axis": index, **op}, f"/Body/Axes/{name}/Analysis"))
     return ops
+
+
+def _analysis_op(wanted, have):
+    """The function picker (when the function changes) and the settings rows that differ."""
+    if wanted is None:
+        return {"function": None} if have is not None else {}
+    op = {}
+    current = {}
+    if have is None or have["Function"] != wanted["Function"]:
+        op["function"] = wanted["Function"]
+    else:
+        current = have.get("Properties", {})
+    changed = {name: value for name, value in wanted.get("Properties", {}).items()
+               if name not in current or not common.same(value, current[name], exact=False)}
+    if changed:
+        op["properties"] = changed
+    return op
 
 
 def _position_args(item, axes):
@@ -311,7 +391,8 @@ def plan(body, live, class_path):
 
 FIELD_PATHS = {"animation": "/Animation", "rate_scale": "/RateScale", "single_frame": "/SingleFrame",
                "analyse_all": "/IncludeInAnalyseAll", "name": "/Name", "min": "/Min", "max": "/Max",
-               "grid": "/GridDivisions", "snap": "/SnapToGrid", "wrap": "/WrapInput", "x": "/X", "y": "/Y"}
+               "grid": "/GridDivisions", "snap": "/SnapToGrid", "wrap": "/WrapInput", "x": "/X", "y": "/Y",
+               "function": "/Function", "properties": "/Properties"}
 
 
 def map_path(primitive_path, op_paths):
@@ -320,6 +401,8 @@ def map_path(primitive_path, op_paths):
         path = op_paths[int(parts[1])]
         if len(parts) > 2 and parts[2] in FIELD_PATHS and path not in ("/Body/Samples", "/Body/PreviewMesh"):
             path += FIELD_PATHS[parts[2]]
+            if parts[2] == "properties" and len(parts) > 3:
+                path += f"/{parts[3]}"
         return path
     return "/Body"
 
@@ -344,16 +427,16 @@ def apply(document, read, mutable, context):
     region.check_owned(properties)
     calls = anim.AnimCalls(context, BY_ID, read, mutable, PREFIX)
     live = read_live(calls)
-    anim.require_unchanged(body, "Skeleton", live.get("skeleton", ""), PREFIX,
+    anim.require_unchanged(body, "Skeleton", anim.live_reference(live.get("skeleton")), PREFIX,
                            "A blend space's Skeleton is chosen when it is created and the editor offers no change")
-    check_samples(body, effective_axes(body, live, class_path), class_path)
+    notes = check_samples(body, effective_axes(body, live, class_path), class_path, live_samples(live, class_path))
     ops = plan(body, live, class_path)
     changes = edit(calls, ops) if ops else []
     written = list(region.apply(properties, read, mutable, context))
     if written:
         # SBlendSpaceEditor::NotifyPostChange after Details edits: validate and resample.
         written += edit(calls, [({"op": "refresh"}, "/Properties")])
-    return tuple(changes + written)
+    return with_diagnostics(changes + written, notes)
 
 
 def create_target_context(document, context):
@@ -386,6 +469,11 @@ def diff(authored, extracted, exact):
     for name, value in body.get("Axes", {}).items():
         observed = live.get("Axes", {}).get(name, {})
         for key, item in value.items():
+            if key == "Analysis":
+                if not analysis_matches(item, observed.get(key), exact):
+                    changes.append(Difference(f"/Body/Axes/{name}/Analysis", DiffKind.REPLACE, True, item,
+                                              key in observed, observed.get(key)))
+                continue
             anim.value_diff(changes, f"/Body/Axes/{name}/{key}", item, observed.get(key), exact)
     if "Samples" in body:
         have = {position(item, axes): item for item in live.get("Samples", [])}

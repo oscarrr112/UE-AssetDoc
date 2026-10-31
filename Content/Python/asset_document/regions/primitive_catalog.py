@@ -14,6 +14,7 @@ from asset_document.diagnostics import (
     RuntimeDiagnostic,
     contract_error,
 )
+from asset_document import text_forms
 from asset_document.dto import (
     ChangedRecord,
     PrimitiveRequirement,
@@ -434,6 +435,9 @@ class _NativePrimitiveContext:
                 for item in handle_arguments
             ),
         )
+        take = getattr(self._native, "take_text_displays", None)
+        if take is not None:
+            text_forms.learn(take())
         return _decode_native_outcome(raw)
 
 

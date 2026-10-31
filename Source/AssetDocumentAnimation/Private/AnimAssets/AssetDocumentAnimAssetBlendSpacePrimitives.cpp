@@ -5,14 +5,19 @@
 // add / remove / replace, FBlendSpaceDetails axis settings, FBlendSampleDetails sample settings) for
 // BlendSpace, BlendSpace1D, AimOffsetBlendSpace and AimOffsetBlendSpace1D. The details-panel writes
 // are AssetDocumentBlendSpaceEdits, shared with the Animation Blueprint Blend Space Graph node.
-// Samples are identified by their position (the editor keeps positions unique).
+// Samples are identified by their position (the editor keeps positions unique). Each axis's analysis
+// function and its settings (FBlendSpaceDetails' "Analysis" rows) are read and set as the details
+// panel's function picker and property rows do.
 
 #include "AssetDocumentEditorTrialScope.h"
 #include "AnimAssets/AssetDocumentAnimAssetPrimitives.h"
 #include "AnimAssets/AssetDocumentBlendSpaceEdits.h"
 
+#include "AssetDocumentEditorNativeState.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/BlendSpace.h"
+#include "BlendSpaceAnalysis.h"
+#include "Features/IModularFeatures.h"
 #include "ScopedTransaction.h"
 
 #define LOCTEXT_NAMESPACE "AssetDocumentBlendSpace"
@@ -235,6 +240,152 @@ bool SetAxis(FReader& Op, UBlendSpace& BlendSpace)
 	return true;
 }
 
+// The analysis functions Persona offers (FCoreBlendSpaceAnalysisFeature, consulted after the registered
+// features) and the settings class each one uses.
+const TCHAR* const BlendSpaceLinearAnalysisFunctions[] = {TEXT("Position"), TEXT("Velocity"), TEXT("DeltaPosition"), TEXT("AngularVelocity")};
+const TCHAR* const BlendSpaceEulerAnalysisFunctions[] = {TEXT("Orientation"), TEXT("OrientationRate"), TEXT("DeltaOrientation")};
+
+TArray<IBlendSpaceAnalysisFeature*> RegisteredBlendSpaceAnalysisFeatures()
+{
+	IModularFeatures::FScopedLockModularFeatureList Lock;
+	return IModularFeatures::Get().GetModularFeatureImplementations<IBlendSpaceAnalysisFeature>(IBlendSpaceAnalysisFeature::GetModuleFeatureName());
+}
+
+TArray<FString> BlendSpaceAnalysisFunctionNames()
+{
+	TArray<FString> Names;
+	for (const TCHAR* Name : BlendSpaceLinearAnalysisFunctions)
+	{
+		Names.Add(Name);
+	}
+	for (const TCHAR* Name : BlendSpaceEulerAnalysisFunctions)
+	{
+		Names.Add(Name);
+	}
+	for (const IBlendSpaceAnalysisFeature* Feature : RegisteredBlendSpaceAnalysisFeatures())
+	{
+		for (const FString& Name : Feature->GetAnalysisFunctions())
+		{
+			Names.AddUnique(Name);
+		}
+	}
+	return Names;
+}
+
+// BlendSpaceAnalysis::MakeAnalysisProperties: the registered features first, then Persona's own functions.
+UAnalysisProperties* MakeBlendSpaceAnalysisProperties(UBlendSpace& BlendSpace, const FString& Function)
+{
+	UAnalysisProperties* Made = nullptr;
+	for (const IBlendSpaceAnalysisFeature* Feature : RegisteredBlendSpaceAnalysisFeatures())
+	{
+		Made = Feature->MakeAnalysisProperties(&BlendSpace, Function);
+		if (Made != nullptr)
+		{
+			break;
+		}
+	}
+	if (Made == nullptr)
+	{
+		auto Lists = [&Function](TConstArrayView<const TCHAR*> Names)
+		{
+			return Names.ContainsByPredicate([&Function](const TCHAR* Name) { return Function.Equals(Name); });
+		};
+		UClass* Class = Lists(BlendSpaceLinearAnalysisFunctions) ? ULinearAnalysisProperties::StaticClass()
+			: Lists(BlendSpaceEulerAnalysisFunctions) ? UEulerAnalysisProperties::StaticClass() : nullptr;
+		if (Class != nullptr)
+		{
+			Made = NewObject<UAnalysisProperties>(&BlendSpace, Class);
+			Made->Function = Function;
+		}
+	}
+	if (Made != nullptr)
+	{
+		// As the editor sets it, so undo covers the new object.
+		Made->SetFlags(RF_Transactional);
+	}
+	return Made;
+}
+
+// {op: analysis, axis, function?, properties?}: FBlendSpaceDetails::HandleAnalysisFunctionChanged (a new settings
+// object of the function's class, initialised from the cache the previous one leaves; null for "None"), then the
+// settings rows of that object.
+bool SetAnalysis(FReader& Op, UBlendSpace& BlendSpace)
+{
+	int64 Axis = 0;
+	if (!Op.OnlyFields({TEXT("op"), TEXT("axis"), TEXT("function"), TEXT("properties")}) || !Op.Int(TEXT("axis"), Axis))
+	{
+		return false;
+	}
+	const int32 NumAxes = Edits::NumAxes(BlendSpace);
+	if (Axis < 0 || Axis >= NumAxes)
+	{
+		return Op.Fail(TEXT("BlendSpace.InvalidAxis"), FString::Printf(TEXT("%s has %d axis/axes; axis must be 0%s."),
+			*BlendSpace.GetPathName(), NumAxes, NumAxes == 2 ? TEXT(" or 1") : TEXT("")), TEXT("axis"));
+	}
+	const int32 AxisIndex = static_cast<int32>(Axis);
+	const FValue* FunctionValue = Op.Find(TEXT("function"));
+	if (FunctionValue != nullptr)
+	{
+		FString Function;
+		if (FunctionValue->Kind == EAssetDocumentRuntimeValueKind::String)
+		{
+			Function = FunctionValue->StringValue;
+		}
+		else if (FunctionValue->Kind != EAssetDocumentRuntimeValueKind::Null)
+		{
+			return Op.Fail(TEXT("BlendSpace.InvalidAnalysis"), TEXT("function is an analysis function name or null."), TEXT("function"));
+		}
+		const bool bNone = Function.IsEmpty() || Function == TEXT("None");
+		UAnalysisProperties* Current = BlendSpace.AnalysisProperties[AxisIndex];
+		if (bNone ? Current != nullptr : (Current == nullptr || Current->Function != Function))
+		{
+			UAnalysisProperties* Made = nullptr;
+			if (!bNone)
+			{
+				Made = MakeBlendSpaceAnalysisProperties(BlendSpace, Function);
+				if (Made == nullptr)
+				{
+					return Op.Fail(TEXT("BlendSpace.InvalidAnalysis"), FString::Printf(TEXT("'%s' is not an analysis function. Functions: %s."),
+						*Function, *FString::Join(BlendSpaceAnalysisFunctionNames(), TEXT(", "))), TEXT("function"));
+				}
+			}
+			BlendSpace.Modify();
+			if (Current != nullptr)
+			{
+				Current->MakeCache(BlendSpace.CachedAnalysisProperties[AxisIndex], &BlendSpace);
+			}
+			if (Made != nullptr)
+			{
+				Made->InitializeFromCache(BlendSpace.CachedAnalysisProperties[AxisIndex]);
+			}
+			BlendSpace.AnalysisProperties[AxisIndex] = Made;
+		}
+	}
+	const FValue* Properties = nullptr;
+	if (Op.Has(TEXT("properties")))
+	{
+		if (!Op.Object(TEXT("properties"), Properties))
+		{
+			return false;
+		}
+		UAnalysisProperties* Target = BlendSpace.AnalysisProperties[AxisIndex];
+		if (Target == nullptr)
+		{
+			return Op.Fail(TEXT("BlendSpace.InvalidAnalysis"), TEXT("This axis has no analysis function; its settings need one."), TEXT("properties"));
+		}
+		TArray<FAssetDocumentRuntimeDiagnostic> Diagnostics;
+		Target->Modify();
+		if (!WriteAssetDocumentEditorSubobjectProperties(*Target, *Properties, TEXT("animation_asset.blend_space.edit.v1"), Diagnostics))
+		{
+			const FAssetDocumentRuntimeDiagnostic* First = Diagnostics.IsEmpty() ? nullptr : &Diagnostics[0];
+			const FString Where = First != nullptr && First->Path.StartsWith(TEXT("/")) && First->Path != TEXT("/") ? First->Path : FString();
+			return Op.Fail(First != nullptr ? First->Code : FString(TEXT("BlendSpace.InvalidAnalysis")),
+				First != nullptr ? First->Message : FString(TEXT("The analysis settings could not be written.")), FString(TEXT("properties")) + Where);
+		}
+	}
+	return true;
+}
+
 // {op: sample_set, x, y?, animation?, rate_scale?, single_frame?, analyse_all?}: the grid's drag-drop
 // replace (SBlendSpaceEditor::OnSampleReplaced) and FBlendSampleDetails rows.
 bool SetSample(FReader& Op, UBlendSpace& BlendSpace)
@@ -321,6 +472,10 @@ bool ApplyBlendSpaceOp(FReader& Op, const FString& Kind, UBlendSpace& BlendSpace
 	if (Kind == TEXT("axis"))
 	{
 		return SetAxis(Op, BlendSpace);
+	}
+	if (Kind == TEXT("analysis"))
+	{
+		return SetAnalysis(Op, BlendSpace);
 	}
 	if (Kind == TEXT("sample_remove"))
 	{
@@ -418,6 +573,26 @@ bool HandleBlendSpaceRead(FCall& Call, FObjectBuilder& Result)
 		Row.AddInt(TEXT("grid"), Parameter.GridNum);
 		Row.AddBool(TEXT("snap"), Parameter.bSnapToGrid);
 		Row.AddBool(TEXT("wrap"), Parameter.bWrapInput);
+		const UAnalysisProperties* Analysis = BlendSpace->AnalysisProperties[Axis];
+		if (Analysis != nullptr)
+		{
+			FValue Properties;
+			TArray<FAssetDocumentRuntimeDiagnostic> Diagnostics;
+			if (!ReadAssetDocumentEditorSubobjectProperties(*const_cast<UAnalysisProperties*>(Analysis), Properties, Diagnostics))
+			{
+				const FAssetDocumentRuntimeDiagnostic* First = Diagnostics.IsEmpty() ? nullptr : &Diagnostics[0];
+				return Fail(Call, First != nullptr ? First->Code : FString(TEXT("BlendSpace.InvalidAnalysis")),
+					First != nullptr ? First->Message : FString(TEXT("The axis analysis settings could not be read.")));
+			}
+			FObjectBuilder AnalysisRow;
+			AnalysisRow.AddString(TEXT("function"), Analysis->Function);
+			AnalysisRow.Add(TEXT("properties"), MoveTemp(Properties));
+			Row.Add(TEXT("analysis"), AnalysisRow.Build());
+		}
+		else
+		{
+			Row.Add(TEXT("analysis"), MakeNull());
+		}
 		Axes.Add(Row.Build());
 	}
 	Result.Add(TEXT("axes"), MakeArray(MoveTemp(Axes)));

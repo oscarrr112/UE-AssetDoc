@@ -12,8 +12,9 @@ enum class EPreimage { Empty, ResolvedValid, UnresolvedOrMissing, Incompatible }
 // P1 preparation/rechecks for exact Montage/Sequence and the unchanged read-only
 // Montage profile helper consume this classification-only probe.
 // Remove when stock Engine exposes an authoritative empty-vs-unresolved query.
-// Never return the soft path in a DTO, mutate the property, or admit generic properties.
-EPreimage ProbePreviewMeshPreimage(const UAnimationAsset& Target, USkeletalMesh*& Mesh)
+// Only the read-only Montage snapshot returns the stored soft path, and only for a canonical
+// stored reference that does not load or fit. Never mutate the property or admit generic properties.
+EPreimage ProbePreviewMeshPreimage(const UAnimationAsset& Target, USkeletalMesh*& Mesh, FString* StoredPath = nullptr)
 {
  Mesh = nullptr;
  if (!ExactTarget(&Target)) return EPreimage::Incompatible;
@@ -24,6 +25,7 @@ EPreimage ProbePreviewMeshPreimage(const UAnimationAsset& Target, USkeletalMesh*
  const FSoftObjectPtr Reference = Property->GetPropertyValue_InContainer(&Target);
  if (Reference.IsNull()) return EPreimage::Empty;
  if (!CanonicalPath(Reference.ToSoftObjectPath().ToString())) return EPreimage::Incompatible;
+ if (StoredPath) *StoredPath = Reference.ToSoftObjectPath().ToString();
  // Resolve a copy: unlike non-const GetPreviewMesh, this never repairs incompatible state.
  UObject* Object = Reference.ToSoftObjectPath().ResolveObject();
  if (!Object) Object = Reference.ToSoftObjectPath().TryLoad();
@@ -160,14 +162,19 @@ struct FActivePreparedCapture { FGuid Transaction; FPreparedValidator Validate; 
 // Single non-reentrant game-thread capture, not a request/handle registry.
 const FActivePreparedCapture* ActivePreparedCapture = nullptr;
 }
-bool ReadMontageProfilePreviewMesh(const UAnimMontage& Target, USkeletalMesh*& OutMesh)
+bool ReadMontageProfilePreviewMesh(const UAnimMontage& Target, USkeletalMesh*& OutMesh, FString& OutStoredPath)
 {
  OutMesh = nullptr;
+ OutStoredPath.Reset();
  if (!ContextValid()) return false;
  USkeletalMesh* Mesh = nullptr;
- const EPreimage Kind = ProbePreviewMeshPreimage(Target, Mesh);
- if (Kind != EPreimage::Empty && Kind != EPreimage::ResolvedValid) return false;
- OutMesh = Mesh;
+ FString Stored;
+ const EPreimage Kind = ProbePreviewMeshPreimage(Target, Mesh, &Stored);
+ if (Kind == EPreimage::Empty) return true;
+ if (Kind == EPreimage::ResolvedValid) { OutMesh = Mesh; return true; }
+ // A canonical stored reference that does not load or does not fit the Skeleton is read as its path.
+ if (Stored.IsEmpty()) return false;
+ OutStoredPath = MoveTemp(Stored);
  return true;
 }
 }

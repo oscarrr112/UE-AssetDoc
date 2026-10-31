@@ -9,6 +9,7 @@ from __future__ import annotations
 import unittest
 
 from asset_document.diagnostics import AssetDocumentContractError
+from asset_document.diagnostics import collecting_read_warnings as metasound_collecting
 from asset_document.mutation_intent_projection import SNAPSHOT_COVERED
 from asset_document.profiles import metasound, metasound_apply
 from asset_document.regions.primitive_catalog import (
@@ -503,6 +504,97 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(len(metasound.diff(metasound.canonicalize(_document(authored)), metasound.canonicalize(_document(live)),
                                             exact=True, facts=facts)), 1)
 
+    def test_direct_input_edges_are_kept(self):
+        # A second page with no input template node: its node reads the member's hidden input node directly.
+        records = [record for record in PAGED_RECORDS if not (record.get("page") == "Low" and (
+            (record["kind"] == "node" and record["id"] == "N3")
+            or (record["kind"] == "edge" and "N3" in (record["from"], record["to"]))))]
+        records.append(_paged(_edge("H1", "Pitch", "N1", "Frequency")))
+        live, facts, _ = metasound.assemble(records)
+        self.assertEqual(live["Graphs"]["Low"]["Nodes"]["Sine"]["Inputs"], {"Frequency": "Input:Pitch"})
+        canonical = metasound.canonicalize(_document(live))
+        self.assertEqual(metasound.diff(canonical, canonical, exact=True, facts=facts), ())
+        # The unchanged extract applies as a no-op; another edit on the page keeps the edge.
+        _, context = self._apply(metasound.common.snapshot(live), FakeContext(True, records))
+        self.assertEqual((context.ops, context.compiled), ([], 0))
+        body = metasound.common.snapshot(live)
+        body["Graphs"]["Low"]["Nodes"]["Sine"]["Position"] = [5, 5]
+        _, context = self._apply(body, FakeContext(True, records))
+        self.assertIn({"op": "node.set", "id": "N1", "position": [5, 5], "page": "Low"}, context.ops)
+        self.assertFalse(any(op["op"] == "connect" for op in context.ops))
+        # Leaving it out disconnects it; a new one is still refused.
+        body = metasound.common.snapshot(live)
+        del body["Graphs"]["Low"]["Nodes"]["Sine"]["Inputs"]
+        _, context = self._apply(body, FakeContext(True, records))
+        self.assertIn({"op": "connect", "id": "N1", "pin": "Frequency", "from": None, "page": "Low"}, context.ops)
+        body = metasound.common.snapshot(live)
+        body["Graphs"]["Low"]["Nodes"]["Saw"]["Inputs"] = {"Frequency": "Input:Pitch"}
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            self._apply(body, FakeContext(True, records))
+        self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                         ("MetaSound.InvalidSource", "/Body/Graphs/Low/Nodes/Saw/Inputs/Frequency"))
+
+    def test_unencodable_configuration_settings_are_markers(self):
+        mark = {"Unsupported": "TFieldPath<FProperty> has no document form; AssetDoc keeps the value.", "Text": "x"}
+        records = RECORDS[:6] + [dict(RECORDS[6], configuration={
+            "type": "/Script/H.Config", "properties": {"Field": mark, "Ramp": 8.0},
+            "defaults": {"NumChannels": 1, "Ramp": 5.0}})] + RECORDS[7:]
+        with metasound_collecting() as warnings:
+            live, facts, _ = metasound.assemble(records)
+            metasound.warn_unrepresented(live)
+        self.assertEqual([(item.code, item.path) for item in warnings], [
+            ("MetaSound.Unrepresented", "/Body/Graphs/Default/Nodes/Sine/Configuration/Properties/Field")])
+        canonical = metasound.canonicalize(_document(live))
+        self.assertEqual(metasound.diff(canonical, canonical, exact=True, facts=facts), ())
+        _, context = self._apply(metasound.common.snapshot(live), FakeContext(True, records))
+        self.assertEqual(context.ops, [])
+        # Omitted: kept (no change); another setting edited: the marker is left out of the write.
+        authored = metasound.common.snapshot(live)
+        del authored["Graphs"]["Default"]["Nodes"]["Sine"]["Configuration"]["Properties"]["Field"]
+        self.assertEqual(metasound.diff(metasound.canonicalize(_document(authored)), canonical, exact=True, facts=facts), ())
+        authored["Graphs"]["Default"]["Nodes"]["Sine"]["Configuration"]["Properties"]["Ramp"] = 9.0
+        _, context = self._apply(authored, FakeContext(True, records))
+        self.assertIn({"op": "node.set", "id": "N1", "configuration": {"properties": {"Ramp": 9.0},
+                                                                         "type": "/Script/H.Config"}}, context.ops)
+        authored = metasound.common.snapshot(live)
+        authored["Graphs"]["Default"]["Nodes"]["Sine"]["Configuration"]["Properties"]["Ramp"] = 9.0
+        _, context = self._apply(authored, FakeContext(True, records))
+        self.assertIn({"op": "node.set", "id": "N1", "configuration": {"properties": {"Ramp": 9.0},
+                                                                         "type": "/Script/H.Config"}}, context.ops)
+        # Edited: refused.
+        authored["Graphs"]["Default"]["Nodes"]["Sine"]["Configuration"]["Properties"]["Field"] = {**mark, "Text": "y"}
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            self._apply(authored, FakeContext(True, records))
+        self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                         ("MetaSound.UnrepresentedValue", "/Body/Graphs/Default/Nodes/Sine/Configuration/Properties/Field"))
+
+    def test_configuration_settings_with_markers_inside(self):
+        mark = {"Unsupported": "TFieldPath<FProperty> has no document form; AssetDoc keeps the value.", "Text": "x"}
+        records = RECORDS[:6] + [dict(RECORDS[6], configuration={
+            "type": "/Script/H.Config", "properties": {"Settings": {"X": 2.0, "P": mark}, "Ramp": 8.0},
+            "defaults": {"NumChannels": 1, "Ramp": 5.0, "Settings": {"X": 0.0, "P": dict(mark, Text="None")}}})] + RECORDS[7:]
+        live, facts, _ = metasound.assemble(records)
+        canonical = metasound.canonicalize(_document(live))
+        self.assertEqual(metasound.diff(canonical, canonical, exact=True, facts=facts), ())
+        _, context = self._apply(metasound.common.snapshot(live), FakeContext(True, records))
+        self.assertEqual(context.ops, [])
+        # A sibling member edited: the struct goes with its marker (the editor decodes it over the current value).
+        authored = metasound.common.snapshot(live)
+        authored["Graphs"]["Default"]["Nodes"]["Sine"]["Configuration"]["Properties"]["Settings"]["X"] = 3.0
+        _, context = self._apply(authored, FakeContext(True, records))
+        self.assertIn({"op": "node.set", "id": "N1", "configuration": {
+            "properties": {"Settings": {"X": 3.0, "P": mark}, "Ramp": 8.0}, "type": "/Script/H.Config"}}, context.ops)
+        # Omitted: kept, so leaving it out is no change; another setting edited does not send it.
+        authored = metasound.common.snapshot(live)
+        del authored["Graphs"]["Default"]["Nodes"]["Sine"]["Configuration"]["Properties"]["Settings"]
+        self.assertEqual(metasound.diff(metasound.canonicalize(_document(authored)), canonical, exact=True, facts=facts), ())
+        _, context = self._apply(authored, FakeContext(True, records))
+        self.assertEqual(context.ops, [])
+        authored["Graphs"]["Default"]["Nodes"]["Sine"]["Configuration"]["Properties"]["Ramp"] = 9.0
+        _, context = self._apply(authored, FakeContext(True, records))
+        self.assertIn({"op": "node.set", "id": "N1", "configuration": {"properties": {"Ramp": 9.0},
+                                                                         "type": "/Script/H.Config"}}, context.ops)
+
     def test_pin_names_compare_without_case(self):
         live, facts, _ = metasound.assemble(RECORDS)
         authored = metasound.common.snapshot(live)
@@ -510,6 +602,15 @@ class ApplyTests(unittest.TestCase):
         node["Inputs"] = {pin.upper(): source for pin, source in node["Inputs"].items()}
         self.assertEqual(metasound.diff(metasound.canonicalize(_document(authored)), metasound.canonicalize(_document(live)),
                                         exact=True, facts=facts), ())
+
+    def test_a_metadata_text_form_over_a_plain_string_is_written(self):
+        from types import SimpleNamespace
+        from asset_document.profiles import metasound_apply as apply
+        live = SimpleNamespace(body={"Metadata": {"Description": "Blip"}})
+        self.assertEqual(apply._metadata_ops({"Metadata": {"Description": 'INVTEXT("Blip")'}}, live),
+                         [({"op": "metadata", "description": 'INVTEXT("Blip")'}, "/Body/Metadata")])
+        held = SimpleNamespace(body={"Metadata": {"Description": 'INVTEXT("Blip")'}})
+        self.assertEqual(apply._metadata_ops({"Metadata": {"Description": "Blip"}}, held), [])
 
     def test_layout_of_new_nodes(self):
         """New nodes go left of the placed node they feed, right of the placed nodes feeding them, and never on a

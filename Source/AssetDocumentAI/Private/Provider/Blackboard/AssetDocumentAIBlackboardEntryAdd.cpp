@@ -36,6 +36,10 @@ TOptional<FAssetDocumentPrimitiveOutcome> PreflightEntryAdd(
 		return Failure(TEXT("AIProvider.InvalidContext"),
 			TEXT("Blackboard entry add requires the Editor game thread."));
 	}
+	if (TOptional<FAssetDocumentPrimitiveOutcome> InUse = RefuseLiveBlackboardLayoutChange(*OutBlackboard))
+	{
+		return InUse;
+	}
 	int32 AuthoredLocalCount = 0;
 	for (const FBlackboardEntry& Entry : OutBlackboard->Keys)
 	{
@@ -70,15 +74,8 @@ TOptional<FAssetDocumentPrimitiveOutcome> PreflightEntryAdd(
 		return Failure(TEXT("AIProvider.Blackboard.KeyInherited"),
 			TEXT("The requested Blackboard key is inherited."));
 	}
-	for (const FBlackboardEntry& Entry : OutBlackboard->Keys)
-	{
-		if (!IsEngineDerivedSelfKey(Entry)
-			&& HasInheritedKey(*OutBlackboard, Entry.EntryName))
-		{
-			return Failure(TEXT("AIProvider.AuthorityUnavailable"),
-				TEXT("The current local-key snapshot contains a parent-shadowed name."));
-		}
-	}
+	// A local key that already shadows a Parent key (made before the Parent was set) is kept as the engine keeps it;
+	// only the requested key may not shadow one.
 	OutPhysicalInsertionIndex = OutBlackboard->Keys.Num();
 	int32 AuthoredIndex = 0;
 	for (int32 PhysicalIndex = 0; PhysicalIndex < OutBlackboard->Keys.Num(); ++PhysicalIndex)

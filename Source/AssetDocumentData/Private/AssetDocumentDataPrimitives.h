@@ -47,6 +47,14 @@ bool EncodeMember(FProperty& Member, const void* ContainerPtr, FValue& OutValue,
 // Decodes Value as an edit of the member value already in ContainerPtr (omitted
 // struct members keep theirs); Owner is the table (text ids, picker filters).
 bool DecodeMember(FProperty& Member, const FValue& Value, void* ContainerPtr, FString& OutCode, UObject* Owner = nullptr);
+// As above; on failure OutMessage says what does not fit (may be empty) and OutValuePath where below the member
+// value (a JSON Pointer, "" for the value itself).
+bool DecodeMember(FProperty& Member, const FValue& Value, void* ContainerPtr, FString& OutCode, UObject* Owner,
+	FString& OutMessage, FString& OutValuePath);
+
+// The read of a value the codec has no form for: {"Unsupported": reason, "Text": export text}. Text, when given, is
+// the stored export text (a User Defined Struct member default).
+FValue MakeUnsupportedMarker(const FProperty& Member, const void* ValuePtr, const FString* Text = nullptr);
 
 // Schema row of a member: {name, type, codec, supported, enum_values?}.
 FValue DescribeMember(FProperty& Member);

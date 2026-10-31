@@ -73,7 +73,7 @@ UBLUEPRINT_REQUIREMENTS = frozenset(
           "graph.link.check.v1",
           *(f"blueprint.member.{name}.v1" for name in (
               "query", "parent.set", "interface.add", "interface.remove", "variable.set", "variable.remove",
-              "component.add", "component.attach", "component.remove", "property.set",
+              "component.add", "component.attach", "component.variable.set", "component.remove", "property.set",
               "dispatcher.set", "dispatcher.remove", "timeline.set", "timeline.remove", "rename")))
 )
 # Declared after the cutover: AnimMontage settings restore (generic Editor

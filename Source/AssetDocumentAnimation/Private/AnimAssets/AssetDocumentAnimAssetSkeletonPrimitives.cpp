@@ -4,7 +4,7 @@
 // animation_asset.skeleton.read.v1 / edit.v1: the Skeleton editor's authorable surface. Edits go
 // through IEditableSkeleton (the object the Skeleton editor's Anim Slot Manager, skeleton tree,
 // blend profile picker and retargeting menu call), USkeleton's exported editor API (virtual bones,
-// curve metadata) and AssetDocumentSkeletonRawEdits (socket delete / socket details). Bones are read
+// curve metadata; the Anim Curves tab's bone links through IInterface_AnimCurveMetaData) and AssetDocumentSkeletonRawEdits (socket delete / socket details). Bones are read
 // only; slot rename / delete is refused while montages or Animation Blueprint slot nodes use the
 // slot, as SSkeletonSlotNames does.
 
@@ -17,15 +17,20 @@
 #include "Animation/AnimCurveMetadata.h"
 #include "Animation/AnimMontage.h"
 #include "Animation/BlendProfile.h"
+#include "Animation/PreviewAssetAttachComponent.h"
+#include "Animation/PreviewCollectionInterface.h"
 #include "Animation/Skeleton.h"
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "EdGraph/EdGraph.h"
+#include "Engine/DataAsset.h"
+#include "Engine/SkeletalMesh.h"
 #include "Engine/SkeletalMeshSocket.h"
 #include "IEditableSkeleton.h"
 #include "ISkeletonEditorModule.h"
 #include "Modules/ModuleManager.h"
 #include "ScopedTransaction.h"
+#include "UObject/UnrealType.h"
 
 #define LOCTEXT_NAMESPACE "AssetDocumentSkeleton"
 
@@ -311,6 +316,97 @@ bool RequireCurve(FReader& Op, const USkeleton& Skeleton, FName Name)
 	Skeleton.GetCurveMetaDataNames(Names);
 	return Op.Fail(TEXT("Skeleton.CurveNotFound"), FString::Printf(TEXT("Skeleton %s has no curve metadata '%s'. Curves: %s."),
 		*Skeleton.GetPathName(), *Name.ToString(), *JoinNames(SortedNames(Names))), TEXT("name"));
+}
+
+// The Anim Curves tab's bone links of a curve (Connected Bones, Max LOD): SAnimCurveMetadataEditor::ApplyCurveBoneLinks.
+// Omitted fields keep the curve's value.
+bool SetCurveBoneLinks(FReader& Op, USkeleton& Skeleton, FName Name)
+{
+	const FCurveMetaData* MetaData = Skeleton.GetCurveMetaData(Name);
+	UAnimCurveMetaData* CurveMetaData = Skeleton.GetAssetUserData<UAnimCurveMetaData>();
+	if (MetaData == nullptr || CurveMetaData == nullptr)
+	{
+		return Op.Fail(TEXT("Skeleton.CurveNotFound"), FString::Printf(TEXT("Skeleton %s has no curve metadata '%s'."),
+			*Skeleton.GetPathName(), *Name.ToString()), TEXT("name"));
+	}
+	TArray<FBoneReference> Links = MetaData->LinkedBones;
+	if (Op.Has(TEXT("linked_bones")))
+	{
+		const FValue* Bones = nullptr;
+		if (!Op.Array(TEXT("linked_bones"), Bones))
+		{
+			return false;
+		}
+		Links.Reset();
+		const FReferenceSkeleton& RefSkeleton = Skeleton.GetReferenceSkeleton();
+		for (int32 Index = 0; Index < Bones->Elements.Num(); ++Index)
+		{
+			const FValue& Element = Bones->Elements[Index];
+			const FString Key = FString::Printf(TEXT("linked_bones/%d"), Index);
+			const FName Bone = Element.Kind == EAssetDocumentRuntimeValueKind::String ? FName(*Element.StringValue) : NAME_None;
+			if (Bone.IsNone() || RefSkeleton.FindBoneIndex(Bone) == INDEX_NONE)
+			{
+				return Op.Fail(TEXT("Skeleton.BoneNotFound"), FString::Printf(TEXT("Skeleton %s has no bone '%s'."),
+					*Skeleton.GetPathName(), *Bone.ToString()), *Key);
+			}
+			Links.Add(FBoneReference(Bone));
+		}
+	}
+	uint8 MaxLOD = MetaData->MaxLOD;
+	if (Op.Has(TEXT("max_lod")))
+	{
+		int64 Value = 0;
+		if (!Op.Int(TEXT("max_lod"), Value))
+		{
+			return false;
+		}
+		if (Value < 0 || Value > 255)
+		{
+			return Op.Fail(TEXT("Skeleton.InvalidCurve"), TEXT("max_lod is 0..255 (255: every LOD)."), TEXT("max_lod"));
+		}
+		MaxLOD = static_cast<uint8>(Value);
+	}
+	bool bSame = MaxLOD == MetaData->MaxLOD && Links.Num() == MetaData->LinkedBones.Num();
+	for (int32 Index = 0; bSame && Index < Links.Num(); ++Index)
+	{
+		bSame = Links[Index].BoneName == MetaData->LinkedBones[Index].BoneName;
+	}
+	if (!bSame)
+	{
+		static_cast<IInterface_AnimCurveMetaData*>(CurveMetaData)->SetCurveMetaDataBoneLinks(Name, Links, MaxLOD, &Skeleton);
+	}
+	return true;
+}
+
+// A soft object UPROPERTY of the Skeleton (the preview settings are private), read without loading it.
+FString SkeletonSoftPath(const USkeleton& Skeleton, const TCHAR* Name)
+{
+	const FSoftObjectProperty* Property = FindFProperty<FSoftObjectProperty>(USkeleton::StaticClass(), Name);
+	return Property != nullptr ? Property->GetPropertyValue_InContainer(&Skeleton).ToSoftObjectPath().ToString() : FString();
+}
+
+// The preview assets attached in the Skeleton editor ({asset, attached_to}), read without loading them.
+TArray<FValue> PreviewAttachedAssetRows(const USkeleton& Skeleton)
+{
+	TArray<FValue> Rows;
+	const FStructProperty* Container = FindFProperty<FStructProperty>(USkeleton::StaticClass(), TEXT("PreviewAttachedAssetContainer"));
+	const FArrayProperty* Objects = Container != nullptr ? FindFProperty<FArrayProperty>(Container->Struct, TEXT("AttachedObjects")) : nullptr;
+	const FStructProperty* Pair = Objects != nullptr ? CastField<FStructProperty>(Objects->Inner) : nullptr;
+	const FSoftObjectProperty* Asset = Pair != nullptr ? FindFProperty<FSoftObjectProperty>(Pair->Struct, TEXT("AttachedObject")) : nullptr;
+	if (Asset == nullptr)
+	{
+		return Rows;
+	}
+	FScriptArrayHelper Array(Objects, Objects->ContainerPtrToValuePtr<void>(Container->ContainerPtrToValuePtr<void>(&Skeleton)));
+	for (int32 Index = 0; Index < Array.Num(); ++Index)
+	{
+		const FPreviewAttachedObjectPair& Item = *reinterpret_cast<const FPreviewAttachedObjectPair*>(Array.GetRawPtr(Index));
+		FObjectBuilder Row;
+		Row.AddString(TEXT("asset"), Asset->GetPropertyValue_InContainer(Array.GetRawPtr(Index)).ToSoftObjectPath().ToString());
+		Row.AddString(TEXT("attached_to"), Item.AttachedTo.ToString());
+		Rows.Add(Row.Build());
+	}
+	return Rows;
 }
 
 bool RequireSlot(FReader& Op, const USkeleton& Skeleton, FName Name)
@@ -814,10 +910,99 @@ bool ApplySkeletonOp(FReader& Op, const FString& Kind, IEditableSkeleton& Editab
 		Skeleton.RenameCurveMetaData(Name, To);
 		return true;
 	}
+	if (Kind == TEXT("preview_mesh"))
+	{
+		// The Skeleton editor's Preview Mesh picker (FEditableSkeleton::SetPreviewMesh); "" clears it.
+		FString Path;
+		if (!Op.OnlyFields({TEXT("op"), TEXT("path")}) || !Op.String(TEXT("path"), Path))
+		{
+			return false;
+		}
+		USkeletalMesh* Mesh = nullptr;
+		if (!Path.IsEmpty())
+		{
+			Mesh = Cast<USkeletalMesh>(LoadReference(Op, TEXT("path"), USkeletalMesh::StaticClass(), TEXT("a Skeletal Mesh")));
+			if (Mesh == nullptr)
+			{
+				return false;
+			}
+			if (Mesh->GetSkeleton() == nullptr || !Skeleton.IsCompatibleForEditor(Mesh->GetSkeleton()))
+			{
+				return Op.Fail(TEXT("AnimationAsset.IncompatibleSkeleton"), FString::Printf(
+					TEXT("Preview mesh %s uses skeleton %s, which is not compatible with %s."), *Path,
+					*PathOf(Mesh->GetSkeleton()), *Skeleton.GetPathName()), TEXT("path"));
+			}
+		}
+		Editable.SetPreviewMesh(Mesh);
+		return true;
+	}
+	if (Kind == TEXT("additional_preview_meshes"))
+	{
+		// The preview scene settings' Additional Meshes asset (FEditableSkeleton::SetAdditionalPreviewSkeletalMeshes).
+		FString Path;
+		if (!Op.OnlyFields({TEXT("op"), TEXT("path")}) || !Op.String(TEXT("path"), Path))
+		{
+			return false;
+		}
+		UDataAsset* Collection = nullptr;
+		if (!Path.IsEmpty())
+		{
+			Collection = Cast<UDataAsset>(LoadReference(Op, TEXT("path"), UDataAsset::StaticClass(), TEXT("a preview mesh collection")));
+			if (Collection == nullptr)
+			{
+				return false;
+			}
+			if (!Collection->GetClass()->ImplementsInterface(UPreviewCollectionInterface::StaticClass()))
+			{
+				return Op.Fail(TEXT("AnimationAsset.ReferenceNotFound"), FString::Printf(
+					TEXT("%s is a %s, not a preview mesh collection."), *Path, *Collection->GetClass()->GetName()), TEXT("path"));
+			}
+		}
+		Editable.SetAdditionalPreviewSkeletalMeshes(Collection);
+		return true;
+	}
+	if (Kind == TEXT("notify_add"))
+	{
+		// The Animation Notifies tab's New Notify.
+		if (!Op.OnlyFields({TEXT("op"), TEXT("name")}) || !ReadName(Op, TEXT("name"), Name))
+		{
+			return false;
+		}
+		if (!Skeleton.AnimationNotifies.Contains(Name))
+		{
+			Editable.AddNotify(Name);
+		}
+		return true;
+	}
+	if (Kind == TEXT("curve_metadata_park") || Kind == TEXT("curve_metadata_unpark"))
+	{
+		int64 Index = INDEX_NONE;
+		if (!Op.OnlyFields({TEXT("op"), TEXT("index")}) || !Op.Int(TEXT("index"), Index))
+		{
+			return false;
+		}
+		if (Index < 0 || Index > MAX_int32)
+		{
+			return Op.Fail(TEXT("Skeleton.CurveNotFound"), TEXT("index is an AssetUserData index (0 or more)."), TEXT("index"));
+		}
+		const int32 Slot = static_cast<int32>(Index);
+		const bool bMoved = Kind == TEXT("curve_metadata_park")
+			? UE::AssetDocument::Animation::SkeletonEdits::ParkCurveMetaData(Skeleton, Slot)
+			: UE::AssetDocument::Animation::SkeletonEdits::UnparkCurveMetaData(Skeleton, Slot);
+		if (!bMoved)
+		{
+			return Op.Fail(TEXT("Skeleton.CurveNotFound"), TEXT("The Skeleton's Asset User Data holds no curve metadata object there."), TEXT("index"));
+		}
+		return true;
+	}
 	if (Kind == TEXT("curve_set"))
 	{
-		if (!Op.OnlyFields({TEXT("op"), TEXT("name"), TEXT("material"), TEXT("morph_target")}) || !ReadName(Op, TEXT("name"), Name)
-			|| !RequireCurve(Op, Skeleton, Name))
+		if (!Op.OnlyFields({TEXT("op"), TEXT("name"), TEXT("material"), TEXT("morph_target"), TEXT("linked_bones"), TEXT("max_lod")})
+			|| !ReadName(Op, TEXT("name"), Name) || !RequireCurve(Op, Skeleton, Name))
+		{
+			return false;
+		}
+		if ((Op.Has(TEXT("linked_bones")) || Op.Has(TEXT("max_lod"))) && !SetCurveBoneLinks(Op, Skeleton, Name))
 		{
 			return false;
 		}
@@ -947,9 +1132,50 @@ bool HandleSkeletonRead(FCall& Call, FObjectBuilder& Result)
 		Row.AddString(TEXT("name"), Curve.ToString());
 		Row.AddBool(TEXT("material"), Skeleton->GetCurveMetaDataMaterial(Curve));
 		Row.AddBool(TEXT("morph_target"), Skeleton->GetCurveMetaDataMorphTarget(Curve));
+		TArray<FString> LinkedBones;
+		int32 MaxLOD = 0xFF;
+		if (const FCurveMetaData* MetaData = Skeleton->GetCurveMetaData(Curve))
+		{
+			for (const FBoneReference& Link : MetaData->LinkedBones)
+			{
+				LinkedBones.Add(Link.BoneName.ToString());
+			}
+			MaxLOD = MetaData->MaxLOD;
+		}
+		Row.Add(TEXT("linked_bones"), MakeStringArray(LinkedBones));
+		Row.AddInt(TEXT("max_lod"), MaxLOD);
 		Curves.Add(Row.Build());
 	}
 	Result.Add(TEXT("curves"), MakeArray(MoveTemp(Curves)));
+
+	Result.AddString(TEXT("preview_mesh"), SkeletonSoftPath(*Skeleton, TEXT("PreviewSkeletalMesh")));
+	Result.AddString(TEXT("additional_preview_meshes"), SkeletonSoftPath(*Skeleton, TEXT("AdditionalPreviewSkeletalMeshes")));
+	Result.Add(TEXT("preview_attached_assets"), MakeArray(PreviewAttachedAssetRows(*Skeleton)));
+
+	TArray<FName> RetargetNames;
+	Skeleton->AnimRetargetSources.GetKeys(RetargetNames);
+	RetargetNames.Sort(FNameLexicalLess());
+	TArray<FValue> RetargetSources;
+	for (const FName Source : RetargetNames)
+	{
+		FObjectBuilder Row;
+		Row.AddString(TEXT("name"), Source.ToString());
+		Row.AddString(TEXT("mesh"), Skeleton->AnimRetargetSources[Source].SourceReferenceMesh.ToSoftObjectPath().ToString());
+		RetargetSources.Add(Row.Build());
+	}
+	Result.Add(TEXT("retarget_sources"), MakeArray(MoveTemp(RetargetSources)));
+
+	TArray<FString> Notifies;
+	for (const FName Notify : Skeleton->AnimationNotifies)
+	{
+		Notifies.Add(Notify.ToString());
+	}
+	Notifies.Sort();
+	Result.Add(TEXT("notifies"), MakeStringArray(Notifies));
+
+	// The AssetUserData index of the curve metadata object (-1: none there).
+	const int32 CurveMetaDataIndex = UE::AssetDocument::Animation::SkeletonEdits::FindCurveMetaData(*Skeleton);
+	Result.AddInt(TEXT("curve_metadata_index"), CurveMetaDataIndex);
 
 	return true;
 }

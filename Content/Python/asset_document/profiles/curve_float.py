@@ -1,7 +1,7 @@
 # Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CurveFloat authored from Python only.
+"""CurveFloat, CurveVector and CurveLinearColor authored from Python only.
 
 ``UCurveFloat`` keeps its curve in ``FloatCurve`` (``FRichCurve``) and
 ``bIsEventCurve``; both are serialized ``UPROPERTY()`` without ``CPF_Edit``, so
@@ -29,6 +29,18 @@ prefix. ``DefaultValue`` is omitted while the curve has none. ``FloatCurve`` is
 authored whole: omitted curve fields reset to their defaults. Numbers are
 float32 in the asset; extracted numbers are the shortest decimals that round-trip
 to the stored float32.
+
+``UCurveVector`` and ``UCurveLinearColor`` keep one such curve per channel in the
+fixed array ``FloatCurves`` (X, Y, Z; R, G, B, A), also a serialized non-edit
+property that the curve editor edits. Its document form is an object keyed by
+channel, each value in the ``FloatCurve`` form. Extract lists every channel (an
+empty one as ``{"Keys": []}`` in its canonical form); an omitted channel keeps
+its current curve, and an explicit ``{}`` or ``{"Keys": []}`` clears it.
+
+Key times must be strictly ascending in new input. A saved curve whose keys are
+not (two keys at one time, as a script's ``AddKey`` can leave) reads with the
+warning ``CurveFloat.KeysNotAscending`` and its keys as they are; re-applying
+them unchanged keeps them.
 """
 from __future__ import annotations
 
@@ -41,6 +53,7 @@ from asset_document.regions.property_semantics import (
     GenericPropertyComponent,
     admit_properties,
 )
+from asset_document.tolerance import authored_rule
 
 CURVE_FLOAT_CLASS = "/Script/Engine.CurveFloat"
 
@@ -179,7 +192,7 @@ class RichCurveCodec:
         native_keys = [_key_from_document(key, f"{path}/Keys/{index}") for index, key in enumerate(keys)]
         for index in range(1, len(native_keys)):
             if native_keys[index]["Time"] <= native_keys[index - 1]["Time"]:
-                _fail(
+                authored_rule(
                     f"{path}/Keys/{index}/Time",
                     "CurveFloat.KeysNotAscending",
                     "key times must be strictly ascending (after float32 rounding)",
@@ -211,7 +224,56 @@ class RichCurveCodec:
         return document
 
 
+class RichCurveChannelsCodec:
+    """A fixed array of ``FRichCurve`` (one curve per channel) <-> ``{channel: curve}``.
+
+    Each channel uses the ``FloatCurve`` form. Every channel is in the document read from the asset (an empty curve
+    too). An omitted channel keeps its curve: its native element is ``{}``, a struct edit with every member omitted,
+    and a read shaped like it returns ``{}``, which the document leaves out."""
+
+    def __init__(self, channels: tuple[str, ...]) -> None:
+        self._channels = channels
+        self._curve = RichCurveCodec()
+
+    def from_document(self, value: JsonValue, path: str) -> JsonValue:
+        channels = _object(value, frozenset(self._channels), path, "CurveFloat.InvalidCurve")
+        return [
+            self._curve.from_document(channels[name], f"{path}/{name}") if name in channels else {}
+            for name in self._channels
+        ]
+
+    def shape_like(self, authored: JsonValue, observed: JsonValue) -> JsonValue:
+        """The observed native curves with ``{}`` where the authored value leaves a channel out (the asset keeps that
+        channel's curve, so a comparison skips it)."""
+        if type(authored) not in (list, tuple) or type(observed) not in (list, tuple) or len(authored) != len(observed):
+            return observed
+        return [{} if mine == {} else theirs for mine, theirs in zip(authored, observed)]
+
+    def to_document(self, value: JsonValue, path: str) -> JsonValue:
+        if type(value) not in (list, tuple) or len(value) != len(self._channels):
+            _fail(path, "CurveFloat.InvalidNativeValue",
+                  f"native curves must be an array of {len(self._channels)} FRichCurve values")
+        return {
+            name: self._curve.to_document(value[index], f"{path}/{name}")
+            for index, name in enumerate(self._channels)
+            if value[index] != {}
+        }
+
+
+CURVE_VECTOR_CLASS = "/Script/Engine.CurveVector"
+CURVE_LINEAR_COLOR_CLASS = "/Script/Engine.CurveLinearColor"
+
 CURVE_FLOAT_PROPERTIES = GenericPropertyComponent(
     admit_properties(CURVE_FLOAT_CLASS, ("FloatCurve", "bIsEventCurve")),
     {"FloatCurve": RichCurveCodec()},
+)
+
+CURVE_VECTOR_PROPERTIES = GenericPropertyComponent(
+    admit_properties(CURVE_VECTOR_CLASS, ("FloatCurves",)),
+    {"FloatCurves": RichCurveChannelsCodec(("X", "Y", "Z"))},
+)
+
+CURVE_LINEAR_COLOR_PROPERTIES = GenericPropertyComponent(
+    admit_properties(CURVE_LINEAR_COLOR_CLASS, ("FloatCurves",)),
+    {"FloatCurves": RichCurveChannelsCodec(("R", "G", "B", "A"))},
 )

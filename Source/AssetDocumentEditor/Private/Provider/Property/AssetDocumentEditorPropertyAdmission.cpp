@@ -86,10 +86,12 @@ UClass* GetExactLivePropertyTargetClass(UObject& ExactTarget)
 		: nullptr;
 }
 
+// A DuplicateTransient property is saved with the asset and edited in the Details panel; only a duplicate of the asset
+// leaves it at its default, which a write of the document's value covers.
 bool IsAuthoredProperty(const FProperty& Property)
 {
 	constexpr uint64 RejectedFlags =
-		CPF_Transient | CPF_DuplicateTransient | CPF_Deprecated | CPF_SkipSerialization;
+		CPF_Transient | CPF_Deprecated | CPF_SkipSerialization;
 	return Property.HasAnyPropertyFlags(CPF_Edit)
 		&& !Property.HasAnyPropertyFlags(RejectedFlags);
 }

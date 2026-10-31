@@ -439,7 +439,7 @@ test("the core AssetDocument guide covers the document shape, diagnostics and th
   // The editor appends "Sections: <names>." after the file, so each new profile section costs its name, not its class list.
   const listing = `\nSections: ${sectionNames.join(", ")}.`;
   const text = readText(SCHEMAS_DIR, "AssetDocument.md");
-  assert.ok((text + listing).length <= 10_000, `the core guide stays small (${text.length + listing.length} chars with the section listing)`);
+  assert.ok((text + listing).length <= 11_000, `the core guide stays small (${text.length + listing.length} chars with the section listing)`);
   assert.ok(listing.length <= 60 * sectionNames.length, `the listing costs at most 60 chars per section (${listing.length})`);
   assert.match(text, /^# AssetDocument Guide/m);
   assertPatterns(
@@ -699,7 +699,7 @@ test("the level, playtest and import/settings guides", () => {
 
 // Guide size: an AI building a gameplay feature reads these guides in one session. Each budget is the measured size
 // of the served text + 10% rounded up to the next 100; the core guide and the eight authoring sections together
-// may not exceed 72,000 chars. Reference material lives in parts read on demand with {profile, part}.
+// may not exceed 83,800 chars. Reference material lives in parts read on demand with {profile, part}.
 test("the authoring guides stay within their size budgets", () => {
   const GUIDE_BUDGETS: Record<string, number> = {
     UserDefinedTypes: 5400,
@@ -709,10 +709,10 @@ test("the authoring guides stay within their size budgets", () => {
     Niagara: 12700,
     MetaSound: 9600,
     Blueprint: 13000,
-    WidgetBlueprint: 4600,
+    WidgetBlueprint: 4800,
   };
   const CORE_BUDGET = 11_000;
-  const TOTAL_BUDGET = 72_000;
+  const TOTAL_BUDGET = 83_800;
   const core = readText(SCHEMAS_DIR, "AssetDocument.md");
   assert.ok(core.length <= CORE_BUDGET, `core guide ${core.length} chars exceeds ${CORE_BUDGET}`);
   let total = core.length;

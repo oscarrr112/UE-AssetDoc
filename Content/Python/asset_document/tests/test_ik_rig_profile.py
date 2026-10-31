@@ -124,6 +124,114 @@ class SolverStackTests(unittest.TestCase):
         self.assertEqual(moves, [(1, 0)])
 
 
+class UnloadableSolverTests(unittest.TestCase):
+    MARKER = {"Type": None, "Unsupported": "The solver's type does not load."}
+
+    def _document(self, solvers):
+        return {"SchemaVersion": 1, "Class": ik_rig.CLASS, "Action": "Update", "Target": TARGET,
+                "Properties": {}, "Body": {"Solvers": solvers}}
+
+    def test_a_solver_whose_type_does_not_load_is_kept_by_position(self):
+        records = _records() + [{"kind": "solver", "index": 2, "entry": dict(self.MARKER)}]
+        live, _ = ik_rig.assemble(records)
+        body = ik_rig.canonicalize(self._document(live["Solvers"]))["Body"]
+        plan.check_markers(body, live)
+        self.assertEqual(plan.phase_solver_stack(body, live), [])
+        self.assertEqual(_ops(plan.phase_settings, body, live), [])
+        without = {"Solvers": live["Solvers"][:2]}
+        self.assertEqual(_ops(plan.phase_solver_stack, without, live), [{"op": "solver.remove", "index": 2}])
+
+    def test_an_edited_or_new_marker_is_refused(self):
+        live, _ = ik_rig.assemble(_records() + [{"kind": "solver", "index": 2, "entry": dict(self.MARKER)}])
+        edited = {"Solvers": live["Solvers"][:2] + [dict(self.MARKER, Unsupported="other")]}
+        with self.assertRaises(AssetDocumentContractError) as caught:
+            plan.check_markers(edited, live)
+        self.assertEqual((caught.exception.diagnostic.code, caught.exception.diagnostic.path),
+                         ("IKRig.UnrepresentedValue", "/Body/Solvers/2"))
+        with self.assertRaises(AssetDocumentContractError):
+            plan.check_markers({"Solvers": [dict(self.MARKER)]}, _live())
+        with self.assertRaises(AssetDocumentContractError) as caught:
+            ik_rig.canonicalize(self._document([dict(self.MARKER, Type="FullBodyIK")]))
+        self.assertEqual(caught.exception.diagnostic.path, "/Body/Solvers/0/Type")
+
+
+class UnrepresentedFieldTests(unittest.TestCase):
+    """A solver, goal or bone settings field the document has no form for reads in place as a marker."""
+    MARKER = {"Unsupported": "TFieldPath<FProperty> has no document form; AssetDoc keeps the value.",
+              "Text": "/Script/IKRig.IKRigEffectorGoal:PositionAlpha"}
+
+    def _live(self):
+        records = _records()
+        records[3] = {"kind": "solver", "index": 0, "entry": dict(
+            records[3]["entry"], Settings={"Iterations": 30, "Filter": dict(self.MARKER)},
+            Goals={"LeftFoot": {"Filter": dict(self.MARKER)}, "RightFoot": {"PullChainAlpha": 0.5}})}
+        records[4] = {"kind": "solver_bones", "index": 0, "bones": {"calf_l": {"X": "Limited", "Filter": dict(self.MARKER)}}}
+        body, _ = ik_rig.assemble(records)
+        return body
+
+    def _document(self, body):
+        return {"SchemaVersion": 1, "Class": ik_rig.CLASS, "Action": "Update", "Target": TARGET, "Properties": {},
+                "Body": body}
+
+    def test_the_extract_re_applies_as_a_no_op(self):
+        live = self._live()
+        body = ik_rig.canonicalize(self._document(live))["Body"]
+        self.assertEqual(ik_rig.body_diff(body, live, exact=False), [])
+        self.assertEqual(ik_rig.body_diff(body, live, exact=True), [])
+        plan.check_markers(body, live)
+        self.assertEqual(_ops(plan.phase_settings, body, live), [])
+
+    def test_an_omitted_marker_is_kept(self):
+        live = self._live()
+        body = ik_rig.canonicalize(self._document(live))["Body"]
+        solver = body["Solvers"][0]
+        del solver["Settings"]["Filter"]
+        del solver["Goals"]["LeftFoot"]["Filter"]
+        del solver["Bones"]["calf_l"]["Filter"]
+        self.assertEqual(ik_rig.body_diff(body, live, exact=False), [])
+        self.assertEqual(_ops(plan.phase_settings, body, live), [])
+
+    def test_an_edit_of_another_field_carries_the_marker_to_the_write(self):
+        live = self._live()
+        body = ik_rig.canonicalize(self._document(live))["Body"]
+        body["Solvers"][0]["Settings"]["Iterations"] = 40
+        plan.check_markers(body, live)
+        self.assertEqual(_ops(plan.phase_settings, body, live),
+                         [{"op": "solver.settings", "index": 0, "settings": {"Iterations": 40, "Filter": self.MARKER}}])
+
+    def test_an_edited_or_new_marker_is_refused(self):
+        live = self._live()
+        for where, edit in (("/Body/Solvers/0/Settings/Filter", lambda solver: solver["Settings"]["Filter"].update(Text="x")),
+                            ("/Body/Solvers/0/Goals/LeftFoot/Filter",
+                             lambda solver: solver["Goals"]["LeftFoot"]["Filter"].update(Unsupported="x")),
+                            ("/Body/Solvers/0/Bones/calf_r/Filter",
+                             lambda solver: solver["Bones"]["calf_r"].update(Filter=dict(self.MARKER)))):
+            body = ik_rig.canonicalize(self._document(self._live()))["Body"]
+            edit(body["Solvers"][0])
+            with self.assertRaises(AssetDocumentContractError) as caught:
+                plan.check_markers(body, live)
+            self.assertEqual((caught.exception.diagnostic.code, caught.exception.diagnostic.path),
+                             ("IKRig.UnrepresentedValue", where))
+        # A new solver cannot bring a marker: there is nothing stored for it to keep.
+        body = ik_rig.canonicalize(self._document(self._live()))["Body"]
+        body["Solvers"].append({"Type": "FullBodyIK", "Settings": {"Filter": dict(self.MARKER)}})
+        with self.assertRaises(AssetDocumentContractError) as caught:
+            plan.check_markers(body, live)
+        self.assertEqual(caught.exception.diagnostic.path, "/Body/Solvers/2/Settings/Filter")
+
+    def test_a_marked_goal_detail_is_kept_and_refused_when_edited(self):
+        live = dict(_live(), Goals={"LeftFoot": {"Bone": "foot_l", "SizeMultiplier": {"Unsupported": "not a finite number",
+                                                                                      "Text": "NaN"}}})
+        body = {"Goals": {"LeftFoot": {"Bone": "foot_l"}}}
+        self.assertEqual(ik_rig.body_diff(body, live, exact=False), [])
+        self.assertEqual(_ops(plan.phase_goal_details, body, live), [])
+        body = {"Goals": {"LeftFoot": {"Bone": "foot_l", "SizeMultiplier": {"Unsupported": "not a finite number",
+                                                                            "Text": "Inf"}}}}
+        with self.assertRaises(AssetDocumentContractError) as caught:
+            plan.check_markers(body, live)
+        self.assertEqual(caught.exception.diagnostic.path, "/Body/Goals/LeftFoot/SizeMultiplier")
+
+
 class PhaseTests(unittest.TestCase):
     def test_goal_rename_add_and_bone_move(self):
         body = {"Goals": {"LeftFootIK": {"Bone": "foot_l", "RenamedFrom": "LeftFoot"},

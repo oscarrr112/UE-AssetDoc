@@ -155,6 +155,7 @@ def extract(context, read, route, by_id, self_class) -> dict:
     query = _Members(context, read, None, by_id).query()
     member_body = members.members_from_query(query)
     body = {key: member_body[key] for key in MEMBER_KEYS}
+    members.warn_markers(body, base="/Body/Director")
     body[dispatchers.KEY] = dispatchers.from_query(query)
     executor = _graph_executor(context, read, None, route, self_class)
     live = executor.read_live()

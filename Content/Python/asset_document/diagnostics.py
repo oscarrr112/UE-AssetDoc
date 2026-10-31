@@ -141,6 +141,20 @@ def read_warning(path: str, code: str, message: str) -> None:
             sink.append(diagnostic)
 
 
+def read_note(path: str, code: str, message: str) -> None:
+    """An Info diagnostic of a read, recorded like ``read_warning``."""
+    sink = _READ_WARNINGS.get()
+    if sink is not None:
+        diagnostic = RuntimeDiagnostic(path=path, code=code, message=message, severity=DiagnosticSeverity.INFO)
+        if diagnostic not in sink:
+            sink.append(diagnostic)
+
+
+def is_collecting_read_warnings() -> bool:
+    """A read whose warnings are collected is running."""
+    return _READ_WARNINGS.get() is not None
+
+
 @contextmanager
 def collecting_read_warnings() -> Iterator[list]:
     """Collects the read_warning calls of one read."""

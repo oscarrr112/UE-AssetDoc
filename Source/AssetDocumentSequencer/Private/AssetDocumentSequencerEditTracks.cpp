@@ -330,17 +330,26 @@ UMovieSceneSequence* InnerSequence(UMovieSceneSection& Section, const FValue* Pr
 bool WriteSectionEntry(FEdit& Edit, FReader& Reader, UMovieSceneSection& Section, const FValue& Entry, bool bNew)
 {
 	if (!CheckKeys(Reader, Entry, {TEXT("Class"), TEXT("Start"), TEXT("End"), TEXT("Row"), TEXT("OverlapPriority"), TEXT("Active"), TEXT("Locked"),
-		TEXT("Blend"), TEXT("Easing"), TEXT("PreRoll"), TEXT("PostRoll"), TEXT("WhenFinished"), TEXT("Properties"), TEXT("Event"), TEXT("Unsupported"),
-		TEXT("Channels"), TEXT("Parameters")}, TEXT("A section")))
+		TEXT("Blend"), TEXT("Easing"), TEXT("PreRoll"), TEXT("PostRoll"), TEXT("WhenFinished"), TEXT("Properties"), TEXT("Event"), TEXT("ChannelOverrides"),
+		TEXT("Unsupported"), TEXT("Channels"), TEXT("Parameters")}, TEXT("A section")))
 	{
 		return false;
 	}
 	const UMovieSceneSection& Defaults = *CastChecked<UMovieSceneSection>(Section.GetClass()->GetDefaultObject());
+	// Procedural channel overrides are read only: their marker (or the older "Unsupported": "ChannelOverrides") keeps them.
 	if (const FValue* Unsupported = FindField(Entry, TEXT("Unsupported")))
 	{
 		if (Unsupported->StringValue != TEXT("ChannelOverrides"))
 		{
 			return Reader.Fail(TEXT("Sequencer.InvalidValue"), TEXT("Unsupported is \"ChannelOverrides\" (kept as it is)."), TEXT("Unsupported"));
+		}
+	}
+	if (const FValue* Overrides = FindField(Entry, TEXT("ChannelOverrides")))
+	{
+		if (Overrides->Kind != EAssetDocumentRuntimeValueKind::Object || FindField(*Overrides, TEXT("Unsupported")) == nullptr)
+		{
+			return Reader.Fail(TEXT("Sequencer.UnrepresentedValue"), TEXT("ChannelOverrides is read only: leave its marker as extracted, or omit it "
+				"to keep the overrides."), TEXT("ChannelOverrides"));
 		}
 	}
 	if (!bNew && FindField(Entry, TEXT("Class")) != nullptr)
@@ -554,6 +563,12 @@ bool OpTrackAdd(FEdit& Edit, FReader& Op)
 	{
 		return Op.Fail(TEXT("Sequencer.TrackNotSupported"), FString::Printf(TEXT("A %s does not take %s tracks."), *Edit.Sequence.GetClass()->GetName(),
 			*Type), TEXT("type"));
+	}
+	if (Class->GetName().Contains(TEXT("ControlRig")))
+	{
+		// The editor adds one with its rig set up ("+ Track > Control Rig"); a track added bare would animate nothing.
+		return Op.Fail(TEXT("Sequencer.TrackNotSupported"), TEXT("A Control Rig track needs its rig set up (Sequencer's \"+ Track > Control Rig\" "
+			"with a rig class), which AssetDoc cannot do, so it cannot add one: add it in Sequencer."), TEXT("type"));
 	}
 	FGuid Binding;
 	if (!BindingText.IsEmpty() && (!FGuid::Parse(BindingText, Binding) || Edit.MovieScene.FindBinding(Binding) == nullptr))

@@ -14,6 +14,7 @@ from asset_document.regions.primitive_catalog import (
     PrimitiveOutcomeStatus,
 )
 from asset_document.diagnostics import RuntimeDiagnostic, contract_error
+from asset_document.profiles.anim_montage_codec import TRIGGER_DEFAULTS
 
 
 EXACT_CLASS = "/Script/Engine.AnimMontage"
@@ -218,9 +219,12 @@ def native_snapshot():
         "sections": [{"name": "Start", "next": "None", "time": 0.0,
                       "slot_name": "DefaultSlot", "method": 0}],
         "notifies": [{"time": 0.25, "track_index": 0,
-                      "object": {"class": "/Script/Engine.AnimNotify", "properties": {"NotifyColor": "red"}}}],
+                      "object": {"class": "/Script/Engine.AnimNotify", "properties": {"NotifyColor": "red"}},
+                      "trigger": dict(TRIGGER_DEFAULTS), "link": {"method": 0, "slot_name": None}}],
         "notify_states": [{"time": 0.5, "duration": 0.25, "track_index": 0,
-                           "object": {"class": "/Script/Engine.AnimNotifyState", "properties": {}}}],
+                           "object": {"class": "/Script/Engine.AnimNotifyState", "properties": {}},
+                           "trigger": dict(TRIGGER_DEFAULTS),
+                           "link": {"method": 0, "slot_name": None, "end_method": 0, "end_slot_name": None}}],
         "notify_tracks": [{"name": "1"}],
     }
 
@@ -294,7 +298,7 @@ ADMITTED_ROWS = [
                         ("BlendModeOut", "enum.v1"), ("BlendOutTriggerTime", "number.v1"),
                         ("bLoop", "bool.v1"), ("RateScale", "number.v1"), ("SyncGroup", "name.v1"),
                         ("SyncSlotIndex", "integer.v1"), ("TimeStretchCurveName", "name.v1"),
-                        ("PreviewBasePose", "object_path.v1"))
+                        ("PreviewBasePose", "object_path.v1"), ("PreviewPoseAsset", "object_path.v1"))
 ]
 
 

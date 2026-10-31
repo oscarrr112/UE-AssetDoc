@@ -110,6 +110,8 @@ EncodeAssetDocumentEditorTypedValue(
 // property): struct members and instanced Properties that Authored omits are left
 // out and those it lists are included even when they hold the default, so the
 // result equals Authored exactly when the property stores what was authored.
+// Array elements are shaped by the authored element of the same index; live
+// elements past the authored array's end are encoded in full.
 FAssetDocumentEditorTypedValueCodecResult
 EncodeAssetDocumentEditorTypedValueAsAuthored(
 	const FAssetDocumentEditorScopedPropertyValue& NativeValue,

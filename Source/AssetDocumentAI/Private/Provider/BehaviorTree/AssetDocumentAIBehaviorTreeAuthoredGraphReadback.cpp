@@ -150,7 +150,19 @@ bool BuildSimpleNode(const UBehaviorTreeGraphNode& Node,
 	FAssetDocumentRuntimeValueDto& OutNode, bool& Overflow, EAuthoredGraphReadbackVersion Version)
 {
 	UObject* const Instance = Node.NodeInstance.Get();
-	if (Instance == nullptr || !Node.NodeGuid.IsValid()) return false;
+	if (!Node.NodeGuid.IsValid()) return false;
+	if (Instance == nullptr && Version == EAuthoredGraphReadbackVersion::V2 && IsMissingClassNode(Node))
+	{
+		// No instance holds the properties; the node reads as its class data and a reason, and is kept as it is.
+		const FString ClassPath = MissingNodeClassPath(Node);
+		OutNode = ObjectValue(
+			{TEXT("authored_properties"), TEXT("editor"), TEXT("node_class_path"), TEXT("stable_node_id"), TEXT("unsupported")},
+			{ObjectValue({}, {}), EditorValue(Node), StringValue(ClassPath),
+				StringValue(Node.NodeGuid.ToString(EGuidFormats::Digits)),
+				StringValue(FString::Printf(TEXT("The node's class %s is missing; AssetDoc keeps the node as it is."), *ClassPath))});
+		return true;
+	}
+	if (Instance == nullptr) return false;
 	FAssetDocumentRuntimeValueDto Properties;
 	if (!BuildAuthoredProperties(*Instance, Properties, &Overflow, Version)) return false;
 	OutNode = ObjectValue(
@@ -304,10 +316,15 @@ bool BuildDecorator(const UBehaviorTreeGraphNode& Node, FAssetDocumentRuntimeVal
 	}
 	FAssetDocumentRuntimeValueDto Simple;
 	if (!BuildSimpleNode(Node, Simple, Overflow, Version)) return false;
-	OutValue = ObjectValue(
-		{TEXT("authored_properties"), TEXT("bound_graph"), TEXT("editor"), TEXT("kind"), TEXT("node_class_path"), TEXT("stable_node_id")},
-		{*FindField(Simple, TEXT("authored_properties")), NullValue(), *FindField(Simple, TEXT("editor")),
-			StringValue(TEXT("simple")), *FindField(Simple, TEXT("node_class_path")), *FindField(Simple, TEXT("stable_node_id"))});
+	TArray<FString> Keys = {TEXT("authored_properties"), TEXT("bound_graph"), TEXT("editor"), TEXT("kind"), TEXT("node_class_path"), TEXT("stable_node_id")};
+	TArray<FAssetDocumentRuntimeValueDto> Values = {*FindField(Simple, TEXT("authored_properties")), NullValue(), *FindField(Simple, TEXT("editor")),
+		StringValue(TEXT("simple")), *FindField(Simple, TEXT("node_class_path")), *FindField(Simple, TEXT("stable_node_id"))};
+	if (const FAssetDocumentRuntimeValueDto* Unsupported = FindField(Simple, TEXT("unsupported")))
+	{
+		Keys.Add(TEXT("unsupported"));
+		Values.Add(*Unsupported);
+	}
+	OutValue = ObjectValue(Keys, Values);
 	return true;
 }
 
@@ -334,13 +351,18 @@ bool BuildMainNode(const UBehaviorTreeGraphNode& Node,
 		if (Service == nullptr || !BuildSimpleNode(*Service, Value, Overflow, Version)) return false;
 		Services.Add(MoveTemp(Value));
 	}
-	OutNode = ObjectValue(
-		{TEXT("authored_properties"), TEXT("children"), TEXT("decorators"), TEXT("editor"),
-			TEXT("node_class_path"), TEXT("services"), TEXT("stable_node_id")},
-		{*FindField(Simple, TEXT("authored_properties")), ArrayValue(MoveTemp(Children)),
-			ArrayValue(MoveTemp(Decorators)), *FindField(Simple, TEXT("editor")),
-			*FindField(Simple, TEXT("node_class_path")), ArrayValue(MoveTemp(Services)),
-			*FindField(Simple, TEXT("stable_node_id"))});
+	TArray<FString> Keys = {TEXT("authored_properties"), TEXT("children"), TEXT("decorators"), TEXT("editor"),
+		TEXT("node_class_path"), TEXT("services"), TEXT("stable_node_id")};
+	TArray<FAssetDocumentRuntimeValueDto> Values = {*FindField(Simple, TEXT("authored_properties")), ArrayValue(MoveTemp(Children)),
+		ArrayValue(MoveTemp(Decorators)), *FindField(Simple, TEXT("editor")),
+		*FindField(Simple, TEXT("node_class_path")), ArrayValue(MoveTemp(Services)),
+		*FindField(Simple, TEXT("stable_node_id"))};
+	if (const FAssetDocumentRuntimeValueDto* Unsupported = FindField(Simple, TEXT("unsupported")))
+	{
+		Keys.Add(TEXT("unsupported"));
+		Values.Add(*Unsupported);
+	}
+	OutNode = ObjectValue(Keys, Values);
 	return true;
 }
 
@@ -373,6 +395,31 @@ bool BuildProjection(UBehaviorTree& Tree, FAssetDocumentRuntimeValueDto& OutValu
 	OutValue = ObjectValue({TEXT("comments"), TEXT("graph_guid"), TEXT("graph_state"), TEXT("root")},
 		{ArrayValue(MoveTemp(CommentValues)), StringValue(Graph->GraphGuid.ToString(EGuidFormats::Digits)),
 			StringValue(TEXT("present")), Children.Num() == 1 ? MoveTemp(Children[0]) : NullValue()});
+	if (Version != EAuthoredGraphReadbackVersion::V2) return true;
+	// Main nodes with no incoming link, other than the root, head disconnected
+	// branches. They project in NodeGuid order, and only when present.
+	TArray<const UBehaviorTreeGraphNode*> DetachedRoots;
+	for (const UEdGraphNode* Node : Graph->Nodes)
+	{
+		const UBehaviorTreeGraphNode* Main = Cast<UBehaviorTreeGraphNode>(Node);
+		if (Main == nullptr || Main == Root || Main->IsSubNode() || Main->Pins.IsEmpty()) continue;
+		const UEdGraphPin* Input = Main->Pins[0];
+		if (Input != nullptr && Input->Direction == EGPD_Input && Input->LinkedTo.IsEmpty()) DetachedRoots.Add(Main);
+	}
+	if (DetachedRoots.IsEmpty()) return true;
+	DetachedRoots.Sort([](const UBehaviorTreeGraphNode& Left, const UBehaviorTreeGraphNode& Right)
+	{
+		return StableId(Left) < StableId(Right);
+	});
+	TArray<FAssetDocumentRuntimeValueDto> DetachedValues;
+	for (const UBehaviorTreeGraphNode* Detached : DetachedRoots)
+	{
+		FAssetDocumentRuntimeValueDto Value;
+		if (!BuildMainNode(*Detached, Value, Overflow, Version)) return false;
+		DetachedValues.Add(MoveTemp(Value));
+	}
+	OutValue.ObjectKeys.Insert(TEXT("detached"), 1);
+	OutValue.Elements.Insert(ArrayValue(MoveTemp(DetachedValues)), 1);
 	return true;
 }
 } // namespace AssetDocumentAIBehaviorTreeAuthoredGraphReadback

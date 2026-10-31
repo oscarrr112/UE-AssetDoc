@@ -16,7 +16,13 @@ import unittest
 import asset_document.bootstrap as bootstrap_module
 from asset_document.diagnostics import AssetDocumentContractError
 from asset_document.diff.canonical_diff import canonical_equal
-from asset_document.profiles.curve_float import CURVE_FLOAT_PROPERTIES, RichCurveCodec
+from asset_document.profiles.curve_float import (
+    CURVE_FLOAT_PROPERTIES,
+    CURVE_LINEAR_COLOR_PROPERTIES,
+    CURVE_VECTOR_PROPERTIES,
+    RichCurveChannelsCodec,
+    RichCurveCodec,
+)
 from asset_document.profiles.generic_components import generic_property_component
 from asset_document.tests.fixtures.curve_float_cases import (
     CURVE_FLOAT_CANONICAL_KEYS,
@@ -175,6 +181,86 @@ class CurveFloatGenericFactoryTests(unittest.TestCase):
         with self.assertRaises(AssetDocumentContractError) as raised:
             RichCurveCodec().from_document({"Keys": [{"Time": float("nan"), "Value": 0}]}, "/Properties/FloatCurve")
         self.assertEqual(raised.exception.diagnostic.code, "CurveFloat.InvalidNumber")
+
+    def test_vector_and_color_curves_are_registered(self) -> None:
+        self.assertIs(generic_property_component("/Script/Engine.CurveVector"), CURVE_VECTOR_PROPERTIES)
+        self.assertIs(generic_property_component("/Script/Engine.CurveLinearColor"), CURVE_LINEAR_COLOR_PROPERTIES)
+        self.assertEqual(CURVE_LINEAR_COLOR_PROPERTIES.admission.names, ("FloatCurves",))
+
+    def test_channel_curves_are_keyed_by_channel_and_omitted_channels_keep_their_curve(self) -> None:
+        codec = RichCurveChannelsCodec(("R", "G", "B", "A"))
+        native = codec.from_document({"G": CURVE_FLOAT_KEYS["FloatCurve"]}, "/Properties/FloatCurves")
+        self.assertEqual(len(native), 4)
+        self.assertTrue(canonical_equal(native[1], CURVE_FLOAT_NATIVE_CURVE), native[1])
+        # R, B and A: a struct edit with every member omitted keeps the channel's curve.
+        self.assertEqual((native[0], native[2], native[3]), ({}, {}, {}))
+        document = codec.to_document(native, "/Properties/FloatCurves")
+        self.assertEqual(list(document), ["G"])
+        self.assertTrue(canonical_equal(document["G"], CURVE_FLOAT_CANONICAL_KEYS["FloatCurve"]), document)
+        self.assertEqual(codec.to_document(codec.from_document({}, "/P"), "/P"), {})
+
+    def test_channel_curves_clear_an_explicit_empty_channel_and_read_every_channel(self) -> None:
+        codec = RichCurveChannelsCodec(("X", "Y", "Z"))
+        empty = {"Keys": [], "PreInfinityExtrap": "Constant", "PostInfinityExtrap": "Constant"}
+        for cleared in ({}, {"Keys": []}):
+            with self.subTest(cleared=cleared):
+                native = codec.from_document({"X": cleared}, "/Properties/FloatCurves")
+                self.assertEqual(native[0]["Keys"], [])
+                self.assertEqual((native[1], native[2]), ({}, {}))
+                self.assertEqual(codec.to_document(native, "/Properties/FloatCurves"), {"X": empty})
+        live = [RichCurveCodec().from_document({"Keys": []}, "/P"), CURVE_FLOAT_NATIVE_CURVE,
+                RichCurveCodec().from_document({"Keys": []}, "/P")]
+        self.assertEqual(list(codec.to_document(live, "/Properties/FloatCurves")), ["X", "Y", "Z"])
+
+    def test_observed_channels_are_compared_only_where_the_document_names_them(self) -> None:
+        from asset_document.regions.property_semantics import _require_preflight_result
+        codec = RichCurveChannelsCodec(("R", "G", "B", "A"))
+        authored = codec.from_document({"G": CURVE_FLOAT_KEYS["FloatCurve"]}, "/Properties/FloatCurves")
+        kept = RichCurveCodec().from_document({"Keys": [{"Time": 0, "Value": 1}]}, "/P")
+        observed = [kept, CURVE_FLOAT_NATIVE_CURVE, kept, kept]
+        self.assertEqual(codec.shape_like(authored, observed), [{}, CURVE_FLOAT_NATIVE_CURVE, {}, {}])
+        _require_preflight_result({"canonical_value": observed, "feasible": True}, authored,
+                                  "/Properties/FloatCurves", codec)
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            _require_preflight_result({"canonical_value": observed, "feasible": True}, authored,
+                                      "/Properties/FloatCurves")
+        self.assertEqual(raised.exception.diagnostic.code, "Generic.PropertyValueNotStoredExactly")
+        changed = [kept, kept, kept, kept]
+        with self.assertRaises(AssetDocumentContractError):
+            _require_preflight_result({"canonical_value": changed, "feasible": True}, authored,
+                                      "/Properties/FloatCurves", codec)
+
+    def test_saved_keys_at_one_time_read_with_a_warning_and_new_ones_are_refused(self) -> None:
+        from asset_document import tolerance
+        from asset_document.diagnostics import collecting_read_warnings
+        curve = {"Keys": [{"Time": 0, "Value": 0}, {"Time": 0, "Value": 0.25}, {"Time": 1, "Value": 1}]}
+        with collecting_read_warnings() as warnings, tolerance.reading_live():
+            native = RichCurveCodec().from_document(curve, "/Properties/FloatCurves/R")
+        self.assertEqual(len(native["Keys"]), 3)
+        self.assertEqual([(item.code, item.path) for item in warnings],
+                         [("CurveFloat.KeysNotAscending", "/Properties/FloatCurves/R/Keys/1/Time")])
+        live = {"Properties": {"FloatCurves": {"R": curve}}}
+        with tolerance.authoring() as findings:
+            RichCurveCodec().from_document(curve, "/Properties/FloatCurves/R")
+        tolerance.settle(findings, live, live)
+        added = {"Keys": [{"Time": 0, "Value": 0}, {"Time": 1, "Value": 1}, {"Time": 0.5, "Value": 0.5}]}
+        sorted_live = {"Properties": {"FloatCurves": {"R": {"Keys": [{"Time": 0, "Value": 0}, {"Time": 1, "Value": 1}]}}}}
+        with tolerance.authoring() as findings:
+            RichCurveCodec().from_document(added, "/Properties/FloatCurves/R")
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            tolerance.settle(findings, {"Properties": {"FloatCurves": {"R": added}}}, sorted_live)
+        self.assertEqual(raised.exception.diagnostic.code, "CurveFloat.KeysNotAscending")
+
+    def test_channel_curves_refuse_unknown_channels_and_bad_curves(self) -> None:
+        codec = RichCurveChannelsCodec(("X", "Y", "Z"))
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            codec.from_document({"W": {"Keys": []}}, "/Properties/FloatCurves")
+        self.assertEqual(raised.exception.diagnostic.code, "CurveFloat.UnknownField")
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            codec.from_document({"Y": {"Keys": [{"Time": 1, "Value": 0}, {"Time": 0, "Value": 0}]}}, "/Properties/FloatCurves")
+        self.assertEqual(raised.exception.diagnostic.path, "/Properties/FloatCurves/Y/Keys/1/Time")
+        with self.assertRaises(AssetDocumentContractError):
+            codec.to_document([], "/Properties/FloatCurves")
 
     def test_invalid_curve_is_rejected_before_any_creation(self) -> None:
         context = _context(1)

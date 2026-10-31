@@ -47,7 +47,8 @@ struct FPreparedStructuralEdit
  float DesiredLength = 0.f;
  FName SyncGroup;
  int32 SyncSlot = 0;
- EManagedNotifyReplacement ReplaceManagedFamilies = EManagedNotifyReplacement::None;
+ // The notify families the composite replaces; their events are not retained.
+ bool bReplaceNotifies = false, bReplaceNotifyStates = false;
  TArray<FSlotAnimationTrack> OldSlots, DesiredSlots;
  TArray<FCompositeSection> OldSections, DesiredSections;
  // OldNotifies is always the complete rollback preimage. DesiredNotifies and its
@@ -83,8 +84,9 @@ void PublishMontageSections(UAnimMontage& Target, const TArray<FCompositeSection
  TConstArrayView<FLinkPlacement> Links);
 // NotifyTracks: the whole notify track list (names and colours), published before the events that use it.
 void PublishMontageNotifyTracks(UAnimMontage& Target, const TArray<FAnimNotifyTrack>& Tracks);
+// Relink[I] false keeps Events[I]'s link as it is (an unchanged notify); an empty Relink places every event.
 void PublishMontageNotifyEvents(UAnimMontage& Target, const TArray<FAnimNotifyEvent>& Events,
- TConstArrayView<FLinkPlacement> Starts, TConstArrayView<FLinkPlacement> Ends, int32 RetainedPrefix = 0);
+ TConstArrayView<FLinkPlacement> Starts, TConstArrayView<FLinkPlacement> Ends, TConstArrayView<bool> Relink = {});
 
 // No public inverse function: only this existing-Atomic action can restore the typed preimage.
 class FStructuralInverse final : public IAssetDocumentRollbackAction

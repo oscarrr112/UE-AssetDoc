@@ -605,7 +605,13 @@ bool ScanTree(UBehaviorTree& Tree, FScan& Scan)
  FAssetDocumentRuntimeValueDto Semantic = Projection;
  auto* Root = Field(Semantic, TEXT("root"));
  TSet<FString> Normalized;
- if (!Root || !NormalizeNode(*Root, Scan, Normalized) || Normalized.Num() != Scan.EnumNodes.Num()
+ if (!Root || !NormalizeNode(*Root, Scan, Normalized)) return false;
+ if (auto* Detached = Field(Semantic, TEXT("detached")))
+ {
+  if (Detached->Kind != EAssetDocumentRuntimeValueKind::Array) return false;
+  for (auto& Branch : Detached->Elements) if (!NormalizeNode(Branch, Scan, Normalized)) return false;
+ }
+ if (Normalized.Num() != Scan.EnumNodes.Num()
   || !HashAuthoredGraphValue(Scan.Inventory.TreePath, Semantic, Scan.Inventory.SemanticAuthoredDigest, Version)) return false;
  Scan.Inventory.AuthoredProjection = MoveTemp(Projection);
  Scan.Inventory.TypedProjection = Typed;

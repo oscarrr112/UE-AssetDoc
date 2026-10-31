@@ -230,7 +230,7 @@ FAssetDocumentPrimitiveDescriptor MakePropertyReadDescriptor()
 	FAssetDocumentPrimitiveDescriptor Descriptor = MakeOrdinaryDescriptor(
 		TEXT("editor.property.read_admitted.v1"),
 		EAssetDocumentPrimitiveAccess::ReadOnly,
-		{EAssetDocumentRuntimeRequestPhase::Verify},
+		{EAssetDocumentRuntimeRequestPhase::Preflight, EAssetDocumentRuntimeRequestPhase::Verify},
 		TEXT("CoreUObject"),
 		TEXT("UObject/PropertyAccessUtil.h"),
 		TEXT("PropertyAccessUtil::GetPropertyValue_Object"),

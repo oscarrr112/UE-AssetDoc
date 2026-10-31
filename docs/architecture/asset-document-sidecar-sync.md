@@ -135,6 +135,14 @@ A crash or failure between the steps in §3.2 leaves the file either with region
 the applied document under the old `_meta`. The next pass classifies those regions as unchanged, converged or still
 sidecar-changed. It never reports a false conflict and never loses an edit.
 
+An apply that crashes the editor must not be repeated at every start (the start reconcile sees the same sidecar change
+again). Before a pass applies the sidecar it writes a record (package, sidecar, content digest) to
+`Saved/AssetDocument/SidecarSync/InFlight/`, and removes it when the apply returns. A record found when a pass is about
+to apply the same content is an apply that never returned: passes the editor starts itself (start, file change, save)
+skip it with state `failed`, code `Sync.ApplyInterrupted` and a `sidecar_sync_failed` notice, until the file content
+changes. An explicit apply (`apply_asset_document_file`, `sync_asset_document accept_sidecar`) runs it and clears the
+record.
+
 ### 3.5 Edits during a pass
 
 A pass reads the sidecar once, then spends time in Python, the extract and the apply. An agent may write the file
@@ -301,6 +309,11 @@ tool does. They take effect immediately.
   and levels are edited with the level tools.
 - `MaxMirrorFileSizeKB` (default 8192): larger mirrors are skipped as `too_large`. Reason: keep files usable for text
   tools and diffs.
+- `bExcludeSidecarsFromAutoReimport` (default on, mirroring on or off): every Auto Reimport directory (Editor
+  Preferences → Loading & Saving) that covers Content gets the exclude wildcards `*.assetdoc.json` and
+  `*.assetdoc.asset.json`; other entries stay. Reason: JSON is an import format (Data Table / Curve Table), so the
+  editor otherwise offers every new or changed sidecar for import. The change is made as an edit in Editor Preferences
+  (saved to the per-user settings, watchers restarted); turning the setting off removes those two wildcards.
 
 **Version control:**
 

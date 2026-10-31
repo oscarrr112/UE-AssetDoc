@@ -10,7 +10,8 @@ Body semantics (MCP/schemas/assetdocument/Niagara.md):
   inputs linked to it keep its value as a local value), a new name adds one, ``RenamedFrom`` renames one (links
   follow; it applies while the system does not have the new name yet, so a re-apply is a no-op, and swapping
   two names takes two applies).  ``Type`` cannot change (delete and add instead).  ``Value`` omitted keeps the value (a new
-  parameter: the type's default); ``Description`` and ``Category`` omitted are none.  A data interface's
+  parameter: the type's default); ``Description`` and ``Category`` omitted are none.  ``Meta`` (the rest of the
+  parameter's Details metadata) is complete when present and kept when omitted.  A data interface's
   ``Properties`` are complete (omitted ones are the class defaults).  Order is not authored (the extract lists
   parameters by name).
 * ``Emitters`` is complete when present: not listed = deleted, a new name = added (``From``: an emitter asset path,
@@ -34,6 +35,7 @@ and a new parameter's value are planned in the pass after it is added), until a 
 """
 from __future__ import annotations
 
+from asset_document import markers
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.profiles import data_table_common as common
 from asset_document.profiles import niagara_script as scripts
@@ -47,7 +49,7 @@ SCRATCH_PAD_KEYS = ("ScratchPads",)
 EMITTER_KEYS = ("Name", "RenamedFrom", "From", "Enabled", "Mode", "Parent", "Properties", "Renderers", "Stateless") \
     + EMITTER_STACK_KEYS + SCRATCH_PAD_KEYS
 RENDERER_KEYS = ("Name", "Class", "Enabled", "Properties")
-USER_PARAMETER_KEYS = ("Name", "RenamedFrom", "Type", "Value", "Description", "Category")
+USER_PARAMETER_KEYS = ("Name", "RenamedFrom", "Type", "Value", "Description", "Category", "Meta")
 _MISSING = object()
 
 
@@ -98,6 +100,8 @@ def _check_parameter(entry, path):
     for key in ("Description", "Category"):
         if key in entry:
             _string(entry[key], f"{path}/{key}", key, empty=True)
+    if "Meta" in entry:
+        stacks.check_meta(entry["Meta"], f"{path}/Meta")
 
 
 def _emitter_reference(value, path, what):
@@ -244,18 +248,23 @@ def _struct_as_authored(authored, live, default):
     return live
 
 
-def property_changes(authored, live, defaults):
+def property_changes(authored, live, defaults, path="/Body"):
     """(values to write, names to reset) for complete sparse Properties: live and authored list values that
     differ from the defaults; defaults may be partial (unknown defaults are written; the edit skips equal ones). A
-    struct value lists the members it sets (``_struct_as_authored``)."""
+    struct value lists the members it sets (``_struct_as_authored``). A property the read could not encode is a
+    marker: left as read or omitted it keeps its value (never written, never reset); an edited one is refused
+    (``path``: the Properties object's document path)."""
     write = {}
     for name, value in authored.items():
+        if markers.is_marker(value):
+            markers.require_unchanged(f"{path}/{_escape(name)}", value, live.get(name), PREFIX)
+            continue
         current = live[name] if name in live else defaults.get(name, _MISSING)
         if current is not _MISSING:
             current = _struct_as_authored(value, current, defaults.get(name))
         if current is _MISSING or not _same(value, current):
             write[name] = value
-    reset = sorted(name for name in live if name not in authored)
+    reset = sorted(name for name in live if name not in authored and not markers.is_marker(live[name]))
     return write, reset
 
 
@@ -287,6 +296,10 @@ def _plan_parameters(plan, body, live_body, defaults):
             have = current.get(key, "")
             if want != have:
                 plan.change(f"{path}/{key}", want, have, {"op": "user_parameter", "name": name, field: want})
+        meta = stacks.meta_op(entry, current, f"{path}/Meta")
+        if meta is not None:
+            plan.change(f"{path}/Meta", entry["Meta"], current.get("Meta", {}),
+                        {"op": "user_parameter", "name": name, "meta": meta})
 
 
 def _plan_parameter_value(plan, path, name, want, have, defaults):
@@ -298,7 +311,8 @@ def _plan_parameter_value(plan, path, name, want, have, defaults):
         current = have["DataInterface"]
         label = current.get("Class", "")
         write, reset = property_changes(spec.get("Properties", {}), current.get("Properties", {}),
-                                        defaults.get("data_interfaces", {}).get(label, {}))
+                                        defaults.get("data_interfaces", {}).get(label, {}),
+                                        f"{path}/DataInterface/Properties")
         if write or reset or ("Class" in spec and not _same_class(spec["Class"], label)):
             value = {"DataInterface": {"Properties": write}}
             if "Class" in spec:
@@ -441,13 +455,14 @@ def _plan_emitter_content(plan, path, entry, current, stateless, defaults):
                         authored_present="Version" in reference, live_present="Version" in have_parent)
         else:
             plan.refuse(f"{path}/Parent", "ParentImmutable", "An existing emitter's parent can be removed (Parent null) "
-                        "or switched to another version of the same emitter, but not set or changed to another emitter: "
-                        "the editor sets a parent only when it adds an emitter from an inheritable emitter asset (Is "
-                        "Inheritable on; engine templates such as Fountain are not, and an emitter added from one has no "
-                        "parent). Add a new emitter whose Parent is an inheritable emitter asset instead, or leave Parent "
-                        "out.", want_parent, have_parent)
+                        "or switched to another version of the same emitter, but AssetDoc does not set or change it to "
+                        "another emitter (the editor's Set New Parent Emitter, which merges the new parent's stack into "
+                        "this one; do that in the editor). To author a child here, add a new emitter whose Parent is an "
+                        "inheritable emitter asset (Is Inheritable on; engine templates such as Fountain are not, and an "
+                        "emitter added from one has no parent), or leave Parent out.", want_parent, have_parent)
     if "Properties" in entry:
-        write, reset = property_changes(entry["Properties"], current.get("Properties", {}), defaults.get("emitter", {}))
+        write, reset = property_changes(entry["Properties"], current.get("Properties", {}), defaults.get("emitter", {}),
+                                        f"{path}/Properties")
         if write or reset:
             op = {"op": "emitter", "name": name, "properties": write}
             if reset:
@@ -493,7 +508,7 @@ def _plan_renderers(plan, base, emitter, authored, live_list, defaults):
         if "Properties" not in entry:
             continue
         write, reset = property_changes(entry["Properties"], current.get("Properties", {}),
-                                        defaults.get("renderers", {}).get(entry["Class"], {}))
+                                        defaults.get("renderers", {}).get(entry["Class"], {}), f"{path}/Properties")
         if write or reset:
             op = {"op": "renderer", "emitter": emitter, "name": entry["Name"], "properties": write}
             if reset:

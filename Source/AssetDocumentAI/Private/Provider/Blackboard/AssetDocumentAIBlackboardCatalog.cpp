@@ -257,7 +257,8 @@ FAssetDocumentPrimitiveDescriptor MakeEntryUpdateExistingDescriptor()
 		TEXT("AIProvider.Blackboard.KeyClassMismatch"),
 		TEXT("AIProvider.Blackboard.EntryMetadataForwardWriteUnavailable"),
 		TEXT("AIProvider.Blackboard.DerivedRefreshFailed"),
-		TEXT("AIProvider.Blackboard.EntryChangedSetMismatch")};
+		TEXT("AIProvider.Blackboard.EntryChangedSetMismatch"),
+		TEXT("Graph.PieActive"), TEXT("AIProvider.Blackboard.LayoutInUse")};
 	Descriptor.RequiredConsumerIds = {TEXT("ai_profile")};
 	FAssetDocumentPrimitiveAdmissionEvidence& Admission = Descriptor.Admission;
 	Admission.Disposition = EAssetDocumentPrimitiveDisposition::OrdinaryHelper;
@@ -343,7 +344,8 @@ FAssetDocumentPrimitiveDescriptor MakeParentSetV2Descriptor()
 		TEXT("AIProvider.Blackboard.ParentWriteRejected"),
 		TEXT("AIProvider.Blackboard.DerivedRefreshFailed"),
 		TEXT("AIProvider.Blackboard.ParentReadbackUnavailable"),
-		TEXT("AIProvider.Blackboard.ParentChangedSetMismatch")};
+		TEXT("AIProvider.Blackboard.ParentChangedSetMismatch"),
+		TEXT("Graph.PieActive"), TEXT("AIProvider.Blackboard.LayoutInUse")};
 	Descriptor.RequiredConsumerIds = {TEXT("ai_profile")};
 	PopulateParentSetV2Admission(Descriptor);
 	return Descriptor;
@@ -377,7 +379,8 @@ FAssetDocumentPrimitiveDescriptor MakeEntryAddV2Descriptor()
 		TEXT("AIProvider.Blackboard.KeyInherited"),
 		TEXT("AIProvider.Blackboard.EntryMaterializationUnavailable"),
 		TEXT("AIProvider.Blackboard.DerivedRefreshFailed"),
-		TEXT("AIProvider.Blackboard.EntryChangedSetMismatch")};
+		TEXT("AIProvider.Blackboard.EntryChangedSetMismatch"),
+		TEXT("Graph.PieActive"), TEXT("AIProvider.Blackboard.LayoutInUse")};
 	Descriptor.RequiredConsumerIds = {TEXT("ai_profile")};
 	FAssetDocumentPrimitiveAdmissionEvidence& A = Descriptor.Admission;
 	A.Disposition = EAssetDocumentPrimitiveDisposition::AdmittedBridge;
@@ -455,7 +458,8 @@ FAssetDocumentPrimitiveDescriptor MakeEntryReplaceClassV2Descriptor()
 		TEXT("AIProvider.Blackboard.KeyClassReplacementUnavailable"),
 		TEXT("AIProvider.Blackboard.EntryMaterializationUnavailable"),
 		TEXT("AIProvider.Blackboard.DerivedRefreshFailed"),
-		TEXT("AIProvider.Blackboard.EntryChangedSetMismatch")};
+		TEXT("AIProvider.Blackboard.EntryChangedSetMismatch"),
+		TEXT("Graph.PieActive"), TEXT("AIProvider.Blackboard.LayoutInUse")};
 	Descriptor.RequiredConsumerIds = {TEXT("ai_profile")};
 	FAssetDocumentPrimitiveAdmissionEvidence& A = Descriptor.Admission;
 	A.Disposition = EAssetDocumentPrimitiveDisposition::AdmittedBridge;

@@ -19,7 +19,10 @@ class USkeleton;
 //                                      slot_groups[{name, slots[]}], sockets[{name, bone, location{X,Y,Z},
 //                                      rotation{Pitch,Yaw,Roll}, scale{X,Y,Z}, force_always_animated}],
 //                                      virtual_bones[{name, source, target}], blend_profiles[{name, mode,
-//                                      bones{bone: scale}}], curves[{name, material, morph_target}]}
+//                                      bones{bone: scale}}], curves[{name, material, morph_target, linked_bones[],
+//                                      max_lod}], preview_mesh, additional_preview_meshes,
+//                                      preview_attached_assets[{asset, attached_to}], retarget_sources[{name, mesh}],
+//                                      notifies[], curve_metadata_index (in AssetUserData, -1: none)}
 //   animation_asset.skeleton.edit.v1  {ops[]}: {op: slot_group_add|slot_group_remove, name} |
 //                                      {op: slot_set, name, group} | {op: slot_remove, name} | {op: slot_rename, name, to} |
 //                                      {op: socket_add, name, bone} | {op: socket_remove, name} | {op: socket_rename, name, to} |
@@ -28,22 +31,34 @@ class USkeleton;
 //                                      {op: virtual_bone_rename, name, to} | {op: blend_profile_add|blend_profile_remove, name} |
 //                                      {op: blend_profile_rename, name, to} | {op: blend_profile_set, name, mode?, bones?{}} |
 //                                      {op: retarget, bone, mode} | {op: curve_add|curve_remove, name} |
-//                                      {op: curve_rename, name, to} | {op: curve_set, name, material?, morph_target?}
-//   animation_asset.blend_space.read.v1 {} -> {skeleton, preview_mesh, axes[{name, min, max, grid, snap, wrap}],
+//                                      {op: curve_rename, name, to} |
+//                                      {op: curve_set, name, material?, morph_target?, linked_bones?[], max_lod?} |
+//                                      {op: preview_mesh, path} | {op: additional_preview_meshes, path} |
+//                                      {op: notify_add, name} |
+//                                      {op: curve_metadata_park|curve_metadata_unpark, index}
+//   animation_asset.blend_space.read.v1 {} -> {skeleton, preview_mesh, axes[{name, min, max, grid, snap, wrap,
+//                                      analysis: null | {function, properties{}}}],
 //                                      samples[{animation, x, y?, rate_scale, single_frame?, analyse_all}]}
 //   animation_asset.blend_space.edit.v1 {ops[]}: {op: axis, axis, name?, min?, max?, grid?, snap?, wrap?} |
+//                                      {op: analysis, axis, function?: name | null, properties?{}} |
 //                                      {op: sample_remove, x, y?} | {op: sample_add, animation, x, y?} |
 //                                      {op: sample_set, x, y?, animation?, rate_scale?, single_frame?, analyse_all?} |
 //                                      {op: refresh} | {op: preview_mesh, path}
 //   animation_asset.pose_asset.read.v1 {} -> {skeleton, preview_mesh, source_animation, poses[], additive, base_pose,
-//                                      curves[], track_count}
+//                                      curves[], track_count};
+//                                      {offset} -> {records[{pose, curve, value} | {pose, bone, location?, rotation?,
+//                                      scale?}], next_offset} (per-pose curve values and bone offsets, paged)
 //   animation_asset.pose_asset.edit.v1 {ops[]}: {op: rename, name, to} | {op: remove, names[]} |
+//                                      {op: remove_curves, names[]} | {op: add_reference_pose, name} |
 //                                      {op: additive, additive, base_pose} | {op: update_source, animation} |
-//                                      {op: preview_mesh, path}
+//                                      {op: clear_source} | {op: preview_mesh, path}
 //   animation_asset.composite.read.v1 {} -> {skeleton, preview_mesh, length, segments[{animation, start_pos, start,
-//                                      end, rate, loops}]}
+//                                      end, rate, loops}], timeline{curves, notify_tracks, notifies, notify_states}}
+//                                      (timeline in the animation.asset.authoring snapshot's form)
 //   animation_asset.composite.edit.v1 {ops[]}: {op: segments, segments[{animation, start?, end?, rate?, loops?}]} |
-//                                      {op: preview_mesh, path}
+//                                      {op: preview_mesh, path} |
+//                                      {op: timeline, intent{curves?, notify_tracks?, notifies?, notify_states?}}
+//                                      (the animation.asset.authoring edit intent, those sections only)
 namespace UE::AssetDocument::Graph::AnimAssets
 {
 inline const TCHAR* ProviderId = TEXT("animation_asset");

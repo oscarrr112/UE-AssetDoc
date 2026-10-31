@@ -248,6 +248,9 @@ def graph_differences(authored, live, path, strict=False):
         if node.get("Comment", "") != current.get("Comment", ""):
             out.append(Difference(f"{where}/Comment", DiffKind.REPLACE, True, node.get("Comment", ""),
                                   "Comment" in current, current.get("Comment")))
+        if "Size" in node and not _same(node["Size"], current.get("Size")):
+            out.append(Difference(f"{where}/Size", DiffKind.REPLACE, True, node["Size"], "Size" in current,
+                                  current.get("Size")))
         if has_version_setting(node["Action"]):
             want, have = node.get("Version", ""), current.get("Version", "")
             # "" is the exposed version, which the read does not name: a version the document names that the

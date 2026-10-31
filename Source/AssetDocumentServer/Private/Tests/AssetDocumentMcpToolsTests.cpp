@@ -329,9 +329,9 @@ bool FAssetDocumentMcpToolsTest::RunTest(const FString& Parameters)
 		};
 		const FBodyCase BodyCases[] = {
 			{TEXT("extract_asset_document"), TEXT("{\"asset_path\":\"/Game/A\"}"), TEXT("/assetdocument/extract"),
-				TEXT("{\"asset_path\":\"/Game/A\",\"diff_only\":true,\"include_all_writable\":false}")},
-			{TEXT("extract_asset_document"), TEXT("{\"include_all_writable\":true,\"asset_path\":\"/Game/A\",\"diff_only\":false}"),
-				TEXT("/assetdocument/extract"), TEXT("{\"asset_path\":\"/Game/A\",\"diff_only\":false,\"include_all_writable\":true}")},
+				TEXT("{\"asset_path\":\"/Game/A\",\"diff_only\":true,\"include_all_writable\":false,\"include_layout\":true}")},
+			{TEXT("extract_asset_document"), TEXT("{\"include_all_writable\":true,\"asset_path\":\"/Game/A\",\"diff_only\":false,\"include_layout\":false}"),
+				TEXT("/assetdocument/extract"), TEXT("{\"asset_path\":\"/Game/A\",\"diff_only\":false,\"include_all_writable\":true,\"include_layout\":false}")},
 			{TEXT("apply_asset_document_file"), TEXT("{\"file_path\":\"/p/A.assetdoc.json\"}"), TEXT("/assetdocument/apply-file"),
 				TEXT("{\"file_path\":\"/p/A.assetdoc.json\",\"save_asset\":true}")},
 			{TEXT("create_asset_document_template"), TEXT("{\"target\":\"/Game/BB\",\"class\":\"/Script/AIModule.BlackboardData\"}"),
@@ -625,7 +625,7 @@ bool FAssetDocumentMcpGuidesTest::RunTest(const FString& Parameters)
 	// Size budgets of the authoring guides (served text, the closing part list included): the measured size + 10%.
 	const TPair<const TCHAR*, int32> Budgets[] = {
 		{TEXT("UserDefinedTypes"), 5400}, {TEXT("DataTable"), 8300}, {TEXT("Material"), 8200}, {TEXT("MaterialInstance"), 4400},
-		{TEXT("Niagara"), 12700}, {TEXT("MetaSound"), 9600}, {TEXT("Blueprint"), 13000}, {TEXT("WidgetBlueprint"), 4600},
+		{TEXT("Niagara"), 12700}, {TEXT("MetaSound"), 9600}, {TEXT("Blueprint"), 13000}, {TEXT("WidgetBlueprint"), 4800},
 	};
 	TestTrue(*FString::Printf(TEXT("core guide %d chars within 11000"), Core.Len()), Core.Len() <= 11000);
 	int32 Total = Core.Len();
@@ -635,7 +635,7 @@ bool FAssetDocumentMcpGuidesTest::RunTest(const FString& Parameters)
 		TestTrue(*FString::Printf(TEXT("%s section %d chars within %d"), Budget.Key, Length, Budget.Value), Length <= Budget.Value);
 		Total += Length;
 	}
-	TestTrue(*FString::Printf(TEXT("the nine guides total %d chars, within 72000"), Total), Total <= 72000);
+	TestTrue(*FString::Printf(TEXT("the nine guides total %d chars, within 83800"), Total), Total <= 83800);
 
 	// The level editing guide and its topics.
 	auto Editor = [&](const FString& Arguments) { return ResultText(CallStubTool(*Tools, TEXT("get_level_editing_guide"), Arguments, Stub)); };

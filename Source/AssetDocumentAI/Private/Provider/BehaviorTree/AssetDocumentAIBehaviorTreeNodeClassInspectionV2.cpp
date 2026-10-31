@@ -12,6 +12,7 @@
 #include "BehaviorTree/Tasks/BTTask_RunBehaviorDynamic.h"
 #include "BehaviorTree/Composites/BTComposite_SimpleParallel.h"
 #include "BehaviorTree/BehaviorTreeTypes.h"
+#include "GameplayTagContainer.h"
 #include "StructUtils/InstancedStruct.h"
 #include "IDetailTreeNode.h"
 #include "IPropertyRowGenerator.h"
@@ -86,6 +87,8 @@ bool StructDefaults(const UScriptStruct& Type,FValue& Out)
 struct FSchema
 {
  int32 Remaining=4096;
+ // A class's own property without a document form: {"default": its CDO value (a marker), "kind": "unsupported"}.
+ bool bUnsupportedFields=false;
  bool Fields(const UStruct& Type,const FValue* Defaults,FValue& Out,int32 Depth)
  {
   if(Depth>64||--Remaining<0)return false;
@@ -102,7 +105,12 @@ struct FSchema
    const FProperty* P=FindFProperty<FProperty>(&Type,*Name);if(!P||!Authored(*P))return false;
    const FValue* Default=nullptr;
    if(Defaults){const int32 I=Defaults->ObjectKeys.IndexOfByKey(Name);if(I==INDEX_NONE)return false;Default=&Defaults->Elements[I];}
-   FValue S;if(!Shape(*P,Default,S,Depth+1))return false;
+   FValue S;
+   if(!Shape(*P,Default,S,Depth+1))
+   {
+    if(!bUnsupportedFields||Depth!=0||!Default||Remaining<0)return false;
+    S=ObjectValue({TEXT("default"),TEXT("kind")},{*Default,StringValue(TEXT("unsupported"))});
+   }
    Shapes.Add(MoveTemp(S));
   }
   Out=ObjectValue(MoveTemp(Names),MoveTemp(Shapes));return true;
@@ -147,6 +155,9 @@ struct FSchema
   {
    if(S->Struct==FBlackboardKeySelector::StaticStruct())Out=Kind(TEXT("selector"));
    else if(S->Struct==FInstancedStruct::StaticStruct())Out=Kind(TEXT("instanced_struct"));
+   // The tag picker's value: a tag name ("None" for no tag), a container's tag names in stored order.
+   else if(S->Struct==FGameplayTag::StaticStruct())Out=Kind(TEXT("gameplay_tag"));
+   else if(S->Struct==FGameplayTagContainer::StaticStruct())Out=Kind(TEXT("gameplay_tag_container"));
    else
    {
     FValue NativeDefault;
@@ -241,8 +252,10 @@ FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeNodeClassInspect
   ||(!NodeFamily&&!InlineClass))
   return Fail(TEXT("AIProvider.BehaviorTree.NodeClassRejected"),TEXT("The node class is not a concrete admitted BehaviorTree family."));
  UObject* CDO=Class->GetDefaultObject(false);FValue Defaults,Properties,Structs;FSchema Schema;
+ Schema.bUnsupportedFields=true;
  if(!CDO||!BuildAuthoredProperties(*CDO,Defaults,nullptr,EAuthoredGraphReadbackVersion::V2)||!Schema.Fields(*Class,&Defaults,Properties,0))
   return Fail(TEXT("AIProvider.BehaviorTree.PropertyEvidenceUnavailable"),TEXT("Complete authored defaults or typed metadata are unavailable."));
+ Schema.bUnsupportedFields=false;
  Structs.Kind=EAssetDocumentRuntimeValueKind::Object;
  for(const auto& S:V.Elements[2].Elements)
  {

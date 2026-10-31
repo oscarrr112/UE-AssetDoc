@@ -7,10 +7,11 @@
 duplicate) is covered by UEAssetDoc.Niagara.* in the editor."""
 from __future__ import annotations
 
+import json
 import unittest
 
 from asset_document.diagnostics import AssetDocumentContractError
-from asset_document.diagnostics import RuntimeDiagnostic
+from asset_document.diagnostics import RuntimeDiagnostic, collecting_read_warnings
 from asset_document.diff.model import DiffKind
 from asset_document.profiles import niagara
 from asset_document.profiles import niagara_apply as planner
@@ -467,6 +468,8 @@ class PlannerTests(unittest.TestCase):
         # The refusal says which assets can be parents (the Fountain template cannot).
         self.assertIn("inheritable emitter asset", plan.refusals[0].diagnostic.message)
         self.assertIn("Fountain", plan.refusals[0].diagnostic.message)
+        # It names the editor's own reparent instead of saying the editor cannot reparent.
+        self.assertIn("Set New Parent Emitter", plan.refusals[0].diagnostic.message)
 
     def test_renderers_are_a_complete_list(self) -> None:
         live = {"Emitters": [{"Name": "E", "Properties": {}, "Renderers": [
@@ -564,7 +567,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(niagara_stack.enum_short_name("Once"), "Once")
         self.assertEqual(niagara_stack.enum_short_name(full), "Kill")
 
-    def test_event_handlers_by_position_and_stages_by_name(self) -> None:
+    def test_event_handlers_and_stages_by_position(self) -> None:
         live = {"Emitters": [{"Name": "E", "Properties": {}, "Renderers": [],
                               "EventHandlers": [{"Properties": {"SpawnNumber": 2}, "Modules": []}, {"Properties": {}, "Modules": []}],
                               "SimulationStages": [{"Name": "S1", "Class": "Generic", "Modules": [_module("M1")]},
@@ -574,17 +577,125 @@ class PlannerTests(unittest.TestCase):
                               "SimulationStages": [{"Name": "S2", "Class": "Generic", "Enabled": False, "Modules": [_module("M1")]},
                                                    {"Name": "S3", "Class": "Generic"},
                                                    {"Name": "S1", "Class": "Generic", "Modules": []}]}]}
+        # Stage ops name a stage by its position when the op runs: S2 (position 1) moves first, S3 goes after
+        # position 0, and the settings and module ops find each stage at its document index.
         self.assertEqual(_ops(planner.plan_system(body, live, {"event_handler": {"SpawnNumber": 0}})), [
             {"op": "delete_event_handler", "emitter": "E", "event": 1},
             {"op": "event_handler", "emitter": "E", "event": 0, "properties": {"SpawnNumber": 3, "SourceEmitter": "F"}},
-            {"op": "move_stage", "emitter": "E", "stage": "S2", "after": None},
-            {"op": "add_stage", "emitter": "E", "name": "S3", "class": "Generic", "after": "S2"},
-            {"op": "stage", "emitter": "E", "stage": "S2", "enabled": False},
-            {"op": "move_module", "emitter": "E", "group": "SimulationStage", "stage": "S2", "name": "M1", "after": None},
+            {"op": "move_stage", "emitter": "E", "stage": 1, "after": None},
+            {"op": "add_stage", "emitter": "E", "name": "S3", "class": "Generic", "after": 0},
+            {"op": "stage", "emitter": "E", "stage": 0, "enabled": False},
+            {"op": "move_module", "emitter": "E", "group": "SimulationStage", "stage": 0, "name": "M1", "after": None},
             {"op": "add_module", "emitter": "E", "group": "EventHandler", "event": 0, "name": "K", "script": "/S/K.K",
              "after": None}])
         plan = planner.plan_system({"Emitters": [{"Name": "E", "EventHandlers": [{}, {}, {}]}]}, live, {})
         self.assertEqual(_ops(plan), [{"op": "add_event_handler", "emitter": "E"}])
+        # A deleted stage goes last first, so that the positions before it stay valid.
+        body = {"Emitters": [{"Name": "E", "SimulationStages": []}]}
+        self.assertEqual(_ops(planner.plan_system(body, live, {})), [
+            {"op": "delete_stage", "emitter": "E", "stage": 1}, {"op": "delete_stage", "emitter": "E", "stage": 0}])
+
+    def test_stages_with_one_name_are_told_apart_by_position(self) -> None:
+        # The stack's "+" adds stages named None: two of them, each with its own module.
+        rows = [{"kind": "emitter", "name": "E", "enabled": True, "mode": "Standard", "properties": {}},
+                {"kind": "simulation_stage", "emitter": "E", "name": "None", "class": "Generic", "enabled": True,
+                 "properties": {"NumIterations": 2}},
+                {"kind": "simulation_stage", "emitter": "E", "name": "None", "class": "Generic", "enabled": True,
+                 "properties": {}},
+                {"kind": "module", "emitter": "E", "group": "SimulationStage", "stage": "None", "stage_index": 1,
+                 "name": "B", "script": "/S/B.B", "enabled": True, "inputs": []},
+                {"kind": "module", "emitter": "E", "group": "SimulationStage", "stage": "None", "stage_index": 0,
+                 "name": "A", "script": "/S/A.A", "enabled": True, "inputs": []}]
+        body = shape.system_body(rows)
+        stages = body["Emitters"][0]["SimulationStages"]
+        self.assertEqual(stages, [
+            {"Name": "None", "Class": "Generic", "Properties": {"NumIterations": 2}, "Modules": [_module("A")]},
+            {"Name": "None", "Class": "Generic", "Modules": [_module("B")]}])
+        planner.check_body(body)
+        live = {"Emitters": [{**body["Emitters"][0], "Renderers": []}]}
+        # The extract re-applies as a no-op.
+        plan = planner.plan_system(body, live, {})
+        self.assertEqual((plan.ops, plan.refusals, plan.differences), ([], [], []))
+
+        def planned(*edited):
+            return _ops(planner.plan_system({"Emitters": [{"Name": "E", "SimulationStages": list(edited)}]}, live,
+                                            {"stages": {"Generic": {"NumIterations": 1}}}))
+
+        first, second = stages
+        # RenamedFrom renames a stage in place (its modules and settings stay with it).
+        self.assertEqual(planned(first, {**second, "Name": "Solve", "RenamedFrom": "None"}), [
+            {"op": "stage", "emitter": "E", "stage": 1, "name": "Solve"}])
+        self.assertEqual(planned({**first, "Name": "Fill", "RenamedFrom": "None"},
+                                 {**second, "Name": "Solve", "RenamedFrom": "None"}), [
+            {"op": "stage", "emitter": "E", "stage": 0, "name": "Fill"},
+            {"op": "stage", "emitter": "E", "stage": 1, "name": "Solve"}])
+        # An edit reaches the stage it is listed as, not the first of that name.
+        self.assertEqual(planned(first, {**second, "Enabled": False}), [
+            {"op": "stage", "emitter": "E", "stage": 1, "enabled": False}])
+        # Deleting the first of the two keeps the second (the one holding the listed module and settings).
+        self.assertEqual(planned(second), [{"op": "delete_stage", "emitter": "E", "stage": 0}])
+        # Without modules to tell, the stage whose settings the entry lists is kept.
+        self.assertEqual(planned({**second, "Modules": []}), [
+            {"op": "delete_stage", "emitter": "E", "stage": 0},
+            {"op": "delete_module", "emitter": "E", "group": "SimulationStage", "stage": 0, "name": "B"}])
+        # Swapping them moves the second above the first, then each module stays with its stage.
+        self.assertEqual(planned(second, first), [{"op": "move_stage", "emitter": "E", "stage": 1, "after": None}])
+        # A third unnamed stage is added after the second.
+        self.assertEqual(planned(first, second, {"Name": "None", "Class": "Generic"}), [
+            {"op": "add_stage", "emitter": "E", "name": "None", "class": "Generic", "after": 1}])
+        # A renamed stage's omitted Properties keep their values, as for any stage it pairs with.
+        self.assertEqual(planned({"Name": "Fill", "RenamedFrom": "None", "Class": "Generic", "Modules": [_module("A")]},
+                                 second), [{"op": "stage", "emitter": "E", "stage": 0, "name": "Fill"}])
+
+    def test_a_stage_without_identity_is_new(self) -> None:
+        live = {"Emitters": [{"Name": "E", "Properties": {}, "Renderers": [],
+                              "SimulationStages": [{"Name": "Keep", "Class": "Generic", "Modules": [_module("A")]},
+                                                   {"Name": "Old", "Class": "Generic", "Enabled": False,
+                                                    "Properties": {"NumIterations": 4}, "Modules": [_module("B")]}]}]}
+        defaults = {"stages": {"Generic": {"NumIterations": 1}}}
+        keep = {"Name": "Keep", "Class": "Generic", "Modules": [_module("A")]}
+
+        def planned(*edited):
+            body = {"Emitters": [{"Name": "E", "SimulationStages": list(edited)}]}
+            planner.check_body(body)
+            return _ops(planner.plan_system(body, live, defaults))
+
+        # The extract re-applies as a no-op.
+        self.assertEqual(planned(keep, live["Emitters"][0]["SimulationStages"][1]), [])
+        # Removing a stage and adding one of the same class deletes the old stage and adds an empty one: the new
+        # stage takes none of the old stage's modules, settings or Enabled.
+        self.assertEqual(planned(keep, {"Name": "Fresh", "Class": "Generic"}), [
+            {"op": "delete_stage", "emitter": "E", "stage": 1},
+            {"op": "add_stage", "emitter": "E", "name": "Fresh", "class": "Generic", "after": 0}])
+        # The same where the new stage lists modules: the old stage's modules go with it.
+        self.assertEqual(planned(keep, {"Name": "Fresh", "Class": "Generic", "Modules": [_module("C")]}), [
+            {"op": "delete_stage", "emitter": "E", "stage": 1},
+            {"op": "add_stage", "emitter": "E", "name": "Fresh", "class": "Generic", "after": 0}])
+        # RenamedFrom carries the stage's identity: it is renamed and keeps its modules, settings and Enabled.
+        renamed = {"Name": "Fresh", "RenamedFrom": "Old", "Class": "Generic", "Enabled": False, "Modules": [_module("B")]}
+        self.assertEqual(planned(keep, renamed), [{"op": "stage", "emitter": "E", "stage": 1, "name": "Fresh"}])
+        # Once renamed, the same document re-applies as a no-op (Name and Class pair before RenamedFrom).
+        after = {"Emitters": [{**live["Emitters"][0], "SimulationStages": [
+            live["Emitters"][0]["SimulationStages"][0], {**live["Emitters"][0]["SimulationStages"][1], "Name": "Fresh"}]}]}
+        plan = planner.plan_system({"Emitters": [{"Name": "E", "SimulationStages": [keep, renamed]}]}, after, defaults)
+        self.assertEqual((plan.ops, plan.refusals, plan.differences), ([], [], []))
+        # A RenamedFrom of another class does not pair: the stage is replaced.
+        self.assertEqual(planned(keep, {**renamed, "Class": "Other"}), [
+            {"op": "delete_stage", "emitter": "E", "stage": 1},
+            {"op": "add_stage", "emitter": "E", "name": "Fresh", "class": "Other", "after": 0}])
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            planned(keep, {**renamed, "RenamedFrom": ""})
+        self.assertEqual(raised.exception.diagnostic.code, "Niagara.InvalidBody")
+        self.assertTrue(raised.exception.diagnostic.path.endswith("/SimulationStages/1/RenamedFrom"))
+
+    def test_rows_without_a_stage_index_place_modules_by_name(self) -> None:
+        rows = [{"kind": "emitter", "name": "E", "enabled": True, "mode": "Standard", "properties": {}},
+                {"kind": "simulation_stage", "emitter": "E", "name": "Fill", "class": "Generic", "enabled": True},
+                {"kind": "simulation_stage", "emitter": "E", "name": "Fill", "class": "Generic", "enabled": True},
+                {"kind": "module", "emitter": "E", "group": "SimulationStage", "stage": "Fill", "name": "A",
+                 "script": "/S/A.A", "enabled": True, "inputs": []}]
+        stages = shape.system_body(rows)["Emitters"][0]["SimulationStages"]
+        self.assertEqual([stage["Modules"] for stage in stages], [[_module("A")], []])
 
     def test_lightweight_emitters(self) -> None:
         live = {"Emitters": [{"Name": "L", "Mode": "Stateless", "Stateless": {
@@ -642,6 +753,68 @@ class PlannerTests(unittest.TestCase):
             {"op": "delete_parameter", "name": "System.B"},
             {"op": "parameter", "name": "System.A", "description": "a"},
             {"op": "add_parameter", "name": "System.B", "type": "float"}])
+
+    def test_parameter_meta_is_complete_when_listed_and_kept_when_omitted(self) -> None:
+        slider = {"WidgetCustomization": {"WidgetType": "Slider", "bHasMinValue": True, "MinValue": 0.0,
+                                          "bHasMaxValue": True, "MaxValue": 10.0}, "DisplayUnit": "Meters"}
+        live = {"UserParameters": [{"Name": "User.Size", "Type": "float", "Value": 1.0, "Meta": slider}],
+                "Parameters": [{"Name": "System.A", "Type": "float", "Meta": {"bAdvancedDisplay": True}}]}
+        unchanged = {"UserParameters": [{"Name": "User.Size", "Type": "float", "Value": 1.0, "Meta": dict(slider)}],
+                     "Parameters": [{"Name": "System.A", "Type": "float", "Meta": {"bAdvancedDisplay": True}}]}
+        plan = planner.plan_system(unchanged, live, {})
+        self.assertEqual((plan.ops, plan.differences), ([], []))
+        # Omitted: kept (documents written before Meta was read).
+        omitted = {"UserParameters": [{"Name": "User.Size", "Type": "float", "Value": 1.0}],
+                   "Parameters": [{"Name": "System.A", "Type": "float"}]}
+        self.assertEqual(_ops(planner.plan_system(omitted, live, {})), [])
+        edited = {"UserParameters": [{"Name": "User.Size", "Type": "float", "Value": 1.0,
+                                      "Meta": {"DisplayUnit": "Centimeters", "bAdvancedDisplay": True}}],
+                  "Parameters": [{"Name": "System.A", "Type": "float", "Meta": {}}]}
+        plan = planner.plan_system(edited, live, {})
+        self.assertEqual(_ops(plan), [
+            {"op": "user_parameter", "name": "User.Size", "meta": {
+                "properties": {"DisplayUnit": "Centimeters", "bAdvancedDisplay": True},
+                "reset": ["WidgetCustomization"]}},
+            {"op": "parameter", "name": "System.A", "meta": {"properties": {}, "reset": ["bAdvancedDisplay"]}}])
+        self.assertEqual([item.path for item in plan.differences],
+                         ["/Body/UserParameters/0/Meta", "/Body/Parameters/0/Meta"])
+        for body in ({"UserParameters": [{"Name": "User.Size", "Type": "float", "Meta": {"Description": "x"}}]},
+                     {"Parameters": [{"Name": "System.A", "Type": "float", "Meta": []}]}):
+            with self.assertRaises(AssetDocumentContractError) as raised:
+                planner.check_body(body)
+            self.assertEqual(raised.exception.diagnostic.code, "Niagara.InvalidBody")
+
+    def test_parameter_meta_markers_warn_and_are_kept(self) -> None:
+        odd = {"Unsupported": "TMap<FName, FNiagaraVariableMetaDataInlineEditCondition> has no document form; AssetDoc "
+                              "keeps the value.", "Text": "(x)"}
+        live = {"UserParameters": [{"Name": "User.Size", "Type": "float", "Value": 1.0,
+                                    "Meta": {"DisplayUnit": "Meters", "Odd": odd}}],
+                "Parameters": [{"Name": "System.A", "Type": "float", "Meta": {"Odd": odd}}]}
+        with collecting_read_warnings() as warnings:
+            niagara.warn_unrepresented(live)
+        self.assertEqual(sorted((item.code, item.path) for item in warnings),
+                         [("Niagara.Unrepresented", "/Body/Parameters/0/Meta/Odd"),
+                          ("Niagara.Unrepresented", "/Body/UserParameters/0/Meta/Odd")])
+        # As extracted, or left out of a listed Meta: kept (never written, never reset).
+        self.assertEqual(_ops(planner.plan_system(json.loads(json.dumps(live)), live, {})), [])
+        edited = {"UserParameters": [{"Name": "User.Size", "Type": "float", "Value": 1.0, "Meta": {"DisplayUnit": "Centimeters"}}],
+                  "Parameters": [{"Name": "System.A", "Type": "float", "Meta": {"bAdvancedDisplay": True, "Odd": odd}}]}
+        self.assertEqual(_ops(planner.plan_system(edited, live, {})), [
+            {"op": "user_parameter", "name": "User.Size", "meta": {"properties": {"DisplayUnit": "Centimeters"}, "reset": []}},
+            {"op": "parameter", "name": "System.A", "meta": {"properties": {"bAdvancedDisplay": True}, "reset": []}}])
+        changed = {"Parameters": [{"Name": "System.A", "Type": "float", "Meta": {"Odd": dict(odd, Text="(y)")}}]}
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            planner.plan_system(changed, live, {})
+        self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                         ("Niagara.UnrepresentedValue", "/Body/Parameters/0/Meta/Odd"))
+
+    def test_shape_reads_parameter_meta(self) -> None:
+        rows = [{"kind": "user_parameter", "name": "User.Size", "type": "float", "value": 1.0,
+                 "meta": {"bAdvancedDisplay": True}},
+                {"kind": "declared_parameter", "name": "System.A", "type": "float", "meta": {"DisplayUnit": "Meters"}}]
+        system, _ = shape.stack_body(rows)
+        self.assertEqual(system["UserParameters"][0]["Meta"], {"bAdvancedDisplay": True})
+        self.assertEqual(system["Parameters"][0]["Meta"], {"DisplayUnit": "Meters"})
 
     def test_body_checks(self) -> None:
         for body, code in (({"UserParameters": [{"Name": "Count", "Type": "int32"}]}, "Niagara.InvalidUserParameterName"),
@@ -755,6 +928,113 @@ class EmitterAssetTests(unittest.TestCase):
         self.assertTrue(any(item.path.startswith("/Body/Versions") for item in profile.diff(authored, live)))
         authored["Body"] = {"Renderers": live["Body"]["Renderers"], "Properties": live["Body"]["Properties"]}
         self.assertEqual(profile.diff(authored, live), ())
+
+
+MARK = {"Unsupported": "TFieldPath<FProperty> has no document form; AssetDoc keeps the value.", "Text": "/Script/X.Y:Z"}
+
+
+class UnrepresentedTests(unittest.TestCase):
+    """A Details property the read cannot encode reads as a marker: warned on extract, kept on apply (left as read or
+    omitted), refused when edited."""
+
+    def live(self):
+        return {"UserParameters": [{"Name": "User.Probe", "Type": "DataInterface:Probe", "Value": {
+                    "DataInterface": {"Class": "Probe", "Properties": {"Field": MARK, "Scale": 2.0}}}}],
+                "Emitters": [{"Name": "E", "Properties": {"Field": MARK, "RandomSeed": 3},
+                              "Renderers": [{"Name": "R", "Class": "SpriteRenderer",
+                                             "Properties": {"Field": MARK, "SortOrderHint": 1}}],
+                              "EventHandlers": [{"Properties": {"Field": MARK}, "Modules": []}],
+                              "SimulationStages": [{"Name": "S", "Class": "Generic", "Properties": {"Field": MARK},
+                                                    "Modules": []}],
+                              "ParticleUpdate": [_module("A", Inputs={"Probe": {"DataInterface": {
+                                  "Class": "Probe", "Properties": {"Field": MARK, "Scale": 1.0}}}})]}]}
+
+    def test_property_changes_keep_markers(self) -> None:
+        live = {"Field": MARK, "Scale": 2.0}
+        self.assertEqual(planner.property_changes({"Field": dict(MARK), "Scale": 2.0}, live, {}), ({}, []))
+        # Omitted: kept, not reset.
+        self.assertEqual(planner.property_changes({"Scale": 3.0}, live, {}), ({"Scale": 3.0}, []))
+        for authored, current in (({"Field": {**MARK, "Text": "/Script/X.Y:W"}}, live), ({"Field": MARK}, {})):
+            with self.assertRaises(AssetDocumentContractError) as raised:
+                planner.property_changes(authored, current, {}, "/Body/Emitters/0/Properties")
+            self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                             ("Niagara.UnrepresentedValue", "/Body/Emitters/0/Properties/Field"))
+
+    def test_unchanged_extract_plans_nothing(self) -> None:
+        plan = planner.plan_system(self.live(), self.live(), {})
+        self.assertEqual((plan.ops, plan.refusals, plan.differences), ([], [], []))
+
+    def test_other_edits_leave_markers_out(self) -> None:
+        body = self.live()
+        emitter = body["Emitters"][0]
+        emitter["Properties"] = {"RandomSeed": 4}
+        emitter["Renderers"][0]["Properties"]["SortOrderHint"] = 2
+        body["UserParameters"][0]["Value"]["DataInterface"]["Properties"]["Scale"] = 3.0
+        emitter["ParticleUpdate"][0]["Inputs"]["Probe"]["DataInterface"]["Properties"]["Scale"] = 5.0
+        self.assertEqual(_ops(planner.plan_system(body, self.live(), {})), [
+            {"op": "user_parameter", "name": "User.Probe",
+             "value": {"DataInterface": {"Properties": {"Scale": 3.0}, "Class": "Probe"}}},
+            {"op": "emitter", "name": "E", "properties": {"RandomSeed": 4}},
+            {"op": "renderer", "emitter": "E", "name": "R", "properties": {"SortOrderHint": 2}},
+            {"op": "inputs", "group": "ParticleUpdate", "emitter": "E", "module": "A", "set": {
+                "Probe": {"DataInterface": {"Class": "Probe", "Properties": {"Scale": 5.0}}}}}])
+
+    def test_an_omitted_marked_input_property_is_no_change(self) -> None:
+        body = self.live()
+        del body["Emitters"][0]["ParticleUpdate"][0]["Inputs"]["Probe"]["DataInterface"]["Properties"]["Field"]
+        self.assertEqual(_ops(planner.plan_system(body, self.live(), {})), [])
+
+    def test_edited_markers_are_refused(self) -> None:
+        edited = {**MARK, "Text": "other"}
+        for edit, path in (
+                (lambda body: body["Emitters"][0]["SimulationStages"][0]["Properties"].update(Field=edited),
+                 "/Body/Emitters/0/SimulationStages/0/Properties/Field"),
+                (lambda body: body["Emitters"][0]["EventHandlers"][0]["Properties"].update(Field=edited),
+                 "/Body/Emitters/0/EventHandlers/0/Properties/Field"),
+                (lambda body: body["UserParameters"][0]["Value"]["DataInterface"]["Properties"].update(Field=edited),
+                 "/Body/UserParameters/0/Value/DataInterface/Properties/Field"),
+                (lambda body: body["Emitters"][0]["ParticleUpdate"][0]["Inputs"]["Probe"]["DataInterface"][
+                    "Properties"].update(Field=edited),
+                 "/Body/Emitters/0/ParticleUpdate/0/Inputs/Probe/DataInterface/Properties/Field")):
+            body = self.live()
+            edit(body)
+            with self.assertRaises(AssetDocumentContractError) as raised:
+                planner.plan_system(body, self.live(), {})
+            self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                             ("Niagara.UnrepresentedValue", path))
+
+    def test_extract_warns_per_marker(self) -> None:
+        body = self.live()
+        body["Emitters"][0]["ParticleUpdate"][0]["Inputs"]["Odd"] = {"Unsupported": "DefaultFunction"}
+        with collecting_read_warnings() as warnings:
+            niagara.warn_unrepresented(body)
+        self.assertEqual(sorted((item.code, item.path) for item in warnings), sorted(("Niagara.Unrepresented", path) for path in (
+            "/Body/UserParameters/0/Value/DataInterface/Properties/Field",
+            "/Body/Emitters/0/Properties/Field",
+            "/Body/Emitters/0/Renderers/0/Properties/Field",
+            "/Body/Emitters/0/EventHandlers/0/Properties/Field",
+            "/Body/Emitters/0/SimulationStages/0/Properties/Field",
+            "/Body/Emitters/0/ParticleUpdate/0/Inputs/Probe/DataInterface/Properties/Field")))
+
+    def test_parameter_definitions_subscriptions_warn_on_extract(self) -> None:
+        page = {"parameter_definitions": [{"Owner": "", "Definitions": "/Game/FX/Defs.Defs"},
+                                          {"Owner": "Sparks", "Definitions": "/Game/FX/More.More"}]}
+        with collecting_read_warnings() as warnings:
+            niagara.warn_parameter_definitions(page)
+            niagara.warn_parameter_definitions({"parameter_definitions": []})
+            niagara.warn_parameter_definitions({})
+        self.assertEqual([(item.code, item.path) for item in warnings],
+                         [("Niagara.UnrepresentedParameterDefinitions", "/Body")])
+        self.assertIn("/Game/FX/Defs.Defs", warnings[0].message)
+        self.assertIn("Sparks: /Game/FX/More.More", warnings[0].message)
+
+    def test_emitter_asset_refusals_are_rebased(self) -> None:
+        live = {"Emitters": [{"Name": "NE", "Properties": {"Field": MARK}}]}
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            niagara.plan_emitter_asset({"Properties": {"Field": {**MARK, "Text": "x"}}}, "NE", live, {})
+        self.assertEqual(raised.exception.diagnostic.path, "/Body/Properties/Field")
+        plan = niagara.plan_emitter_asset({"Properties": {"Field": MARK}}, "NE", live, {})
+        self.assertEqual((plan.ops, plan.differences), ([], []))
 
 
 class CollectionTests(unittest.TestCase):

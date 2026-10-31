@@ -86,6 +86,13 @@ struct FFixture
   Row.Elements.Add(Integer(0));
   if (bStates) Row.Elements.Add(Integer(1));
   Row.Elements.Add(Integer(0)); Row.Elements.Add(MoveTemp(Requested));
+  // The rest of the native row (trigger settings, link) does not identify the object.
+  FAssetDocumentRuntimeValueDto Trigger; Trigger.Kind = EAssetDocumentRuntimeValueKind::Object;
+  FAssetDocumentRuntimeValueDto Slot; Slot.Kind = EAssetDocumentRuntimeValueKind::Null;
+  FAssetDocumentRuntimeValueDto Link; Link.Kind = EAssetDocumentRuntimeValueKind::Object;
+  Link.ObjectKeys = {TEXT("method"), TEXT("slot_name")}; Link.Elements = {Integer(0), Slot};
+  if (bStates) { Link.ObjectKeys.Append({TEXT("end_method"), TEXT("end_slot_name")}); Link.Elements.Append({Integer(0), Slot}); }
+  Row.ObjectKeys.Append({TEXT("trigger"), TEXT("link")}); Row.Elements.Add(MoveTemp(Trigger)); Row.Elements.Add(MoveTemp(Link));
   FAssetDocumentRuntimeValueDto Rows; Rows.Kind = EAssetDocumentRuntimeValueKind::Array; Rows.Elements.Add(MoveTemp(Row));
   Invocation.ValueArguments.ObjectKeys = {bStates ? TEXT("notify_states") : TEXT("notifies")};
   Invocation.ValueArguments.Elements = {MoveTemp(Rows)};
@@ -102,7 +109,7 @@ bool FStagedNotifyPropertiesSuccess::RunTest(const FString&)
  using namespace EditorStagedMontageNotifyPropertiesTestsLocal;
  FFixture F;
  if (!TestTrue(TEXT("verified target lease"), F.Lease.IsValid())) return false;
- TStrongObjectPtr<UAssetDocumentEditorStagedNotifyTest> Notify(NewObject<UAssetDocumentEditorStagedNotifyTest>(F.Montage.Get(), TEXT("AssetDocumentManaged_Notify_Test"), RF_Transactional));
+ TStrongObjectPtr<UAssetDocumentEditorStagedNotifyTest> Notify(NewObject<UAssetDocumentEditorStagedNotifyTest>(F.Montage.Get(), NAME_None, RF_Transactional));
  auto Out = F.Configure(*Notify.Get(), Properties());
  TestTrue(TEXT("Notify configuration succeeds"), Out.Status == EAssetDocumentPrimitiveOutcomeStatus::Succeeded);
  TestEqual(TEXT("first authored value"), Notify->First, 17);
@@ -111,7 +118,7 @@ bool FStagedNotifyPropertiesSuccess::RunTest(const FString&)
  TestEqual(TEXT("one parent footprint remains two rows"), F.Transaction->GetEnlistedFootprint().Num(), 2);
  TestTrue(TEXT("Configure does not enlist inverses"), F.Transaction->EnlistedRollbackActionComponentIds.IsEmpty());
  F.Invocation.PrimitiveId = TEXT("animation.montage.notify_states.replace.v1");
- TStrongObjectPtr<UAssetDocumentEditorStagedNotifyStateTest> State(NewObject<UAssetDocumentEditorStagedNotifyStateTest>(F.Montage.Get(), TEXT("AssetDocumentManaged_NotifyState_Test"), RF_Transactional));
+ TStrongObjectPtr<UAssetDocumentEditorStagedNotifyStateTest> State(NewObject<UAssetDocumentEditorStagedNotifyStateTest>(F.Montage.Get(), NAME_None, RF_Transactional));
  Out = F.Configure(*State.Get(), Properties(false));
  TestTrue(TEXT("State configuration succeeds"), Out.Status == EAssetDocumentPrimitiveOutcomeStatus::Succeeded);
  TestEqual(TEXT("state authored value"), State->First, 17);
@@ -127,7 +134,7 @@ bool FStagedNotifyPropertiesAdmission::RunTest(const FString&)
  using namespace EditorStagedMontageNotifyPropertiesTestsLocal;
  FFixture F;
  if (!TestTrue(TEXT("verified target lease"), F.Lease.IsValid())) return false;
- TStrongObjectPtr<UAssetDocumentEditorStagedNotifyTest> Notify(NewObject<UAssetDocumentEditorStagedNotifyTest>(F.Montage.Get(), TEXT("AssetDocumentManaged_Notify_Test"), RF_Transactional));
+ TStrongObjectPtr<UAssetDocumentEditorStagedNotifyTest> Notify(NewObject<UAssetDocumentEditorStagedNotifyTest>(F.Montage.Get(), NAME_None, RF_Transactional));
  auto Invalid = Properties(); Invalid.Elements[1].Kind = EAssetDocumentRuntimeValueKind::String; Invalid.Elements[1].IntegerValue = 0; Invalid.Elements[1].StringValue = TEXT("invalid integer");
  auto Out = F.Configure(*Notify.Get(), Invalid);
  TestTrue(TEXT("second decode fails with existing diagnostic"), HasCode(Out, TEXT("PropertyWrite.DecodeFailed")));
@@ -159,7 +166,7 @@ bool FStagedNotifyPropertiesPartialFailure::RunTest(const FString&)
  using namespace EditorStagedMontageNotifyPropertiesTestsLocal;
  FFixture F;
  if (!TestTrue(TEXT("verified target lease"), F.Lease.IsValid())) return false;
- TStrongObjectPtr<UAssetDocumentEditorStagedNotifyTest> Notify(NewObject<UAssetDocumentEditorStagedNotifyTest>(F.Montage.Get(), TEXT("AssetDocumentManaged_Notify_Test"), RF_Transactional));
+ TStrongObjectPtr<UAssetDocumentEditorStagedNotifyTest> Notify(NewObject<UAssetDocumentEditorStagedNotifyTest>(F.Montage.Get(), NAME_None, RF_Transactional));
  const auto Fields = GetAssetDocumentEditorAdmittedPropertyFields(*Notify->GetClass());
  const auto* Field = Fields.FindByPredicate([](const auto& Item) { return Item.Property->GetAuthoredName() == TEXT("First"); });
  if (!TestNotNull(TEXT("existing safe admission finds field"), Field)) return false;

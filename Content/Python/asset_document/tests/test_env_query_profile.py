@@ -10,7 +10,7 @@ from __future__ import annotations
 import copy
 import unittest
 
-from asset_document.diagnostics import AssetDocumentContractError, RuntimeDiagnostic
+from asset_document.diagnostics import AssetDocumentContractError, RuntimeDiagnostic, collecting_read_warnings
 from asset_document.diff.model import DiffKind
 from asset_document.profiles import env_query
 from asset_document.profiles import env_query_model as model
@@ -27,6 +27,8 @@ TESTS = {
     "Trace": {"TestPurpose": "EEnvTestPurpose::FilterAndScore", "BoolValue": {"DefaultValue": True, "ParamName": ""}},
     "Dot": {"TestPurpose": "EEnvTestPurpose::FilterAndScore", "ScoringFactor": {"DefaultValue": 1.0, "ParamName": ""}},
 }
+# Details properties a class has that the document has no form for (a delegate, a field path, ...).
+UNSUPPORTED = {"Distance": ["OnScored"]}
 COMMENT_DEFAULTS = {"CommentColor": {"R": 1.0, "G": 1.0, "B": 1.0, "A": 1.0}, "FontSize": 18,
                     "bCommentBubbleVisible_InDetailsPanel": True, "bColorCommentBubble": False,
                     "MoveMode": "ECommentBoxMode::GroupMovement", "NodeDetails": ""}
@@ -93,12 +95,14 @@ class _Query:
                 or any(key.casefold() == name.casefold() for key in self.comments))
 
     def runtime(self):
-        return [option["name"] for option in sorted((item for item in self.options if item["connected"]),
+        return [option["name"] for option in sorted((item for item in self.options
+                                                     if item["connected"] and not item.get("missing")),
                                                     key=lambda item: item["pos"][0])]
 
     def params(self):
         out = []
-        for props in [option["props"] for option in self.options] + [test["props"] for test in self.tests.values()]:
+        for props in [option["props"] for option in self.options if not option.get("missing")] \
+                + [test["props"] for test in self.tests.values() if not test.get("missing")]:
             for value in props.values():
                 if type(value) is dict and value.get("ParamName"):
                     out.append({"name": value["ParamName"], "type": "Float"})
@@ -107,6 +111,8 @@ class _Query:
     def validate(self):
         messages = []
         for option in self.options:
+            if option.get("missing"):
+                continue
             if option["props"].get("GridSize", {}).get("DefaultValue", 0) < 0:
                 messages.append({"severity": "error", "message": f"{option['name']}: GridSize is negative.",
                                  "option": option["name"]})
@@ -260,6 +266,12 @@ class _Query:
                     "runtime_order": self.runtime(), "params": self.params(), "messages": self.validate()}]
         runtime = self.runtime()
         for option in self.options:
+            if option.get("missing"):
+                records.append({"kind": "option", "name": option["name"], "position": list(option["pos"]),
+                                "connected": option["connected"], "runtime_index": -1, "class": option["label"],
+                                "missing": True, "properties": {}, "comment": "", "comment_visible": False,
+                                "error": "class missing", "tests": list(option["tests"])})
+                continue
             records.append({"kind": "option", "name": option["name"], "position": list(option["pos"]),
                             "connected": option["connected"],
                             "runtime_index": runtime.index(option["name"]) if option["name"] in runtime else -1,
@@ -270,6 +282,11 @@ class _Query:
                             "tests": list(option["tests"])})
             for index, name in enumerate(option["tests"]):
                 test = self.tests[name]
+                if test.get("missing"):
+                    records.append({"kind": "test", "name": name, "option": option["name"], "index": index,
+                                    "class": test["label"], "missing": True, "enabled": test["enabled"],
+                                    "properties": {}, "comment": "", "comment_visible": False})
+                    continue
                 records.append({"kind": "test", "name": name, "option": option["name"], "index": index,
                                 "class": f"/Script/AIModule.EnvQueryTest_{test['label']}", "label": test["label"],
                                 "enabled": test["enabled"], "weight_pct": 100.0, "supported": True,
@@ -288,7 +305,8 @@ class _Query:
                 prefix = "EnvQueryGenerator_" if row["kind"] == "generator" else "EnvQueryTest_"
                 records.append({"kind": "default", "node": row["kind"], "request": row["class"],
                                 "class": f"/Script/AIModule.{prefix}{label}", "label": label,
-                                "properties": copy.deepcopy(table[label]), "unsupported": []})
+                                "properties": copy.deepcopy(table[label]),
+                                "unsupported": list(UNSUPPORTED.get(label, ()))})
             records.append({"kind": "comment_default", "properties": dict(COMMENT_DEFAULTS)})
         if args.get("dependents"):
             records += [{"kind": "dependent", "package": item, "class": "/Script/AIModule.BehaviorTree",
@@ -624,6 +642,136 @@ class EnvQueryApplyTests(unittest.TestCase):
         self.assertEqual(payload["Dependents"], [{"Asset": "/Game/AI/BT_Cover.BT_Cover",
                                                   "Class": "/Script/AIModule.BehaviorTree"}])
 
+
+_SCORED = {"Unsupported": "FOnScored has no document form; AssetDoc keeps the value.", "Text": "(BoundFunction=Rate)"}
+_SIGHT = "/Game/AI/EQT_Sight.EQT_Sight_C"
+
+
+def _tolerant():
+    """The cover query with a Details value of no document form on Dist, a test whose class does not load in Grid
+    (second) and an option whose generator class does not load (unconnected, right of the others)."""
+    query, grid = _cover()
+    query.tests["Dist"]["props"]["OnScored"] = copy.deepcopy(_SCORED)
+    query.tests["Lost"] = {"label": _SIGHT, "props": {}, "enabled": True, "comment": "", "bubble": False, "missing": True}
+    grid["tests"].insert(1, "Lost")
+    query.options.append({"name": "Gone", "label": "/Game/AI/EQG_Ring.EQG_Ring_C", "props": {}, "pos": [900, 100],
+                          "connected": False, "tests": [], "comment": "", "bubble": False, "missing": True})
+    return query
+
+
+class EnvQueryUnrepresentedTests(unittest.TestCase):
+    DIST = "/Body/Options/0/Tests/0/Properties/OnScored"
+    LOST = "/Body/Options/0/Tests/1"
+    GONE = "/Body/Options/2"
+
+    def _refused(self, query, body, path, code="EnvQuery.UnrepresentedValue"):
+        with self.assertRaises(AssetDocumentContractError) as caught:
+            _apply(query, body)
+        self.assertEqual((caught.exception.diagnostic.path, caught.exception.diagnostic.code), (path, code))
+        self.assertEqual(query.writes, [])
+        return caught.exception.diagnostic
+
+    def test_extract_marks_in_place_and_warns(self):
+        query = _tolerant()
+        with collecting_read_warnings() as warnings:
+            body = _extract(query)
+        grid = body["Options"][0]
+        self.assertEqual(grid["Tests"][0]["Properties"]["OnScored"], _SCORED)
+        self.assertEqual(grid["Tests"][1]["Key"], "Lost")
+        self.assertEqual(grid["Tests"][1]["Class"], _SIGHT)
+        self.assertIn("does not load", grid["Tests"][1]["Unsupported"])
+        self.assertEqual([test["Key"] for test in grid["Tests"]], ["Dist", "Lost", "Vis"])
+        gone = body["Options"][2]
+        self.assertEqual({key: value for key, value in gone.items() if key != "Unsupported"},
+                         {"Key": "Gone", "Generator": {"Class": "/Game/AI/EQG_Ring.EQG_Ring_C"}, "Position": [900, 100],
+                          "Connected": False})
+        self.assertEqual(sorted((item.path, item.code) for item in warnings),
+                         sorted([(self.DIST, "EnvQuery.Unrepresented"), (self.LOST, "EnvQuery.Unrepresented"),
+                                 (self.GONE, "EnvQuery.Unrepresented")]))
+
+    def test_extract_reapplies_as_a_no_op_and_diffs_empty(self):
+        query = _tolerant()
+        body = _extract(query)
+        document = env_query.canonicalize(_document(body))
+        self.assertEqual(env_query.diff(document, document, True), ())
+        _apply(query, copy.deepcopy(body))
+        self.assertEqual(query.writes, [])
+        full = env_query.extract(TARGET, "read", query, include_defaults=True)
+        _apply(query, full["Body"])
+        self.assertEqual(query.writes, [])
+
+    def test_other_edits_keep_the_marked_content(self):
+        query = _tolerant()
+        body = _extract(query)
+        dist = body["Options"][0]["Tests"][0]
+        del dist["Properties"]["OnScored"]
+        dist["Properties"]["TestPurpose"] = "EEnvTestPurpose::Filter"
+        body["Options"][0]["Tests"].insert(1, {"Key": "Near", "Class": "Distance"})
+        _apply(query, body)
+        self.assertEqual(query.tests["Dist"]["props"]["OnScored"], _SCORED)
+        self.assertEqual(query.tests["Dist"]["props"]["TestPurpose"], "EEnvTestPurpose::Filter")
+        self.assertEqual(query.option("Grid")["tests"], ["Dist", "Near", "Lost", "Vis"])
+        self.assertIn("Gone", [option["name"] for option in query.options])
+        properties = [op["property"] for primitive, args in query.writes if primitive == model.EDIT
+                      for op in args["ops"] if op["op"] == "set_property"]
+        self.assertEqual(properties, ["TestPurpose"])
+
+    def test_omitted_marked_elements_are_deleted(self):
+        query = _tolerant()
+        body = _extract(query)
+        del body["Options"][0]["Tests"][1]
+        del body["Options"][2]
+        _apply(query, body)
+        self.assertNotIn("Lost", query.tests)
+        self.assertNotIn("Gone", [option["name"] for option in query.options])
+
+    def test_edited_markers_refused(self):
+        cases = [
+            (lambda body: body["Options"][0]["Tests"][0]["Properties"]["OnScored"].update(Text="()"), self.DIST),
+            (lambda body: body["Options"][0]["Tests"][1].update(Class="Dot"), self.LOST),
+            (lambda body: body["Options"][2].update(Position=[1200, 100]), self.GONE),
+            (lambda body: body["Options"][1]["Tests"].append(
+                {"Key": "Ghost", "Class": _SIGHT, "Unsupported": "x"}), "/Body/Options/1/Tests/1"),
+        ]
+        for edit, path in cases:
+            with self.subTest(path=path):
+                query = _tolerant()
+                body = _extract(query)
+                edit(body)
+                self._refused(query, body, path)
+
+    def test_plain_value_for_a_property_with_no_document_form(self):
+        query = _tolerant()
+        body = _extract(query)
+        body["Options"][0]["Tests"][0]["Properties"]["OnScored"] = "(BoundFunction=Other)"
+        diagnostic = self._refused(query, body, self.DIST)
+        self.assertIn("no document form", diagnostic.message)
+        query = _tolerant()
+        body = _extract(query)
+        body["Options"][1]["Tests"][0]["Properties"] = {"OnScored": "x"}  # Dot has no such property
+        body["Options"][0]["Tests"][2]["Properties"] = {"OnScored": "x"}  # Vis (Trace) neither
+        self._refused(query, body, "/Body/Options/0/Tests/2/Properties/OnScored", "EnvQuery.UnknownProperty")
+        query = _tolerant()
+        body = _extract(query)
+        body["Options"][0]["Tests"].insert(0, {"Key": "Fresh", "Class": "Distance", "Properties": {"OnScored": "x"}})
+        diagnostic = self._refused(query, body, "/Body/Options/0/Tests/0/Properties/OnScored")
+        self.assertIn("no document form", diagnostic.message)
+
+    def test_a_marked_test_keeps_its_place(self):
+        # Reordering around it moves the other tests; moving it to another option is refused.
+        query = _tolerant()
+        body = _extract(query)
+        tests = body["Options"][0]["Tests"]
+        tests[1], tests[2] = tests[2], tests[1]
+        _apply(query, body)
+        self.assertEqual(query.option("Grid")["tests"], ["Dist", "Vis", "Lost"])
+        query = _tolerant()
+        body = _extract(query)
+        body["Options"][1]["Tests"].append(body["Options"][0]["Tests"].pop(1))
+        with self.assertRaises(AssetDocumentContractError) as caught:
+            _apply(query, body)
+        self.assertEqual((caught.exception.diagnostic.path, caught.exception.diagnostic.code),
+                         ("/Body/Options/1/Tests/1", "EnvQuery.UnrepresentedValue"))
 
 if __name__ == "__main__":
     unittest.main()

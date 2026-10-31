@@ -307,10 +307,22 @@ bool EncodeDocumentProperty(FProperty& Property, const void* ValuePtr, FValue& O
 	StripDerived(Property, OutValue);
 	return true;
 }
+
+// The read of a property the codec has no form for: the reason and the engine's export text (read only).
+FValue UnsupportedMarker(const FProperty& Property, const void* ValuePtr)
+{
+	FString Exported;
+	Property.ExportText_Direct(Exported, ValuePtr, nullptr, nullptr, PPF_None);
+	FObjectBuilder Marker;
+	Marker.AddString(TEXT("Unsupported"), FString::Printf(TEXT("%s has no document form; AssetDoc keeps the value."),
+		*Property.GetCPPType()));
+	Marker.AddString(TEXT("Text"), Exported);
+	return Marker.Build();
+}
 } // namespace
 
 FValue SparseProperties(const UStruct& Struct, const void* Container, const void* Defaults, TConstArrayView<FName> Skip,
-	TArray<FString>* OutUnsupported)
+	TArray<FString>* OutUnsupported, EUnencodable Unencodable)
 {
 	FObjectBuilder Object;
 	for (TFieldIterator<FProperty> It(&Struct); It; ++It)
@@ -331,6 +343,10 @@ FValue SparseProperties(const UStruct& Struct, const void* Container, const void
 			if (OutUnsupported != nullptr)
 			{
 				OutUnsupported->Add(Property.GetAuthoredName());
+			}
+			if (Unencodable == EUnencodable::Mark)
+			{
+				Object.Add(Property.GetAuthoredName(), UnsupportedMarker(Property, Property.ContainerPtrToValuePtr<void>(Container)));
 			}
 			continue;
 		}
@@ -363,17 +379,24 @@ bool PropertyMatchesDefault(FProperty& Property, const void* ValuePtr, const voi
 		&& Graph::ValueToJsonString(Default, false) == Graph::ValueToJsonString(Value, false);
 }
 
-FValue SparseObjectProperties(const UObject& Object, TConstArrayView<FName> Skip, TArray<FString>* OutUnsupported)
+bool CanEncodeProperty(FProperty& Property, const void* ValuePtr)
 {
-	const UObject* Defaults = Object.GetClass()->GetDefaultObject();
-	return SparseProperties(*Object.GetClass(), &Object, Defaults, Skip, OutUnsupported);
+	FValue Value;
+	return EncodeDocumentProperty(Property, ValuePtr, Value);
 }
 
-FValue DescribeDataInterface(const UNiagaraDataInterface& DataInterface)
+FValue SparseObjectProperties(const UObject& Object, TConstArrayView<FName> Skip, TArray<FString>* OutUnsupported,
+	EUnencodable Unencodable)
+{
+	const UObject* Defaults = Object.GetClass()->GetDefaultObject();
+	return SparseProperties(*Object.GetClass(), &Object, Defaults, Skip, OutUnsupported, Unencodable);
+}
+
+FValue DescribeDataInterface(const UNiagaraDataInterface& DataInterface, EUnencodable Unencodable)
 {
 	FObjectBuilder Result;
 	Result.AddString(TEXT("Class"), ClassLabel(DataInterface.GetClass(), TEXT("NiagaraDataInterface"), TEXT("")));
-	FValue Properties = SparseObjectProperties(DataInterface);
+	FValue Properties = SparseObjectProperties(DataInterface, {}, nullptr, Unencodable);
 	if (Properties.ObjectKeys.Num() > 0)
 	{
 		// For extract (diff_only): the values with struct members equal to the class default's left out, also in

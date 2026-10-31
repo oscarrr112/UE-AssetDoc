@@ -31,6 +31,9 @@ Document (MCP/schemas/assetdocument/ControlRig.md)::
   ordered list identified by Type + Name ("Bone(spine_01)" in references); modules by Name.
 * Extract reads the rig as stored after load (the editor's view); nothing compiles. Imported bones without
   ``Transform`` have the reference pose of ``SourceHierarchyImport``.
+* Hierarchy components (e.g. physics bodies) are not in the document: Extract warns
+  ``ControlRig.ComponentsNotAuthored`` at each element that has some, Inspect lists them (``Skipped``), Apply keeps
+  them on the elements it keeps or renames and warns ``ControlRig.ComponentsRemoved`` when it removes such an element.
 * ``RenamedFrom`` on a variable, element, graph, node, function, exposed pin or local variable renames it (an
   instruction, not compared).
 * Node ``Position``, ``Size``, ``Title``, ``Color``, ``Expanded`` and ``PinTypes`` omitted keep the rig's; so do a
@@ -43,6 +46,7 @@ import copy
 from dataclasses import replace
 
 from asset_document import inspect_summary
+from asset_document.diagnostics import read_warning
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.mutation_intent_projection import SNAPSHOT_COVERED
 from asset_document.meta import (
@@ -51,6 +55,7 @@ from asset_document.meta import (
 )
 from asset_document.profile_runtime import RuntimeProfileRegistration, RuntimeTargetPolicy
 from asset_document.profiles import data_table_common as common
+from asset_document.profiles import control_rig_graph as crg
 from asset_document.profiles import control_rig_modular as modular
 from asset_document.profiles import ik_common as ik
 from asset_document.regions.primitive_catalog import NamedOpaqueHandleArgument, _single_handle
@@ -78,17 +83,26 @@ MODULAR_REGIONS = ("Modules", "Connections", "ModularSettings")
 LIST_REGIONS = ("Variables", "Hierarchy", "GraphOrder", "Modules")
 MAP_REGIONS = ("Graphs", "Functions", "Connections", "ModularSettings", "Module")
 
-VARIABLE_DEFAULTS = {"Public": False, "ReadOnly": False, "ExposeToCinematics": False, "Category": "", "Tooltip": ""}
+VARIABLE_DEFAULTS = {"Public": False, "ReadOnly": False, "ExposeToCinematics": False, "Category": "", "Tooltip": "",
+                     "ExposeOnSpawn": False, "Private": False, "SliderRange": {}, "ValueRange": {}}
+# Variable fields an authored variable may omit to keep the rig's (documents written before they were read).
+VARIABLE_KEEP = ("ExposeOnSpawn", "Private", "SliderRange", "ValueRange")
+VARIABLE_RANGES = ("SliderRange", "ValueRange")
+# Element fields an authored element may omit to keep the rig's (a control's limits and hidden spaces).
+ELEMENT_KEEP = ("Minimum", "Maximum", "RemovedSpaces")
+# What an element field the read leaves out holds (an empty RemovedSpaces is not read).
+ELEMENT_DEFAULTS = {"RemovedSpaces": []}
 NODE_DEFAULTS = {"Title": "", "Defaults": {}, "Inputs": {}, "Bindings": {}, "Expanded": [], "Traits": {}, "Injections": {},
                  "VariableMap": {}, "Setter": False, "Method": "Execute", "FontSize": 18, "Bubble": False,
                  "ColorBubble": False}
 # Node fields an authored node may omit to keep the rig's (layout and editor-derived state).
 NODE_KEEP = ("Position", "Size", "Title", "Color", "Expanded", "PinTypes")
 FUNCTION_DEFAULTS = {"Public": False, "Category": "", "Keywords": "", "Description": "", "LocalVariables": [],
-                     "Inputs": [], "Outputs": [], "Nodes": {}}
-COLLAPSE_DEFAULTS = {"Category": "", "Keywords": "", "Description": "", "Inputs": [], "Outputs": [], "LocalVariables": []}
+                     "Inputs": [], "Outputs": [], "Nodes": {}, "PinCategories": [], "Variant": {}}
+COLLAPSE_DEFAULTS = {"Category": "", "Keywords": "", "Description": "", "Inputs": [], "Outputs": [], "LocalVariables": [],
+                     "PinCategories": []}
 # Function / collapse graph fields an authored one may omit to keep the rig's.
-CONTAINER_KEEP = ("Color", "Entry", "Return")
+CONTAINER_KEEP = ("Color", "Entry", "Return", "PinCategories", "Variant")
 MODULE_DEFAULTS = modular.MODULE_DEFAULTS
 
 # Body-owned (design §3.2) and derived (§2.1) properties of the blueprint: never generic Properties.
@@ -97,7 +111,7 @@ BODY_OWNED = {"RigVMClient": "Body/Graphs and Body/Functions", "Hierarchy": "Bod
               "RigModuleSettings": "Body/Module", "NewVariables": "Body/Variables", "ParentClass": "Body/ParentClass"}
 NOT_AUTHORED = ("UbergraphPages", "FunctionGraphs", "GeneratedClass", "ControlRigType", "ItemTypeDisplayName",
                 "bExposesAnimatableControls", "ModuleReferenceData", "CustomThumbnail", "ArrayConnectionMap",
-                "bSupportsInversion", "bSupportsControls", "Validator", "DebugBoneRadius", "Influences",
+                "bSupportsInversion", "bSupportsControls", "Validator", "DebugBoneRadius",
                 "PublicGraphFunctions", "FunctionReferenceNodeData", "SupportedEventNames", "ReferencedObjectPathsStored",
                 "UserDefinedStructGuidToPathName", "UserDefinedEnumToPathName", "ModulesRecompilationBracket",
                 "ThumbnailInfo")
@@ -110,8 +124,39 @@ def error(path, message, code):
 escape = common.escape
 
 
+def _check_influences(value):
+    """The Influence Map (``Influences``) keeps an index per event and per source key next to its lists; the rig reads
+    the lists through them unchecked, so a written map must index its own lists: ``EventToIndex`` names each map's
+    ``EventName`` at its position, and each map's ``KeyToIndex`` gives every entry position once. A value with markers
+    or another shape is left to the property codec."""
+    if type(value) is not dict or type(value.get("Maps")) is not list or type(value.get("EventToIndex")) is not dict:
+        return
+    maps = value["Maps"]
+    path = "/Properties/Influences"
+    events = value["EventToIndex"]
+    by_index = {index: name for name, index in events.items() if type(index) is int}
+    if len(by_index) != len(events) or sorted(by_index) != list(range(len(maps))) or any(
+            type(maps[index]) is dict and maps[index].get("EventName", name) != name for index, name in by_index.items()):
+        raise error(f"{path}/EventToIndex", "EventToIndex must give each map's EventName its position in Maps "
+                    "(one entry per map).", f"{PREFIX}.InvalidInfluences")
+    for position, item in enumerate(maps):
+        if type(item) is not dict or type(item.get("Entries")) is not list or type(item.get("KeyToIndex")) is not dict:
+            continue
+        indices = sorted(index for index in item["KeyToIndex"].values() if type(index) is int)
+        if indices != list(range(len(item["Entries"]))):
+            raise error(f"{path}/Maps/{position}/KeyToIndex", "KeyToIndex must give each entry of Entries its position "
+                        "once (keyed by the entry's Source).", f"{PREFIX}.InvalidInfluences")
+
+
+class _ControlRigProperties(ik.RigProperties):
+    def check_owned(self, properties):
+        super().check_owned(properties)
+        if "Influences" in properties:
+            _check_influences(properties["Influences"])
+
+
 def _properties():
-    return ik.RigProperties(CLASS, BODY_OWNED, NOT_AUTHORED, PREFIX)
+    return _ControlRigProperties(CLASS, BODY_OWNED, NOT_AUTHORED, PREFIX)
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +183,7 @@ def validate_body(body):
         if type(variable) is not dict or type(variable.get("Name")) is not str or type(variable.get("Type")) is not str:
             raise error(where, "A variable is {Name, Type, Default?, ...}.", "ControlRig.InvalidBody")
         _check_renamed(variable, where)
+        _validate_variable_details(variable, where)
     for index, element in enumerate(body.get("Hierarchy", [])):
         where = f"{path}/Hierarchy/{index}"
         if type(element) is not dict or type(element.get("Type")) is not str or type(element.get("Name")) is not str:
@@ -158,6 +204,45 @@ def validate_body(body):
         _validate_container(graph, f"{path}/Graphs/{escape(name)}", "A graph")
     for name, function in body.get("Functions", {}).items():
         _validate_container(function, f"{path}/Functions/{escape(name)}", "A function")
+
+
+def _validate_variable_details(variable, where):
+    for key in ("ExposeOnSpawn", "Private"):
+        if key in variable and type(variable[key]) is not bool:
+            raise error(f"{where}/{key}", f"{key} is true or false.", "ControlRig.InvalidBody")
+    for key in VARIABLE_RANGES:
+        if key not in variable:
+            continue
+        bounds = variable[key]
+        if type(bounds) is not dict or any(bound not in ("Min", "Max") for bound in bounds) or any(
+                type(value) not in (int, float, str) for value in bounds.values()):
+            raise error(f"{where}/{key}", f"{key} is {{Min?, Max?}}, each a number (or the text the box holds); "
+                        "{} clears both.", "ControlRig.InvalidBody")
+
+
+def range_value(text):
+    """A Slider Range / Value Range bound as the document shows it: a number when the metadata text is one (and
+    writes back as the same text), else the text."""
+    try:
+        number = int(text)
+        if str(number) == text:
+            return number
+    except ValueError:
+        pass
+    try:
+        number = float(text)
+        if repr(number) == text:
+            return number
+    except ValueError:
+        pass
+    return text
+
+
+def range_text(value):
+    """The metadata text of an authored range bound."""
+    if type(value) is float:
+        return repr(value)
+    return str(value)
 
 
 def check_regions(body, rig_type):
@@ -242,6 +327,14 @@ def read_records(calls, detail="document"):
     return records
 
 
+def read_header(calls):
+    """The header record of rig.controlrig.read.v1 (its first page only)."""
+    records = calls.query(READ, {"offset": 0}).get("records", [])
+    if not records or records[0].get("kind") != "header":
+        raise error("/Body", f"{READ} returned no header.", "ControlRig.InvalidPrimitiveResult")
+    return records[0]
+
+
 def _container(body, scope):
     """The node container a record's scope names: ["Graphs", g] or ["Functions", f], then ["Nodes", n, "Collapse"]*."""
     container = body.setdefault(scope[0], {}).setdefault(scope[1], {"Nodes": {}})
@@ -281,7 +374,11 @@ def assemble(records):
     for record in records[1:]:
         kind = record.get("kind")
         if kind == "variable":
-            body["Variables"].append(record["entry"])
+            entry = record["entry"]
+            for key in VARIABLE_RANGES:
+                if type(entry.get(key)) is dict:
+                    entry[key] = {bound: range_value(text) for bound, text in entry[key].items()}
+            body["Variables"].append(entry)
         elif kind == "element":
             entry = record["entry"]
             body["Hierarchy"].append(entry)
@@ -360,11 +457,33 @@ def with_references(authored_body, live_body, references):
     return {**live_body, "Hierarchy": hierarchy}
 
 
-# Class Settings import sources. Duplicate-transient, so the generic Properties region does not admit them; the
-# profile reads them from rig.controlrig.read.v1's header and writes them with rig.controlrig.edit.v1 source_import.
+# Class Settings import sources. The profile reads them from rig.controlrig.read.v1's header and writes them with
+# rig.controlrig.edit.v1 source_import, before the hierarchy, instead of through the generic Properties write.
 # Imported bones without Transform are at the reference pose of SourceHierarchyImport, so it
 # belongs to the document.
 SOURCE_IMPORTS = {"SourceHierarchyImport": "source_hierarchy_import", "SourceCurveImport": "source_curve_import"}
+
+
+def components_by_element(header):
+    """{element key: ["Name (Type)", ...]} of the rig's hierarchy components (rig.controlrig.read.v1 header)."""
+    grouped = {}
+    for item in header.get("components", []):
+        if type(item) is dict and item.get("element"):
+            grouped.setdefault(item["element"], []).append(f"{item.get('name', '')} ({item.get('type', '')})")
+    return grouped
+
+
+def warn_components(body, header):
+    """A read warning at each Hierarchy element that has components: the document does not hold them."""
+    grouped = components_by_element(header)
+    if not grouped:
+        return
+    index = {_element_key(entry): position for position, entry in enumerate(body.get("Hierarchy", [])) if type(entry) is dict}
+    for key, components in grouped.items():
+        path = f"/Body/Hierarchy/{index[key]}" if key in index else "/Body/Hierarchy"
+        read_warning(path, "ControlRig.ComponentsNotAuthored",
+                     f"{key} has hierarchy components the document does not show: {', '.join(components)}. Apply keeps "
+                     "them while the element stays (a rename keeps them too); removing the element removes them.")
 
 
 def extract(target, read, context, include_defaults=True):
@@ -375,6 +494,7 @@ def extract_with_defaults(target, read, context, include_defaults=True):
     """The document and what its sparse read leaves out: the reference pose of imported bones without Transform and
     the complete pin types of template nodes (Diff compares authored values with them)."""
     body, facts = read_body(ik.RigCalls(context, read, prefix=PREFIX))
+    warn_components(body, facts["header"])
     properties = dict(_properties().extract(read, context, include_defaults))
     for name, field in SOURCE_IMPORTS.items():
         path = facts["header"].get(field, "")
@@ -422,9 +542,10 @@ def renamed(path, mine, theirs, changes, old_key=None):
     return {renames.get(name, name): entry for name, entry in theirs.items()}
 
 
-def _list_diff(path, authored, live, key, defaults, exact, changes, group=None, old_key=None):
+def _list_diff(path, authored, live, key, defaults, exact, changes, group=None, old_key=None, keep=()):
     """An ordered, identified list (complete state): entries by identity, then the order of the common ones (within
-    each ``group`` when given: the hierarchy lists elements depth first, so its order is the order of siblings)."""
+    each ``group`` when given: the hierarchy lists elements depth first, so its order is the order of siblings). An
+    entry that omits a ``keep`` field keeps the live one's."""
     mine, theirs = _keyed(authored, key), _keyed(live, key)
     theirs = renamed(path, mine, theirs, changes, old_key)
     for name in list(mine) + [name for name in theirs if name not in mine]:
@@ -435,6 +556,7 @@ def _list_diff(path, authored, live, key, defaults, exact, changes, group=None, 
             changes.append(Difference(where, DiffKind.REMOVE, False, None, True, theirs[name]))
         else:
             entry = {item: value for item, value in mine[name].items() if item != "RenamedFrom"}
+            entry.update({item: theirs[name][item] for item in keep if item not in entry and item in theirs[name]})
             ik.value_diff(where, entry, theirs[name], exact, changes, defaults)
     def grouped(entries):
         groups = {}
@@ -529,14 +651,37 @@ def _order_diff(path, authored, live, changes):
 
 def _container_diff(path, authored, live, defaults, exact, changes):
     skip = ("Nodes", "RenamedFrom", "Order", "Entry", "Return")
-    mine = {key: _without_renames(value) if key in ("Inputs", "Outputs", "LocalVariables") else value
+    mine = {key: _without_renames(_with_live_labels(value, live.get(key)) if key in ("Inputs", "Outputs") else value)
+            if key in ("Inputs", "Outputs", "LocalVariables") else value
             for key, value in authored.items() if key not in skip}
+    if "PinCategories" in mine:
+        mine["PinCategories"] = crg.pin_categories(mine["PinCategories"])
+    if "Variant" in mine:
+        mine["Variant"] = {"Tags": crg.variant_tags(mine)} if crg.variant_tags(mine) else {}
     theirs = {key: value for key, value in live.items() if key not in skip and (key in mine or key not in CONTAINER_KEEP)}
     ik.value_diff(path, mine, theirs, exact, changes, defaults)
     for name in ("Entry", "Return"):
         if type(authored.get(name)) is dict:
             _node_diff(f"{path}/{name}", authored[name], live.get(name) or {}, exact, changes)
     _nodes_diff(f"{path}/Nodes", authored.get("Nodes", {}), live.get("Nodes", {}), exact, changes)
+
+
+def _with_live_labels(pins, live_pins):
+    """Authored pins with the live DisplayName of each pin that omits it (an omitted label keeps the rig's; "" and the
+    pin's own name are no label, as the read leaves them out)."""
+    if type(pins) is not list:
+        return pins
+    labels = {pin.get("Name"): pin["DisplayName"] for pin in live_pins or [] if type(pin) is dict and "DisplayName" in pin}
+    out = []
+    for pin in pins:
+        if type(pin) is dict and pin.get("DisplayName") in ("", pin.get("Name")):
+            pin = {key: value for key, value in pin.items() if key != "DisplayName"}
+        elif type(pin) is dict and "DisplayName" not in pin:
+            label = labels.get(pin.get("RenamedFrom")) if pin.get("RenamedFrom") in labels else labels.get(pin.get("Name"))
+            if label is not None:
+                pin = dict(pin, DisplayName=label)
+        out.append(pin)
+    return out
 
 
 def _containers_diff(path, authored, live, defaults, exact, changes):
@@ -568,10 +713,10 @@ def body_diff(authored, live, exact):
                       changes, modular.SETTINGS_DEFAULTS)
     if "Variables" in authored:
         _list_diff(f"{path}/Variables", authored["Variables"], live.get("Variables", []), lambda item: item.get("Name", ""),
-                   VARIABLE_DEFAULTS, exact, changes)
+                   VARIABLE_DEFAULTS, exact, changes, keep=VARIABLE_KEEP)
     if "Hierarchy" in authored:
-        _list_diff(f"{path}/Hierarchy", authored["Hierarchy"], live.get("Hierarchy", []), _element_key, {}, exact, changes,
-                   group=_first_parent, old_key=lambda entry, old: f"{entry.get('Type', '')}({old})")
+        _list_diff(f"{path}/Hierarchy", authored["Hierarchy"], live.get("Hierarchy", []), _element_key, ELEMENT_DEFAULTS, exact,
+                   changes, group=_first_parent, old_key=lambda entry, old: f"{entry.get('Type', '')}({old})", keep=ELEMENT_KEEP)
     if "Modules" in authored:
         _list_diff(f"{path}/Modules", authored["Modules"], live.get("Modules", []), lambda item: item.get("Name", ""),
                    MODULE_DEFAULTS, exact, changes, group=lambda item: item.get("Parent", ""))
@@ -657,7 +802,9 @@ def inspect_payload(document, calls):
                "GlobalTransforms": facts["globals"], "Shapes": found.get("shapes", []),
                "PublicFunctions": found.get("public_functions", []), "Events": found.get("events", [])}
     if header.get("skipped"):
-        payload["Skipped"] = header["skipped"]
+        payload["Skipped"] = dict(header["skipped"])
+        if components_by_element(header):
+            payload["Skipped"]["ComponentsByElement"] = components_by_element(header)
     if "modular" in found:
         modular_facts = found["modular"]
         # Suggestions only (never applied implicitly): copy AutoConnect into Body.Connections to accept it. Candidates

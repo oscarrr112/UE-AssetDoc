@@ -192,14 +192,18 @@ TOptional<FAssetDocumentPreparedTargetDecision> PrepareAssetDocumentRuntimeTarge
 	FAssetDocumentPreparedTargetDecision Result;
 	Result.Activation = Activation; Result.RequestId = Request.RequestId;
 	Result.RuntimeRevision = Request.ExpectedRuntimeRevision; Result.TargetPath = Request.TargetAssetPath;
-	if (!Exact(Activation.ExactAssetClassPath, Request.RequestedAssetClassPath) || !Request.RequestId.IsValid()
+	// A Blueprint subclass routed to its ancestor's profile names that profile's class (RequestedProfileClassPath);
+	// the target itself is still resolved as an asset of its own exact class.
+	const bool bRouted = !Request.RequestedProfileClassPath.IsEmpty()
+		&& Exact(Activation.ExactAssetClassPath, Request.RequestedProfileClassPath);
+	if ((!bRouted && !Exact(Activation.ExactAssetClassPath, Request.RequestedAssetClassPath)) || !Request.RequestId.IsValid()
 		|| Request.ExpectedRuntimeRevision == 0 || !String(Field(Request.CanonicalDocument, TEXT("Action")), Result.Action))
 	{ Fail(OutDiagnostics, TEXT("GenericRuntime.TargetActivationInvalid")); return {}; }
 	// Reject policy/action before even resolving the target.
 	if (Activation.TargetPolicy == EAssetDocumentRuntimeTargetPolicy::UpdateOnly && !Exact(Result.Action, TEXTVIEW("Update")))
 	{ Fail(OutDiagnostics, TEXT("GenericRuntime.UpdateOnlyActionRequired")); return {}; }
 	bool bExists = false;
-	if (!ResolveExists(Result.TargetPath, Activation.ExactAssetClassPath, bExists))
+	if (!ResolveExists(Result.TargetPath, Request.RequestedAssetClassPath, bExists))
 	{ Fail(OutDiagnostics, TEXT("GenericRuntime.TargetActivationInvalid")); return {}; }
 	const auto Decision = SelectAssetDocumentRuntimeTargetDecision(Activation.TargetPolicy, Result.Action, bExists, OutDiagnostics);
 	if (!Decision.IsSet()) return {};

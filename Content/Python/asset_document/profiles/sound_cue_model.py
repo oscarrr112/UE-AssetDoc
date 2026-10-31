@@ -34,6 +34,7 @@ from __future__ import annotations
 import math
 from types import MappingProxyType
 
+from asset_document import markers
 from asset_document.diagnostics import AssetDocumentContractError, DiagnosticSeverity, RuntimeDiagnostic
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.graphs.executor import graph_requirements
@@ -477,10 +478,13 @@ def wanted_defaults(body):
 
 
 def read_live(calls):
-    """(live cue, Body, read result) of the cue; the class defaults of its nodes are cached on the way."""
+    """(live cue, Body, read result) of the cue; the class defaults of its nodes are cached on the way. A node property
+    value the document has no form for (an instanced subobject) is a marker and gives a read warning."""
     live = calls.live()
     body = extract_body(live)
     ensure_defaults(calls, wanted_defaults(body))
+    for key, node in body["Nodes"].items():
+        markers.warn_all(node.get("Properties", {}), PREFIX, f"/Body/Nodes/{escape(key)}/Properties")
     return live, body
 
 
@@ -504,7 +508,11 @@ def _properties_diff(changes, path, authored, live, defaults, exact):
     current one (graph.node.property.set.v1 decodes only the members it lists), so it compares with the live value in
     its shape."""
     for name in list(authored) + [name for name in live if name not in authored]:
+        if name not in authored and markers.is_marker(live.get(name)):
+            continue  # an omitted marked value is kept
         default = defaults.get(name, _MISSING) if defaults is not None else _MISSING
+        if markers.is_marker(default) and name not in authored:
+            continue  # the default holds content the document has no form for: omitted keeps the value
         left = authored.get(name, default)
         right = live.get(name, default)
         if name in authored and right is not _MISSING:

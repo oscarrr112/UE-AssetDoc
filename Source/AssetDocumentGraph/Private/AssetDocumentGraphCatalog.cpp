@@ -87,7 +87,7 @@ TArray<FAssetDocumentPrimitiveDescriptor> BuildDescriptors()
 		MakeDescriptor(TEXT("graph.pin.default.set.v1"), true, TEXT("UEdGraphSchema::TrySetDefaultValue;UEdGraphSchema::TrySetDefaultObject;UEdGraphSchema::TrySetDefaultText")),
 		MakeDescriptor(TEXT("graph.node.property.get.v1"), false, TEXT("TFieldIterator<FProperty>")),
 		MakeDescriptor(TEXT("graph.node.property.set.v1"), true, TEXT("UObject::PreEditChange;UObject::PostEditChangeProperty")),
-		MakeDescriptor(TEXT("graph.node.layout.set.v1"), true, TEXT("UEdGraphNode::NodePosX;UEdGraphNode::ResizeNode;UEdGraphNode::OnUpdateCommentText")),
+		MakeDescriptor(TEXT("graph.node.layout.set.v1"), true, TEXT("UEdGraphNode::NodePosX;UEdGraphNode::ResizeNode;UEdGraphNode::OnUpdateCommentText;UEdGraphNode::SetEnabledState;UEdGraphNode::MakeAutomaticallyPlacedGhostNode")),
 		MakeDescriptor(TEXT("graph.node.rename.v1"), true, TEXT("UEdGraphNode::OnRenameNode;UEdGraphNode::MakeNameValidator")),
 		MakeDescriptor(TEXT("graph.node.user_pins.set.v1"), true, TEXT("UK2Node_EditablePinBase::CreateUserDefinedPin;UK2Node_EditablePinBase::RemoveUserDefinedPinByName")),
 		MakeDescriptor(TEXT("graph.node.dynamic_pin.add.v1"), true, TEXT("IK2Node_AddPinInterface::AddInputPin")),

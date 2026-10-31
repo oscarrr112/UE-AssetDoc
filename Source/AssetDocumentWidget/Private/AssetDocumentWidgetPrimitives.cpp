@@ -9,8 +9,9 @@
 //
 // DTOs (all carry "schema_version": 1):
 //   umg.tree.query.v1          {offset?, limit?, defaults?} -> {root, total, next_offset, widgets[]; at offset 0 also
-//                                bindings[], inherited_named_slots[], desired_focus, palette_category,
-//                                design_size{mode, width, height}}
+//                                bindings[], inherited_named_slots[], detached[] (widgets out of the tree, not
+//                                placed again), desired_focus, palette_category,
+//                                design_size{mode, width, height}, extensions[]{class, lists{path: count}}}
 //                               widget: {name, class, parent, slot_name, index, is_variable, capacity, named_slots[],
 //                                properties{}, slot_class, slot{}, navigation{}; with defaults: true also
 //                                property_defaults{}, slot_defaults{} (the Designer values at their class default)}
@@ -24,7 +25,7 @@
 //   umg.widget.variable.set.v1 {name, is_variable}
 //   umg.widget.property.set.v1 {name, target: "widget"|"slot", property, value? | reset: true}
 //   umg.widget.navigation.set.v1 {name, navigation: {Up|Down|Left|Right|Next|Previous: {rule, widget_to_focus?},
-//                                routing_policy?}}
+//                                routing_policy?, navigation_method?: {struct ("" clears), properties?}}}
 //   umg.binding.set.v1         {widget, property, kind: "Function"|"Property", function? | source_path[]?}
 //   umg.binding.remove.v1      {widget, property}
 //   umg.desired_focus.set.v1   {widget}          ("" clears)
@@ -40,6 +41,7 @@
 #include "AssetDocumentWidgetRawEdits.h"
 
 #include "Animation/WidgetAnimation.h"
+#include "Blueprint/BlueprintExtension.h"
 #include "Blueprint/UserWidget.h"
 #include "WidgetBlueprintEditorUtils.h"
 #include "Blueprint/WidgetNavigation.h"
@@ -53,7 +55,10 @@
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/Kismet2NameValidators.h"
 #include "Misc/PackageName.h"
+#include "StructUtils/InstancedStruct.h"
 #include "UObject/Package.h"
+#include "UObject/StructOnScope.h"
+#include "UObject/UObjectIterator.h"
 #include "UObject/UnrealType.h"
 #include "WidgetBlueprint.h"
 
@@ -288,6 +293,37 @@ FWidgetNavigationData& Direction(UWidgetNavigation& Navigation, int32 Index)
 	return *Data[Index];
 }
 
+// The widget's custom navigation method (Details: Navigation > Navigation Method), a TInstancedStruct read through its
+// reflected FInstancedStruct.
+FInstancedStruct* WidgetPrimitivesNavigationMethod(UWidgetNavigation& Navigation)
+{
+	const FStructProperty* Property = FindFProperty<FStructProperty>(UWidgetNavigation::StaticClass(), TEXT("NavigationMethod"));
+	return Property != nullptr && Property->Struct == FInstancedStruct::StaticStruct()
+		? Property->ContainerPtrToValuePtr<FInstancedStruct>(&Navigation) : nullptr;
+}
+
+// {struct, properties{}}: the method's struct and its Details values that differ from a new one's.
+FValue WidgetPrimitivesEncodeNavigationMethod(const FInstancedStruct& Method)
+{
+	const UScriptStruct* Struct = Method.GetScriptStruct();
+	FStructOnScope Fresh(Struct);
+	FObjectBuilder Values;
+	for (TFieldIterator<FProperty> It(Struct); It; ++It)
+	{
+		const FProperty* Property = *It;
+		if (!Property->HasAnyPropertyFlags(CPF_Edit) || Property->HasAnyPropertyFlags(CPF_Deprecated))
+		{
+			continue;
+		}
+		const void* Value = Property->ContainerPtrToValuePtr<void>(Method.GetMemory());
+		if (!Property->Identical(Value, Property->ContainerPtrToValuePtr<void>(Fresh.GetStructMemory())))
+		{
+			Values.Add(Property->GetName(), EncodePropertyValue(*Property, Value));
+		}
+	}
+	return FObjectBuilder().AddString(TEXT("struct"), Struct->GetPathName()).Add(TEXT("properties"), Values.Build()).Build();
+}
+
 FValue EncodeNavigation(UWidgetNavigation& Navigation)
 {
 	FObjectBuilder Builder;
@@ -311,9 +347,10 @@ FValue EncodeNavigation(UWidgetNavigation& Navigation)
 		Builder.AddString(TEXT("routing_policy"),
 			StaticEnum<EWidgetNavigationRoutingPolicy>()->GetNameStringByValue(static_cast<int64>(Navigation.RoutingPolicy)));
 	}
-	if (Navigation.NavigationMethod.IsValid())
+	const FInstancedStruct* Method = WidgetPrimitivesNavigationMethod(Navigation);
+	if (Method != nullptr && Method->IsValid())
 	{
-		Builder.AddString(TEXT("navigation_method"), Navigation.NavigationMethod.GetScriptStruct()->GetPathName());
+		Builder.Add(TEXT("navigation_method"), WidgetPrimitivesEncodeNavigationMethod(*Method));
 	}
 	return Builder.Build();
 }
@@ -399,6 +436,55 @@ struct FRow
 	int32 Index = 0;
 };
 
+// The non-empty lists an editor extension saved on the Blueprint holds (a View Model extension's bindings and
+// view models, a UI Components extension's components), on the extension and on the objects it owns, by property
+// path: "BlueprintView.Bindings" -> 3.
+void WidgetPrimitivesCountExtensionLists(UObject& Object, const FString& Prefix, const UObject& Owner, int32 Depth, FObjectBuilder& OutCounts)
+{
+	for (TFieldIterator<FProperty> It(Object.GetClass()); It; ++It)
+	{
+		const FProperty* Property = *It;
+		if (Property->HasAnyPropertyFlags(CPF_Transient | CPF_Deprecated))
+		{
+			continue;
+		}
+		const FString Path = Prefix + Property->GetName();
+		if (const FArrayProperty* Array = CastField<FArrayProperty>(Property))
+		{
+			FScriptArrayHelper Items(Array, Array->ContainerPtrToValuePtr<void>(&Object));
+			if (Items.Num() > 0)
+			{
+				OutCounts.AddInt(Path, Items.Num());
+			}
+			continue;
+		}
+		const FObjectProperty* Reference = CastField<FObjectProperty>(Property);
+		UObject* Held = Reference != nullptr ? Reference->GetObjectPropertyValue_InContainer(&Object) : nullptr;
+		if (Held != nullptr && Depth < 2 && Held->IsIn(&Owner))
+		{
+			WidgetPrimitivesCountExtensionLists(*Held, Path + TEXT("."), Owner, Depth + 1, OutCounts);
+		}
+	}
+}
+
+// The editor extensions saved on the Blueprint (View Model bindings, UI Components): {class, lists{path: count}}.
+FValue WidgetPrimitivesEncodeExtensions(const UWidgetBlueprint& Blueprint)
+{
+	TArray<FValue> Rows;
+	for (const TObjectPtr<UBlueprintExtension>& Extension : Blueprint.GetExtensions())
+	{
+		if (Extension == nullptr)
+		{
+			continue;
+		}
+		FObjectBuilder Counts;
+		WidgetPrimitivesCountExtensionLists(*Extension, FString(), *Extension, 0, Counts);
+		Rows.Add(FObjectBuilder().AddString(TEXT("class"), Extension->GetClass()->GetPathName())
+			.Add(TEXT("lists"), Counts.Build()).Build());
+	}
+	return MakeArray(MoveTemp(Rows));
+}
+
 void CollectRows(UWidget& Widget, const FString& Parent, FName SlotName, int32 Index, TArray<FRow>& OutRows)
 {
 	OutRows.Add({&Widget, Parent, SlotName, Index});
@@ -453,7 +539,7 @@ bool HandleTreeQuery(FCall& Call, FObjectBuilder& Result)
 	if (Offset == 0)
 	{
 		TArray<FDelegateEditorBinding> Sorted = Blueprint->Bindings;
-		Sorted.Sort([](const FDelegateEditorBinding& A, const FDelegateEditorBinding& B)
+		Sorted.StableSort([](const FDelegateEditorBinding& A, const FDelegateEditorBinding& B)
 		{
 			return A.ObjectName != B.ObjectName ? A.ObjectName < B.ObjectName : A.PropertyName.LexicalLess(B.PropertyName);
 		});
@@ -474,9 +560,16 @@ bool HandleTreeQuery(FCall& Call, FObjectBuilder& Result)
 			}
 		}
 		Result.Add(TEXT("inherited_named_slots"), MakeStringArray(Inherited));
+		TArray<FString> Detached;
+		for (const UWidget* Widget : Raw::GetDetachedWidgets(*Blueprint))
+		{
+			Detached.Add(Widget->GetName());
+		}
+		Result.Add(TEXT("detached"), MakeStringArray(Detached));
 		const FName Focus = DesiredFocus(*Blueprint);
 		Result.AddString(TEXT("desired_focus"), Focus.IsNone() ? FString() : Focus.ToString());
 		Result.AddString(TEXT("palette_category"), Raw::GetPaletteCategory(*Blueprint));
+		Result.Add(TEXT("extensions"), WidgetPrimitivesEncodeExtensions(*Blueprint));
 		Raw::FDesignSize Size;
 		if (Raw::GetDesignSize(*Blueprint, Size))
 		{
@@ -616,9 +709,13 @@ bool HandleTreeAdd(FCall& Call, FObjectBuilder& Result)
 		Widget->Rename(nullptr, GetTransientPackage());
 		return Call.Args.Fail(TEXT("Widget.InvalidPlacement"), Error, Parent != nullptr ? TEXT("parent") : TEXT("slot_name"));
 	}
-	// UEditorUtilityLibrary::AddSourceWidget / palette drop.
-	Blueprint->OnVariableAdded(Widget->GetFName());
-	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	// UEditorUtilityLibrary::AddSourceWidget / palette drop. A widget that replaces a removed one of the
+	// same name (keep_references) takes over its variable GUID, as the editor's Replace With does.
+	if (!Blueprint->WidgetVariableNameToGuidMap.Contains(Widget->GetFName()))
+	{
+		Blueprint->OnVariableAdded(Widget->GetFName());
+	}
+	Raw::MarkStructurallyModified(*Blueprint);
 	Result.AddString(TEXT("name"), Widget->GetName());
 	return true;
 }
@@ -645,10 +742,12 @@ bool HandleTreeMove(FCall& Call, FObjectBuilder& Result)
 		{
 			return Call.Args.Fail(TEXT("Graph.InvalidArgument"), TEXT("detach takes no placement."), TEXT("detach"));
 		}
+		// The widget stays in the Blueprint, out of the tree, until a later move places it again; the
+		// Blueprint compiles once the tree is whole (Raw::MarkStructurallyModified).
 		Blueprint->WidgetTree->Modify();
 		if (Raw::Detach(*Blueprint, *Widget))
 		{
-			FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+			Raw::MarkStructurallyModified(*Blueprint);
 		}
 		return true;
 	}
@@ -665,7 +764,7 @@ bool HandleTreeMove(FCall& Call, FObjectBuilder& Result)
 	{
 		return Call.Args.Fail(TEXT("Widget.InvalidPlacement"), Error, Parent != nullptr ? TEXT("parent") : TEXT("slot_name"));
 	}
-	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	Raw::MarkStructurallyModified(*Blueprint);
 	return true;
 }
 
@@ -685,7 +784,7 @@ bool HandleTreeRemove(FCall& Call, FObjectBuilder& Result)
 		return false;
 	}
 	Raw::DeleteWidget(*Blueprint, *Widget, bKeepReferences);
-	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	Raw::MarkStructurallyModified(*Blueprint);
 	return true;
 }
 
@@ -944,7 +1043,8 @@ bool HandleNavigationSet(FCall& Call, FObjectBuilder& Result)
 		return false;
 	}
 	FReader Reader = Call.Args.Child(TEXT("navigation"), *Navigation);
-	if (!Reader.OnlyFields({TEXT("Up"), TEXT("Down"), TEXT("Left"), TEXT("Right"), TEXT("Next"), TEXT("Previous"), TEXT("routing_policy")}))
+	if (!Reader.OnlyFields({TEXT("Up"), TEXT("Down"), TEXT("Left"), TEXT("Right"), TEXT("Next"), TEXT("Previous"), TEXT("routing_policy"),
+		TEXT("navigation_method")}))
 	{
 		return false;
 	}
@@ -995,6 +1095,62 @@ bool HandleNavigationSet(FCall& Call, FObjectBuilder& Result)
 		}
 		Policy = static_cast<EWidgetNavigationRoutingPolicy>(PolicyValue);
 	}
+	// navigation_method: {struct, properties?} picks the Navigation Method and sets its Details values (the others at a
+	// new one's); {struct: ""} clears it; absent keeps it.
+	const FValue* MethodValue = nullptr;
+	if (!Reader.Object(TEXT("navigation_method"), MethodValue, false))
+	{
+		return false;
+	}
+	bool bSetMethod = false;
+	FInstancedStruct NewMethod;
+	if (MethodValue != nullptr)
+	{
+		FReader MethodReader = Reader.Child(TEXT("navigation_method"), *MethodValue);
+		FString StructPath;
+		const FValue* Values = nullptr;
+		if (!MethodReader.OnlyFields({TEXT("struct"), TEXT("properties")}) || !MethodReader.String(TEXT("struct"), StructPath, false)
+			|| !MethodReader.Object(TEXT("properties"), Values, false))
+		{
+			return false;
+		}
+		bSetMethod = true;
+		if (!StructPath.IsEmpty())
+		{
+			const UScriptStruct* Base = FindObject<UScriptStruct>(nullptr, TEXT("/Script/SlateCore.NavigationMethod"));
+			const UScriptStruct* Struct = FindObject<UScriptStruct>(nullptr, *StructPath);
+			if (Struct == nullptr || Base == nullptr || Struct == Base || !Struct->IsChildOf(Base))
+			{
+				TArray<FString> Offered;
+				for (TObjectIterator<UScriptStruct> It; It; ++It)
+				{
+					if (Base != nullptr && *It != Base && It->IsChildOf(Base))
+					{
+						Offered.Add(It->GetPathName());
+					}
+				}
+				Offered.Sort();
+				return MethodReader.Fail(TEXT("Widget.InvalidNavigation"), FString::Printf(
+					TEXT("'%s' is not a navigation method. Methods: %s."), *StructPath, *FString::Join(Offered, TEXT(", "))), TEXT("struct"));
+			}
+			NewMethod.InitializeAs(Struct);
+			for (int32 Index = 0; Values != nullptr && Index < Values->ObjectKeys.Num(); ++Index)
+			{
+				const FString& FieldName = Values->ObjectKeys[Index];
+				const FProperty* Property = Struct->FindPropertyByName(FName(*FieldName));
+				if (Property == nullptr || !Property->HasAnyPropertyFlags(CPF_Edit) || Property->HasAnyPropertyFlags(CPF_Deprecated))
+				{
+					return MethodReader.Fail(TEXT("Widget.InvalidNavigation"), FString::Printf(
+						TEXT("%s has no editable property '%s'."), *Struct->GetName(), *FieldName), TEXT("properties"));
+				}
+				FString DecodeError;
+				if (!DecodeValue(*Property, Property->ContainerPtrToValuePtr<void>(NewMethod.GetMutableMemory()), Values->Elements[Index], DecodeError))
+				{
+					return MethodReader.Fail(TEXT("Widget.InvalidNavigation"), DecodeError, TEXT("properties"));
+				}
+			}
+		}
+	}
 	// FWidgetNavigationCustomization::SetNav.
 	Widget->SetFlags(RF_Transactional);
 	Widget->Modify();
@@ -1012,6 +1168,11 @@ bool HandleNavigationSet(FCall& Call, FObjectBuilder& Result)
 		Data.WidgetToFocus = Targets[Index];
 	}
 	WidgetNavigation->RoutingPolicy = Policy;
+	FInstancedStruct* Method = WidgetPrimitivesNavigationMethod(*WidgetNavigation);
+	if (bSetMethod && Method != nullptr)
+	{
+		*Method = MoveTemp(NewMethod);
+	}
 	Widget->Navigation = WidgetNavigation->IsDefaultNavigation() ? nullptr : WidgetNavigation;
 	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
 	return true;
@@ -1357,14 +1518,30 @@ bool HandleBindingSet(FCall& Call, FObjectBuilder& Result)
 		for (int32 Index = 0; Index < Path->Elements.Num(); ++Index)
 		{
 			const FValue& Segment = Path->Elements[Index];
-			FProperty* Property = Container != nullptr && Segment.Kind == EAssetDocumentRuntimeValueKind::String
-				? FindFProperty<FProperty>(Container, FName(*Segment.StringValue)) : nullptr;
-			if (Property == nullptr)
+			const FName SegmentName = Segment.Kind == EAssetDocumentRuntimeValueKind::String ? FName(*Segment.StringValue) : NAME_None;
+			FProperty* Property = Container != nullptr && !SegmentName.IsNone() ? FindFProperty<FProperty>(Container, SegmentName) : nullptr;
+			// A function segment, as the Bind menu offers it (SPropertyBinding::ForEachBindableFunction): a pure Blueprint-callable
+			// function with no parameters, read through its return value.
+			UClass* OwnerClass = Cast<UClass>(Container);
+			UFunction* Function = Property == nullptr && OwnerClass != nullptr && !SegmentName.IsNone()
+				? OwnerClass->FindFunctionByName(SegmentName) : nullptr;
+			const bool bBindableFunction = Function != nullptr && Function->HasAnyFunctionFlags(FUNC_Const | FUNC_BlueprintPure)
+				&& UEdGraphSchema_K2::CanUserKismetCallFunction(Function) && Function->NumParms == 1 && Function->GetReturnProperty() != nullptr;
+			if (Property == nullptr && !bBindableFunction)
 			{
-				return Call.Args.Fail(TEXT("Widget.InvalidBindingSourcePath"), FString::Printf(TEXT("source_path[%d] '%s' is not a member of %s."), Index,
+				return Call.Args.Fail(TEXT("Widget.InvalidBindingSourcePath"), FString::Printf(
+					TEXT("source_path[%d] '%s' is not a member of %s nor a pure function of it without parameters."), Index,
 					*Segment.StringValue, *GetNameSafe(Container)), TEXT("source_path"));
 			}
-			Chain.Add(FFieldVariant(Property));
+			if (Property == nullptr)
+			{
+				Chain.Add(FFieldVariant(Function));
+				Property = Function->GetReturnProperty();
+			}
+			else
+			{
+				Chain.Add(FFieldVariant(Property));
+			}
 			const FStructProperty* Struct = CastField<FStructProperty>(Property);
 			const FObjectPropertyBase* Object = CastField<FObjectPropertyBase>(Property);
 			Container = Struct != nullptr ? static_cast<UStruct*>(Struct->Struct) : Object != nullptr ? static_cast<UStruct*>(Object->PropertyClass) : nullptr;

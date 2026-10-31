@@ -3,11 +3,18 @@
 
 """Pure reconciliation: desired GraphDocs + live snapshot -> ordered primitive plan.
 
-Node matching order: NodeGuid -> implicit role -> adapter semantic key (when
-unique among unmatched on both sides, or in order where the adapter says nodes
-sharing the key are told apart by their order) -> spawn.  Editor ghost nodes
-(``extras.ghost``) are never removed; a desired node matched to one is reused
-(linking or re-spawning the same event makes it real, contract section 4).
+Node matching order: NodeGuid -> implicit role -> the document Id a live node
+was last applied with (an adapter that ``keeps_authored_ids``; same action
+required) -> adapter semantic key (when unique among unmatched on both sides, or
+in order where the adapter says nodes sharing the key are told apart by their
+order; an animation getter key without its source names the one live getter of
+that function) -> spawn.  A spawn that replaces a removed live node of the same
+action is reported as a warning (``Plan.warnings``): what the document does not
+hold of that node (enabled state, Details values) is not carried over.  Editor ghost nodes
+(``extras.ghost``, the disabled placeholders of a new Blueprint's default events) are nodes like any other: an
+unlisted one is removed.  A desired node marked ``Ghost`` keeps the ghost it matches as it is (or makes the node it
+places or matches a ghost); a desired real node matched to one reuses it (linking or re-spawning the same event makes it
+real, contract section 4).
 
 Operation order (contract section 3/8):
   graph.create/rename + signatures (user_pins, function flags) for every graph
@@ -31,12 +38,15 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Mapping
 
-from asset_document.diagnostics import AssetDocumentContractError, contract_error
+from asset_document import text_forms
+from asset_document.diagnostics import AssetDocumentContractError, DiagnosticSeverity, RuntimeDiagnostic, contract_error
 from asset_document.diff.semantic_compare import number_text, same_scalar_text
-from asset_document.graphs.actions import action_kind, actions_equal, split_disambiguator
+from asset_document.graphs.actions import (
+    action_kind, actions_equal, getter_without_source, names_factory_class, omits_getter_source, split_disambiguator,
+)
 from asset_document.graphs.layout import live_positions
 from asset_document.graphs.live import LiveAsset, LiveGraph, LiveNode
-from asset_document.graphs.model import GraphDoc, LinkDoc, NodeDoc, Position, UserPin, thaw_json
+from asset_document.graphs.model import ENABLED_STATES, GraphDoc, LinkDoc, NodeDoc, Position, UserPin, thaw_json
 from asset_document.graphs.schemas import GENERIC_ADAPTER, SchemaAdapter
 
 
@@ -60,6 +70,8 @@ class Plan:
     graphs: tuple[GraphDoc, ...]
     node_bindings: Mapping[tuple[str, str], str]
     graph_bindings: Mapping[str, str]
+    # Warnings the apply reports (nodes the plan replaces by a new node of the same action).
+    warnings: tuple[RuntimeDiagnostic, ...] = ()
 
     @property
     def empty(self) -> bool:
@@ -85,6 +97,16 @@ class _NodeMatch:
     matched: dict[str, LiveNode]      # doc node id -> live node
     surplus: list[LiveNode]           # live nodes to remove
     pseudo: dict[str, str]            # live guid -> pseudo id for unmatched implicit nodes
+    # doc node id -> key of the live getter its NodeGuid names, for a getter the document moves to another source
+    switched: dict[str, str] = field(default_factory=dict)
+
+
+def _moves_getter_source(desired: str | None, live: str | None) -> bool:
+    """Whether ``desired`` is the animation getter ``live`` names, read from another source."""
+    if desired is None or live is None or "#" in desired:
+        return False
+    function = getter_without_source(desired)
+    return function is not None and function == getter_without_source(live) and not actions_equal(desired, live)
 
 
 def _loose_pin_name(node: LiveNode | None, name: str, direction: str | None) -> str | None:
@@ -136,6 +158,7 @@ class _Planner:
         # Links broken before a signature change removes their pin: (from guid, pin, to guid, pin), casefolded.
         self.broken_early: set[tuple[str, str, str, str]] = set()
         self._keys: frozenset[str] | None = None
+        self.warnings: list[RuntimeDiagnostic] = []
 
     # Graph level -------------------------------------------------------
     def match_graphs(self, docs: tuple[GraphDoc, ...], candidates: tuple[LiveGraph, ...],
@@ -201,6 +224,8 @@ class _Planner:
         children = self.live.children(live.guid) if live is not None else ()
         pairs, surplus = self.match_graphs(doc.subgraphs, children, doc)
         for child, found in pairs:
+            if found is not None and child.owner is not None and self._follows_settings(doc, child, live):
+                found = None  # the owner's settings give it another subgraph: matched once they are set
             if found is None and child.owner is not None:
                 # Owned subgraphs appear when their owner node is spawned; plan them after execution.
                 self.body.append(PlanOp("graph.subgraph.sync", child.id, child.path,
@@ -217,6 +242,12 @@ class _Planner:
             if graph.owner_node_guid is None and graph.can("remove"):
                 self.removals.append(PlanOp("graph.remove", doc.id, f"{doc.path}/Subgraphs",
                                             {"graph_guid": graph.guid, "name": graph.name}))
+
+    def _follows_settings(self, doc: GraphDoc, child: GraphDoc, live: LiveGraph | None) -> bool:
+        node = next((item for item in doc.nodes if item.id == child.owner), None)
+        guid = self.node_bindings.get((doc.id, child.owner))
+        owner = next((item for item in live.nodes if item.guid == guid), None) if live is not None and guid else None
+        return node is not None and self.adapter.owned_subgraph_follows_settings(node, owner)
 
     # Signatures --------------------------------------------------------
     def signature(self, doc: GraphDoc, live: LiveGraph | None) -> None:
@@ -275,7 +306,8 @@ class _Planner:
         return replace(doc, nodes=tuple(nodes)) if tuple(nodes) != doc.nodes else doc
 
     def _flags(self, doc: GraphDoc, entry: LiveNode | None, path: str) -> None:
-        """A present Signature states every flag: omitted flags mean the schema default."""
+        """A present Signature states every flag: omitted flags mean the schema default, except the flags the
+        schema keeps when omitted."""
         wanted = thaw_json(doc.signature.flags)
         defaults = self.adapter.signature_flag_defaults(doc.role)
         if defaults is None:
@@ -283,7 +315,13 @@ class _Planner:
                 raise contract_error(path, "Graph.InvalidSignature",
                                      f"{doc.role} graphs have no function flags ({', '.join(sorted(wanted))}).")
             return
-        desired = {**defaults, **wanted}
+        foreign = sorted(set(wanted) - set(defaults))
+        if foreign:
+            raise contract_error(path, "Graph.InvalidSignature",
+                                 f"{doc.role} graphs have no {', '.join(foreign)} flag; they state "
+                                 f"{', '.join(sorted(defaults))}.")
+        kept = self.adapter.signature_flags_kept(doc.role)
+        desired = {**{key: value for key, value in defaults.items() if key not in kept}, **wanted}
         current = dict(defaults)  # a graph created by this plan starts with default flags
         if entry is not None:
             current.update(self.adapter.signature_flags(entry))
@@ -344,11 +382,18 @@ class _Planner:
         candidates = list(live.nodes) if live else []
         matched: dict[str, LiveNode] = {}
         taken: set[str] = set()
+        switched: dict[str, str] = {}
         actions = {node.id: self.action(node, doc.node_path(node.id)) for node in doc.nodes}
 
         def take(node_id: str, found: LiveNode) -> None:
             matched[node_id] = found
             taken.add(found.guid)
+
+        def names(node_id: str, found: LiveNode) -> bool:
+            """The document node's action names the live node's (any action when the node states none)."""
+            action = actions[node_id]
+            return (action is None or actions_equal(action, found.action_key)
+                    or names_factory_class(action, found.action_key) or omits_getter_source(action, found.action_key))
 
         for node in doc.nodes:
             if node.guid is None:
@@ -364,9 +409,13 @@ class _Planner:
                     raise contract_error(f"{doc.node_path(node.id)}/NodeGuid", "Graph.NodeNotFound",
                                          "No live node has this NodeGuid and the node has no Action to recreate it.")
                 continue
-            if (actions[node.id] is None or actions_equal(actions[node.id], found.action_key)) \
-                    and self.adapter.node_matches_live(node, found) and self.adapter.pin_types_fit(node, found):
+            if names(node.id, found) and self.adapter.node_matches_live(node, found) \
+                    and self.adapter.pin_types_fit(node, found):
                 take(node.id, found)
+            elif _moves_getter_source(actions[node.id], found.action_key):
+                # The document reads another source with this getter: the getter of that source replaces the node
+                # (the palette places one getter per source), refused at its placement when that source is gone.
+                switched[node.id] = found.action_key
         by_role: dict[str, list[str]] = {}
         for node in doc.nodes:
             if node.id not in matched and node.implicit is not None:
@@ -376,6 +425,22 @@ class _Planner:
             options = [n for n in candidates if n.implicit_role == role and n.guid not in taken]
             for node_id, found in zip(ids, options):
                 take(node_id, found)
+        if self.adapter.keeps_authored_ids:
+            # The Id each live node was last applied with names it for a document written without NodeGuids (two
+            # Print String nodes are told apart by their Ids, not replaced). An Id recorded on two live nodes (a
+            # copy) names neither.
+            recorded: dict[str, list[LiveNode]] = {}
+            for found in candidates:
+                if found.doc_id and found.guid not in taken and found.implicit_role is None:
+                    recorded.setdefault(found.doc_id, []).append(found)
+            for node in doc.nodes:
+                options = recorded.get(node.id, ())
+                if (node.id in matched or node.implicit is not None or actions[node.id] is None or len(options) != 1
+                        or options[0].guid in taken):
+                    continue
+                if names(node.id, options[0]) and self.adapter.node_matches_live(node, options[0]) \
+                        and self.adapter.pin_types_fit(node, options[0]):
+                    take(node.id, options[0])
         wanted: dict[tuple, list[str]] = {}
         for node in doc.nodes:
             if node.id not in matched and node.implicit is None:
@@ -399,50 +464,40 @@ class _Planner:
                 for node_id, found in zip(ids, options):
                     if self.adapter.pin_types_fit(by_id[node_id], found):
                         take(node_id, found)
-        surplus = [n for n in candidates if n.guid not in taken and n.implicit_role is None
-                   and not self.adapter.is_ignorable_live(n, live)]
+        # An animation getter written without its source (the older key form) names the live getter of that
+        # function when it is the only one left on both sides.
+        sourceless: dict[str, list[str]] = {}
+        for node in doc.nodes:
+            action = actions[node.id]
+            if node.id not in matched and node.implicit is None and action is not None and "@" not in action \
+                    and action_kind(action) == "AnimGetter":
+                sourceless.setdefault(split_disambiguator(action)[0], []).append(node.id)
+        if sourceless:
+            sourced: dict[str, list[LiveNode]] = {}
+            for found in candidates:
+                key = getter_without_source(found.action_key) if found.guid not in taken else None
+                if key is not None and found.implicit_role is None:
+                    sourced.setdefault(key, []).append(found)
+            for key, ids in sourceless.items():
+                options = sourced.get(key, ())
+                if len(ids) == 1 and len(options) == 1 and self.adapter.pin_types_fit(by_id[ids[0]], options[0]):
+                    take(ids[0], options[0])
+        surplus = [n for n in candidates if n.guid not in taken and n.implicit_role is None]
         pseudo = {n.guid: f"~{n.implicit_role}" for n in candidates if n.guid not in taken and n.implicit_role}
-        return _NodeMatch(matched, surplus, pseudo)
-
-    def _ghost_companions(self, live: LiveGraph | None, match: _NodeMatch) -> list[LiveNode]:
-        """Unmatched editor ghosts linked to a ghost the document reuses: the "Parent: <event>" call the editor
-        placed with a child Blueprint's default event. Placing that event from the palette removes the ghost
-        and what it links (UBlueprintEventNodeSpawner::Invoke, RemoveGhostNodes); linking the ghost would make
-        them real instead. A document that wants the parent call lists it."""
-        if live is None:
-            return []
-        by_guid = {node.guid: node for node in live.nodes}
-        matched = {found.guid for found in match.matched.values()}
-        pending = [found for found in match.matched.values() if self.adapter.is_ignorable_live(found, live)]
-        seen: set[str] = {found.guid for found in pending}
-        companions = []
-        while pending:
-            node = pending.pop()
-            for pin in node.pins:
-                for ref in pin.linked_to:
-                    other = by_guid.get(ref.node_guid)
-                    if (other is None or other.guid in seen or other.guid in matched
-                            or not self.adapter.is_ignorable_live(other, live)):
-                        continue
-                    seen.add(other.guid)
-                    companions.append(other)
-                    pending.append(other)
-        return companions
+        return _NodeMatch(matched, surplus, pseudo, {k: v for k, v in switched.items() if k not in matched})
 
     def nodes(self, doc: GraphDoc, live: LiveGraph | None, match: _NodeMatch) -> None:
-        for node in self._ghost_companions(live, match):
-            self.body.append(PlanOp("graph.node.remove", doc.id, f"{doc.path}/Nodes",
-                                    {"node_guid": node.guid, "action_key": node.action_key or node.class_path}))
         removed = {node.guid for node in match.surplus}
         for node in match.surplus:
             if node.parent_guid in removed:
                 continue  # removed together with its parent
             self.body.append(PlanOp("graph.node.remove", doc.id, f"{doc.path}/Nodes",
                                     {"node_guid": node.guid, "action_key": node.action_key or node.class_path}))
+        self._replacements(doc, match)
         linked = {link.from_.node for link in doc.links} | {link.to.node for link in doc.links}
         for node in doc.nodes:
             found = match.matched.get(node.id)
-            if found is not None and live is not None and self.adapter.is_ignorable_live(found, live) \
+            if found is not None and self.adapter.is_ghost_live(found) and not node.ghost \
                     and node.id not in linked and found.action_key:
                 # A reused editor ghost (e.g. the default BeginPlay of a new Blueprint) becomes a real node
                 # when linked; without links, spawning the same event converts it (spawn reports reused).
@@ -484,6 +539,8 @@ class _Planner:
                 raise contract_error(f"{path}/Action", "Graph.NodeActionMissing",
                                      "This node does not exist yet; an Action is required to create it.")
             args = {"node": node.id, "action_key": action}
+            if node.id in match.switched:
+                args["replaces_getter"] = match.switched[node.id]
             if node.position is not None:
                 args["position"] = node.position.to_dto()
             if node.parent is not None:
@@ -501,13 +558,44 @@ class _Planner:
             self.body.append(PlanOp("graph.node.spawn", doc.id, path, args))
         for node in doc.nodes:
             self._pin_types(doc, node, match.matched.get(node.id))
-        for node in doc.nodes:
+        for node in self.adapter.property_order(doc):
             self._properties(doc, node, match.matched.get(node.id))
         for node in doc.nodes:
             if (doc.id, node.id) not in self.defined:
                 self._node_user_pins(doc, node, match.matched.get(node.id))
         for node in doc.nodes:
             self._dynamic_pins(doc, node, match.matched.get(node.id))
+
+    def _replacements(self, doc: GraphDoc, match: _NodeMatch) -> None:
+        """A warning for each document node the plan places while it removes a live node of the same action: nothing
+        identified the live node (no NodeGuid, no Id it was last applied with, an action shared with other nodes), so
+        what the document does not hold of it (enabled state, Details values, a template's settings) is not carried
+        over to the new node."""
+        removed = [node for node in match.surplus if node.action_key]
+        if not removed:
+            return
+        for node in doc.nodes:
+            if node.id in match.matched or node.implicit is not None:
+                continue
+            path = doc.node_path(node.id)
+            try:
+                action = self.action(node, path)
+            except AssetDocumentContractError:
+                continue  # reported where the node is placed
+            if action is None:
+                continue
+            found = next((item for item in removed if actions_equal(action, item.action_key)
+                          or omits_getter_source(action, item.action_key)), None)
+            if found is None:
+                continue
+            removed.remove(found)
+            self.warnings.append(RuntimeDiagnostic(
+                path, "Graph.NodeRecreated",
+                f"Node '{node.id}' replaces the live node {found.guid} of the same action ({found.action_key}): no NodeGuid "
+                "or Id it was last applied with names that node, and its action alone does not tell it from the other "
+                "nodes of that action. The new node has the document's values only; what the document does not hold "
+                "(enabled state, Details settings) is the editor's default. Write the node's NodeGuid (extract writes it) "
+                "to keep the live node.", DiagnosticSeverity.WARNING))
 
     def _is_called_event(self, node: NodeDoc, action: str) -> bool:
         """A new custom event of a top-level graph that a call node of the document names."""
@@ -535,8 +623,9 @@ class _Planner:
         new = [node.id for node in doc.nodes if node.position is None and node.id not in match.matched]
         if not new and not relayout:
             return
+        ghost_ids = {node.id for node in doc.nodes if node.ghost}
         ghosts = {node_id for node_id, found in match.matched.items()
-                  if live is not None and self.adapter.is_ignorable_live(found, live)}
+                  if self.adapter.is_ghost_live(found) and node_id not in ghost_ids}
         place = [node.id for node in doc.nodes if node.position is None and (
             relayout or live is None or node.id not in match.matched or node.id in ghosts)]
         if not place:
@@ -557,17 +646,27 @@ class _Planner:
     def _properties(self, doc: GraphDoc, node: NodeDoc, live: LiveNode | None, *, after_links: bool = False) -> None:
         path = doc.node_path(node.id)
         action = node.action or (live.action_key if live else None)
-        for container, key, value in node.properties.items():
+        for container, key, value in self.adapter.property_items(action, node.properties):
             wanted = thaw_json(value)
             follows = (self.adapter.property_follows_links(action, container, key)
                        or self.adapter.hides_pin(action, container, key, wanted))
+            label = "Properties" if container == "node" else "TemplateProperties"
+            have = self.adapter.live_properties(live, container) if live is not None else {}
+            if key in have and same_json(self.adapter.live_value_as_authored(
+                    action, container, key, thaw_json(have[key]), wanted), wanted):
+                continue
+            staged = self.adapter.pins_shown_before_links(container, key, thaw_json(have[key]), wanted) \
+                if key in have and not follows else None
+            if staged is not None:
+                # Pins it shows are shown before the links, the ones it hides after them.
+                value = wanted if after_links else staged
+                if after_links or not same_json(thaw_json(have[key]), staged):
+                    self.body.append(PlanOp("graph.node.property.set", doc.id, f"{path}/{label}/{key}",
+                                            {"node": node.id, "container": container, "property_path": key,
+                                             "value": value}))
+                continue
             if follows != after_links:
                 continue
-            if live is not None:
-                have = self.adapter.live_properties(live, container)
-                if key in have and same_json(thaw_json(have[key]), wanted):
-                    continue
-            label = "Properties" if container == "node" else "TemplateProperties"
             self.body.append(PlanOp("graph.node.property.set", doc.id, f"{path}/{label}/{key}",
                                     {"node": node.id, "container": container, "property_path": key, "value": wanted}))
         if live is not None:
@@ -797,7 +896,19 @@ class _Planner:
                     "pin": {**_ref(node.id), "pin": pin.name, "direction": pin.direction}, **reset}))
 
     # Layout ----------------------------------------------------------------
+    def _made_real(self, doc: GraphDoc) -> set[str]:
+        """Ids of the nodes this plan links, gives a pin value or sets: an editor ghost node they make real."""
+        out = set()
+        for op in self.body:
+            if op.graph != doc.id or op.op not in ("graph.pin.connect", "graph.pin.default.set", "graph.node.property.set"):
+                continue
+            for ref in (op.args.get("from"), op.args.get("to"), op.args.get("pin"), op.args):
+                if isinstance(ref, Mapping) and type(ref.get("node")) is str:
+                    out.add(ref["node"])
+        return out
+
     def layout(self, doc: GraphDoc, match: _NodeMatch) -> None:
+        made_real = self._made_real(doc) if any(node.ghost for node in doc.nodes) else set()
         for node in doc.nodes:
             found = match.matched.get(node.id)
             args = {}
@@ -813,9 +924,23 @@ class _Planner:
             if node.comment_bubble_visible is not None and (
                     found.comment_bubble_visible if found is not None else False) != node.comment_bubble_visible:
                 args["comment_bubble_visible"] = node.comment_bubble_visible
+            # An omitted Enabled keeps the node's state (a placed node keeps the state it is placed with); a stated
+            # one holds once the user set it: a placed node, or one not set by the user, is set.
+            if node.enabled is not None and (found is None or not found.enabled_state_user_set
+                                             or live_enabled(found) != node.enabled):
+                args["enabled_state"] = ENABLED_STATES[node.enabled]
+            # A Ghost node is the editor's disabled placeholder: one placed, a real one matched, or one this plan's
+            # links, pin values or settings make real is made a ghost again (UEdGraphNode::MakeAutomaticallyPlacedGhostNode).
+            if node.ghost and (found is None or not self.adapter.is_ghost_live(found) or node.id in made_real):
+                args["enabled_state"] = "ghost"
             if args:
                 self.body.append(PlanOp("graph.node.layout.set", doc.id, doc.node_path(node.id),
                                         {"node": node.id, **args}))
+
+
+def live_enabled(node) -> str:
+    """A live node's enabled state as documents name it."""
+    return next((name for name, wire in ENABLED_STATES.items() if wire == node.enabled_state), "Enabled")
 
 
 def same_json(have, wanted) -> bool:
@@ -872,7 +997,7 @@ def same_pin_value(pin, kind: str, payload: str) -> bool:
     """A live pin holds an authored value: the same text, or for a number the same number (``"1.0"`` and
     ``"1.000000"``); an empty real pin that matches its autogenerated default holds 0.0 (K2 reads it so)."""
     have = {"value": pin.default_value, "object": pin.default_object, "text": pin.default_text}[kind]
-    if have == payload:
+    if have == payload or (kind == "text" and text_forms.same_text(payload, have)):
         return True
     if kind == "value" and getattr(pin, "default_display", "") and pin.default_display.casefold() == payload.casefold():
         return True  # an enum value named as the editor shows it
@@ -948,7 +1073,7 @@ def reconcile(desired: tuple[GraphDoc, ...], live: LiveAsset, *, managed_roles: 
     if ops:
         ops.append(PlanOp("graph.finalize", "", "/Body", {}))
     return Plan(tuple(ops), desired, MappingProxyType(dict(planner.node_bindings)),
-                MappingProxyType(dict(planner.graph_bindings)))
+                MappingProxyType(dict(planner.graph_bindings)), tuple(planner.warnings))
 
 
 def reconcile_graph(doc: GraphDoc, live_graph: LiveGraph | None, live: LiveAsset, *,
@@ -958,7 +1083,8 @@ def reconcile_graph(doc: GraphDoc, live_graph: LiveGraph | None, live: LiveAsset
     planner = _Planner(live, adapter, self_class)
     planner.graph(doc, live_graph, parent)
     return Plan(tuple(planner.prelude + planner.body + planner.removals), (doc,),
-                MappingProxyType(dict(planner.node_bindings)), MappingProxyType(dict(planner.graph_bindings)))
+                MappingProxyType(dict(planner.node_bindings)), MappingProxyType(dict(planner.graph_bindings)),
+                tuple(planner.warnings))
 
 
 def _relayout_moves(doc: GraphDoc, live: LiveGraph, matched: Mapping[str, LiveNode], surplus, place: list[str],
@@ -982,26 +1108,35 @@ def _relayout_moves(doc: GraphDoc, live: LiveGraph, matched: Mapping[str, LiveNo
     return output
 
 
-def pending_relayout(desired: tuple[GraphDoc, ...], live: LiveAsset, *, managed_roles: frozenset[str],
-                     adapter: SchemaAdapter = GENERIC_ADAPTER, self_class: str | None = None) -> dict[str, list]:
-    """Graphs (and subgraphs: collapsed graphs, an anim state's graph) with ``"Layout": "Auto"`` whose relayout
-    would move nodes: doc path -> the moves (``{"Node": id, "Position": {"X", "Y"}}``).
+@dataclass(frozen=True, slots=True)
+class GraphPairing:
+    """A document graph (localized as apply reads it), the live graph apply pairs it with (None: apply creates it)
+    and its nodes paired as apply pairs them: ``matched`` doc id -> live node; ``surplus`` the live nodes apply
+    removes."""
+    doc: GraphDoc
+    live: LiveGraph | None
+    matched: Mapping[str, LiveNode]
+    surplus: tuple[LiveNode, ...]
 
-    For a Diff (an empty Diff proves an apply changes nothing): ``Layout`` is a request, not state, so only
-    laying the live graph out tells whether it is already laid out.  ``live`` must carry node sizes
-    (``include_sizes``).  Document nodes pair with live nodes as apply pairs them, and nodes of the same
-    action without a NodeGuid (which apply replaces) pair up in order: the question is where the graph's
-    nodes are, not which ones apply would recreate.  Subgraphs pair as apply pairs them (by GraphGuid, owner
-    node or name).  A graph or node apply creates is a difference of its own."""
-    if not any(graph.layout == "Auto" for doc in desired for graph in doc.walk()):
-        return {}
+
+def paired_graphs(desired: tuple[GraphDoc, ...], live: LiveAsset, *, managed_roles: frozenset[str],
+                  adapter: SchemaAdapter = GENERIC_ADAPTER, self_class: str | None = None,
+                  descend=lambda doc: True):
+    """The document's graphs (subgraphs of ``descend(doc)`` graphs too: collapsed graphs, an anim state's graph)
+    paired with the live graphs, as ``GraphPairing`` values in document order.
+
+    Document nodes pair with live nodes as apply pairs them, and nodes of the same action without a NodeGuid
+    (which apply replaces) pair up in order: the question is where the graph's nodes are, not which ones apply
+    would recreate.  Subgraphs pair as apply pairs them (by GraphGuid, owner node or name).  Raises the contract
+    error of a document apply would refuse."""
     planner = _Planner(live, adapter, self_class)
     candidates = tuple(g for g in live.graphs if g.parent_guid is None and g.role in managed_roles)
-    moved: dict[str, list] = {}
 
-    def visit(pairs) -> None:
+    def visit(pairs):
         for doc, found in pairs:
             if found is None:
+                for graph in doc.walk():
+                    yield GraphPairing(graph, None, MappingProxyType({}), ())
                 continue
             doc = planner._localize(doc, found)
             match = planner.match_nodes(doc, found)
@@ -1021,19 +1156,42 @@ def pending_relayout(desired: tuple[GraphDoc, ...], live: LiveAsset, *, managed_
                     matched[node.id] = options.pop(0)
             for node_id, node in matched.items():
                 planner.node_bindings[(doc.id, node_id)] = node.guid
-            if doc.layout == "Auto":
-                surplus = [node for node in surplus if node not in matched.values()]
-                place = [node.id for node in doc.nodes if node.position is None and node.id in matched]
-                keep = next((node_id for node_id in place if matched[node_id].position is not None), None)
-                moves = _relayout_moves(doc, found, matched, surplus, place, keep)
-                if moves:
-                    moved[doc.path] = [{"Node": node_id, "Position": {"X": x, "Y": y}}
-                                       for node_id, (x, y) in moves.items()]
-            if any(child.layout == "Auto" for sub in doc.subgraphs for child in sub.walk()):
-                visit(planner.match_graphs(doc.subgraphs, planner.live.children(found.guid), doc)[0])
+            taken = {node.guid for node in matched.values()}
+            yield GraphPairing(doc, found, MappingProxyType(matched),
+                               tuple(node for node in surplus if node.guid not in taken))
+            if doc.subgraphs and descend(doc):
+                yield from visit(planner.match_graphs(doc.subgraphs, planner.live.children(found.guid), doc)[0])
 
+    yield from visit(planner.match_graphs(desired, candidates)[0])
+
+
+def pending_relayout(desired: tuple[GraphDoc, ...], live: LiveAsset, *, managed_roles: frozenset[str],
+                     adapter: SchemaAdapter = GENERIC_ADAPTER, self_class: str | None = None) -> dict[str, list]:
+    """Graphs (and subgraphs: collapsed graphs, an anim state's graph) with ``"Layout": "Auto"`` whose relayout
+    would move nodes: doc path -> the moves (``{"Node": id, "Position": {"X", "Y"}}``).
+
+    For a Diff (an empty Diff proves an apply changes nothing): ``Layout`` is a request, not state, so only
+    laying the live graph out tells whether it is already laid out.  ``live`` must carry node sizes
+    (``include_sizes``).  Nodes pair as ``paired_graphs`` pairs them.  A graph or node apply creates is a
+    difference of its own."""
+    if not any(graph.layout == "Auto" for doc in desired for graph in doc.walk()):
+        return {}
+    moved: dict[str, list] = {}
     try:
-        visit(planner.match_graphs(desired, candidates)[0])
+        for pairing in paired_graphs(desired, live, managed_roles=managed_roles, adapter=adapter,
+                                     self_class=self_class,
+                                     descend=lambda doc: any(child.layout == "Auto" for sub in doc.subgraphs
+                                                             for child in sub.walk())):
+            doc, found = pairing.doc, pairing.live
+            if found is None or doc.layout != "Auto":
+                continue
+            matched = pairing.matched
+            place = [node.id for node in doc.nodes if node.position is None and node.id in matched]
+            keep = next((node_id for node_id in place if matched[node_id].position is not None), None)
+            moves = _relayout_moves(doc, found, matched, list(pairing.surplus), place, keep)
+            if moves:
+                moved[doc.path] = [{"Node": node_id, "Position": {"X": x, "Y": y}}
+                                   for node_id, (x, y) in moves.items()]
     except AssetDocumentContractError:
         return {}  # the document's other differences (or its apply) report the problem
     return moved

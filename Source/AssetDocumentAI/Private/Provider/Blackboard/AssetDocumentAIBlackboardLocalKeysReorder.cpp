@@ -71,8 +71,8 @@ bool ReadAuthoredEntry(UBlackboardData& Blackboard, const FBlackboardEntry& Entr
 bool IsExactAuthoredReorderEntry(const UBlackboardData& Blackboard,
 	const FBlackboardEntry& Entry)
 {
-	return Entry.KeyType != nullptr && Entry.KeyType->GetOuter() == &Blackboard
-		&& !HasInheritedKey(Blackboard, Entry.EntryName);
+	// A key that shadows a Parent key is the Blackboard's own (the engine keeps it); it reorders like any other.
+	return Entry.KeyType != nullptr && Entry.KeyType->GetOuter() == &Blackboard;
 }
 
 TOptional<FAssetDocumentPrimitiveOutcome> PreflightReorderIdentity(
@@ -91,7 +91,7 @@ TOptional<FAssetDocumentPrimitiveOutcome> PreflightReorderIdentity(
 	if (!IsEditorPropertyContext(OutBlackboard))
 		return Failure(TEXT("AIProvider.InvalidContext"),
 			TEXT("Blackboard local-key reorder requires the Editor game thread."));
-	return {};
+	return RefuseLiveBlackboardLayoutChange(*OutBlackboard);
 }
 
 bool RegisterReorderPhysicalName(const FBlackboardEntry& Entry,

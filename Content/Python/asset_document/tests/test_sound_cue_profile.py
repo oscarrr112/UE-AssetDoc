@@ -10,7 +10,9 @@ from __future__ import annotations
 import copy
 import unittest
 
-from asset_document.diagnostics import AssetDocumentContractError, DiagnosticContext, RuntimeDiagnostic
+from asset_document.diagnostics import (
+    AssetDocumentContractError, DiagnosticContext, RuntimeDiagnostic, collecting_read_warnings,
+)
 from asset_document.diff.model import DiffKind
 from asset_document.profiles import sound_cue
 from asset_document.profiles import sound_cue_model as model
@@ -25,6 +27,8 @@ CLASSES = {
     "Modulator": (1, 1, 1, lambda n: {"PitchMin": 0.95, "PitchMax": 1.05}),
     "Delay": (1, 0, 1, lambda n: {"DelayMin": 0.0, "DelayMax": 0.0}),
     "Branch": (3, 3, 3, lambda n: {"BoolParameterName": "None"}),
+    # A project node with an instanced settings object (null on a new node).
+    "Custom": (1, 1, 1, lambda n: {"Settings": None, "Gain": 1.0}),
 }
 COMMENT_DEFAULTS = {"CommentColor": {"R": 1.0, "G": 1.0, "B": 1.0, "A": 1.0}, "FontSize": 18,
                     "bCommentBubbleVisible_InDetailsPanel": True, "bColorCommentBubble": False,
@@ -492,6 +496,75 @@ class SoundCueApplyTests(unittest.TestCase):
         self.assertEqual(after["Root"]["Input"], "Rand")
         self.assertIn("Mod", after["Nodes"])
         self.assertIn("Note", after["Comments"])
+
+
+_SETTINGS = {"Unsupported": "An instanced subobject has no document form (its own properties are not read or written); "
+                            "AssetDoc keeps it.",
+             "Text": "/Script/Test.CustomSettings'/Game/Audio/SC_Test.SC_Test:Custom.CustomSettings_0'"}
+
+
+def _custom_cue():
+    cue = _footstep()
+    custom = cue.add_sound("Custom", "Custom", pos=(-150, 0), props={"Settings": copy.deepcopy(_SETTINGS)})
+    cue.link(custom, 0, cue.guid_of("Rand"))
+    cue.link(cue.guid_of("Mod"), 0, custom)
+    return cue
+
+
+class SoundCueInstancedSubobjectTests(unittest.TestCase):
+    PATH = "/Body/Nodes/Custom/Properties/Settings"
+
+    def test_extract_marks_and_warns(self):
+        cue = _custom_cue()
+        with collecting_read_warnings() as warnings:
+            body = _body(cue)
+        self.assertEqual(body["Nodes"]["Custom"]["Properties"], {"Settings": _SETTINGS})
+        self.assertEqual([(item.path, item.code) for item in warnings], [(self.PATH, "SoundCue.Unrepresented")])
+
+    def test_reapply_and_omission_keep(self):
+        cue = _custom_cue()
+        body = _body(cue)
+        live = sound_cue.canonicalize(_document(body))
+        _apply(cue, body)
+        self.assertEqual(cue.writes, [])
+        omitted = copy.deepcopy(body)
+        del omitted["Nodes"]["Custom"]["Properties"]["Settings"]
+        omitted["Nodes"]["Custom"]["Properties"]["Gain"] = 0.5
+        self.assertEqual([item.path for item in sound_cue.diff(sound_cue.canonicalize(_document(omitted)), live,
+                                                               exact=False)], ["/Body/Nodes/Custom/Properties/Gain"])
+        _apply(cue, omitted)
+        self.assertEqual([(args["property_path"], args["value"]) for primitive, args in cue.writes
+                          if primitive == "graph.node.property.set.v1"], [("Gain", 0.5)])
+        self.assertEqual(_body(cue)["Nodes"]["Custom"]["Properties"]["Settings"], _SETTINGS)
+
+    def test_edited_marker_and_other_value_refused(self):
+        for value in ({**_SETTINGS, "Text": "None"}, "/Game/Other.Other"):
+            with self.subTest(value=value):
+                cue = _custom_cue()
+                body = _body(cue)
+                body["Nodes"]["Custom"]["Properties"]["Settings"] = value
+                with self.assertRaises(AssetDocumentContractError) as raised:
+                    _apply(cue, body)
+                self.assertEqual((raised.exception.diagnostic.path, raised.exception.diagnostic.code),
+                                 (self.PATH, "SoundCue.UnrepresentedValue"))
+                self.assertEqual(cue.writes, [])
+
+    def test_marker_where_the_node_has_none_refused(self):
+        cue = _custom_cue()
+        body = _body(cue)
+        body["Nodes"]["Other"] = {"Class": "Custom", "Properties": {"Settings": _SETTINGS}}
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            _apply(cue, body)
+        self.assertEqual((raised.exception.diagnostic.path, raised.exception.diagnostic.code),
+                         ("/Body/Nodes/Other/Properties/Settings", "SoundCue.UnrepresentedValue"))
+        self.assertEqual(cue.writes, [])
+
+    def test_null_clears(self):
+        cue = _custom_cue()
+        body = _body(cue)
+        body["Nodes"]["Custom"]["Properties"]["Settings"] = None
+        _apply(cue, body)
+        self.assertNotIn("Properties", _body(cue)["Nodes"]["Custom"])
 
 
 if __name__ == "__main__":

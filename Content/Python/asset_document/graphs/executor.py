@@ -14,12 +14,14 @@ import json
 import re
 from dataclasses import dataclass
 
+from asset_document import text_forms
 from asset_document.diagnostics import (
     AssetDocumentContractError, DiagnosticContext, DiagnosticSeverity, RuntimeDiagnostic, contract_error,
 )
 from asset_document.dto import ChangedRecord, PrimitiveRequirement
 from asset_document.graphs.live import LiveAsset, LiveGraph, LiveGraphInfo, LiveNode, decode_class_chain, \
     list_graphs, query_graphs
+from asset_document.graphs import node_layout
 from asset_document.graphs.extract import extract_graphs
 from asset_document.graphs.layout import live_positions
 from asset_document.graphs.model import GraphDoc, thaw_json
@@ -44,6 +46,21 @@ MAX_DYNAMIC_PIN_ADDS = 32
 QUERY_NODE_LIMIT = 256
 # graph.finalize.v1 node_meta entries per invocation (each entry is up to 4 of the 4096 values one invocation carries).
 NODE_META_BATCH = 512
+
+
+def _stale_getter_source(op: PlanOp, error: AssetDocumentContractError) -> AssetDocumentContractError:
+    """Graph.GetterSourceMissing: the document moves a getter (by its NodeGuid) to a source the graph does not
+    have, as a document written before the source was renamed or replaced does."""
+    wanted, current = str(op.args["action_key"]), str(op.args["replaces_getter"])
+    stale, now = wanted.partition("@")[2], current.partition("@")[2]
+    source = error.diagnostic
+    return AssetDocumentContractError(RuntimeDiagnostic(
+        f"{op.path}/Action", "Graph.GetterSourceMissing",
+        f"The node's NodeGuid names the getter {current}, which reads '{now}'; the document reads '{stale}', which "
+        f"this graph does not have (renamed or replaced since the document was written?). Write the current source "
+        f"('{now}') to keep the node, or another source the graph has to move it. {source.message}",
+        source.severity, source.context + (DiagnosticContext("stale_source", stale),
+                                           DiagnosticContext("current_source", now))))
 
 
 def conversion_message(output_end: str, input_end: str, facts: dict) -> str:
@@ -195,7 +212,9 @@ class GraphExecutor:
                 self.node_limit = QUERY_NODE_LIMIT if self.node_limit is None else max(1, self.node_limit // 2)
 
     def read_live(self, *, include_properties: bool = False, include_sizes: bool = False) -> LiveAsset:
-        """Every graph of the asset; ``include_sizes`` also reads each node's drawn size (a relayout)."""
+        """Every graph of the asset; ``include_sizes`` also reads each node's drawn size (a relayout, an Extract that
+        reports node sizes: ``node_layout.requested``)."""
+        include_sizes = include_sizes or node_layout.requested()
         listed: list = []
 
         def list_page(values: dict) -> object:
@@ -209,6 +228,13 @@ class GraphExecutor:
                               decode_class_chain(listed[-1]) if listed else ())
         self.include_properties = include_properties
         self.dirty.clear()
+        return self.live
+
+    def measure_graphs(self, guids) -> LiveAsset:
+        """The live asset read last, with the graphs ``guids`` read again with their nodes' drawn sizes."""
+        for guid in dict.fromkeys(guids):
+            if self.live.graph(guid) is not None:
+                self._refresh(guid, include_sizes=True)
         return self.live
 
     def _info(self, graph: LiveGraph) -> LiveGraphInfo:
@@ -318,6 +344,7 @@ class GraphExecutor:
             self._index(graph, None)
         self.nodes.update(plan.node_bindings)
         self.graphs.update(plan.graph_bindings)
+        self.diagnostics.extend(plan.warnings)
         self._run_ops(plan.ops)
         return ExecutionReport(dict(self.nodes), dict(self.graphs), tuple(self.changed), tuple(self.diagnostics),
                                self.finalize_status)
@@ -455,7 +482,12 @@ class GraphExecutor:
             values["position"] = op.args["position"]
         if parent is not None:
             values["context"] = {"parent_node_guid": parent}
-        result = self._write("graph.node.spawn.v1", values, op, op.graph)
+        try:
+            result = self._write("graph.node.spawn.v1", values, op, op.graph)
+        except AssetDocumentContractError as error:
+            if op.args.get("replaces_getter") and error.diagnostic.code == "Graph.ActionNotFound":
+                raise _stale_getter_source(op, error) from None
+            raise
         guid = _value(result, "node_guid", op.path).upper()
         self.nodes[key] = guid
         wanted = op.args.get("position")
@@ -701,7 +733,7 @@ class GraphExecutor:
             # (None: a member of a struct pin the primitive splits first.)
             current = {"value": pin.default_value, "object": pin.default_object, "text": pin.default_text}[kind] \
                 if pin is not None else None
-            if current == op.args["value"]:
+            if current == op.args["value"] or (kind == "text" and text_forms.same_text(op.args["value"], current)):
                 return
         values = {"pin": ref, "kind": kind}
         if kind != "reset":
@@ -720,7 +752,7 @@ class GraphExecutor:
 
     def _op_graph_node_layout_set(self, op: PlanOp) -> None:
         values = {"node_guid": self.node_guid(op.graph, op.args, op)}
-        for key in ("position", "size", "comment", "comment_bubble_visible"):
+        for key in ("position", "size", "comment", "comment_bubble_visible", "enabled_state"):
             if key in op.args:
                 values[key] = op.args[key]
         self._write("graph.node.layout.set.v1", values, op, op.graph)
@@ -783,6 +815,7 @@ class GraphExecutor:
                                parent=self.parents.get(op.graph))
         self.nodes.update(plan.node_bindings)
         self.graphs.update(plan.graph_bindings)
+        self.diagnostics.extend(plan.warnings)
         self._run_ops(plan.ops)
         if parent_guid is not None:
             # The subgraph's signature (its tunnels' pins) reshapes the owner node in the parent graph:

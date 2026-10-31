@@ -5,6 +5,7 @@
 
 #include "BehaviorTree/BehaviorTreeTypes.h"
 #include "BehaviorTree/ValueOrBBKey.h"
+#include "GameplayTagContainer.h"
 #include "PropertyHandle.h"
 #include "StructUtils/InstancedStruct.h"
 #include "UObject/StructOnScope.h"
@@ -142,6 +143,24 @@ bool ReadAuthoredStruct(IPropertyHandle& Handle, FPropertyReadContext& Context,
 	}
 	if (Property->Struct == FInstancedStruct::StaticStruct())
 		return ReadInstanced(Handle, Context, Depth, OutValue);
+	// A gameplay tag's name is visible-only in its struct; the tag picker shows and sets the tag as a whole.
+	if (Property->Struct == FGameplayTag::StaticStruct() || Property->Struct == FGameplayTagContainer::StaticStruct())
+	{
+		void* Data = nullptr;
+		if (Handle.GetValueData(Data) != FPropertyAccess::Success || Data == nullptr) return false;
+		if (Property->Struct == FGameplayTag::StaticStruct())
+		{
+			OutValue = StringValue(static_cast<const FGameplayTag*>(Data)->GetTagName().ToString());
+			return true;
+		}
+		TArray<FAssetDocumentRuntimeValueDto> Tags;
+		for (const FGameplayTag& Tag : *static_cast<const FGameplayTagContainer*>(Data))
+		{
+			Tags.Add(StringValue(Tag.GetTagName().ToString()));
+		}
+		OutValue = ArrayValue(MoveTemp(Tags));
+		return true;
+	}
 	TArray<FName> Fields;
 	if (ValueOrKeyFields(Property->Struct, Fields))
 		return ReadFields(Handle, Context, Depth, OutValue, &Fields);

@@ -67,7 +67,7 @@ bool FAssetDocumentNoTrafficBeforeActiveRevisionTest::RunTest(const FString& Par
 	(void)Parameters;
 	static const TCHAR* Modules[] = {
 		TEXT("AssetDocumentEditor"), TEXT("AssetDocumentAI"), TEXT("AssetDocumentAnimation"),
-		TEXT("AssetDocumentUMG"), TEXT("AssetDocumentPython"),
+		TEXT("AssetDocumentPython"),
 		TEXT("AssetDocumentIntegration")
 	};
 	for (const TCHAR* ModuleName : Modules)

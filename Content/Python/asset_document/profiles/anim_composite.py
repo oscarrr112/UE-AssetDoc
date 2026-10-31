@@ -13,7 +13,8 @@ Document (docs/architecture/asset-document-animation-assets-matrix.md)::
         {"Animation": "/Game/Anims/Jump_Start.Jump_Start"},
         {"Animation": "/Game/Anims/Jump_Loop.Jump_Loop", "StartTime": 0.1, "EndTime": 0.6, "PlayRate": 1.5,
          "LoopCount": 3}
-      ]
+      ],
+      "Curves": [...], "NotifyTracks": [...], "Notifies": [...], "NotifyStates": [...]
     },
     "Properties": {"bLoop": false, ...}
 
@@ -23,8 +24,9 @@ Document (docs/architecture/asset-document-animation-assets-matrix.md)::
   ``LoopCount`` (default 1).  Omitted on a segment whose index and animation are unchanged = keep.
 * Animations are Animation Sequences or other Anim Composites (not this one, directly or through
   nested composites), with a compatible skeleton and one additive type.
-* Notifies and curves of a composite are not authored by this Profile (the Animation Sequence
-  authoring primitives are Sequence-only); the AnimComposite's Properties are.
+* ``Curves``, ``NotifyTracks``, ``Notifies`` and ``NotifyStates`` take the AnimSequence Profile's forms and
+  rules (anim_sequence_codec); apply writes them through the sequence authoring code (the curve and notify
+  panels), after the segments, so times are checked against the new length.  Omitted = keep.
 
 Writes are covered by Core's package snapshot (existing target) or the factory rollback (created
 target); preflight returns ``SNAPSHOT_COVERED``.
@@ -38,21 +40,28 @@ from asset_document.meta import (
 )
 from asset_document.mutation_intent_projection import SNAPSHOT_COVERED
 from asset_document.profile_runtime import RuntimeProfileRegistration, RuntimeTargetPolicy
+from asset_document import markers
 from asset_document.profiles import anim_asset_common as anim
+from asset_document.profiles import anim_sequence as sequence
+from asset_document.profiles import anim_sequence_codec as timeline_codec
 from asset_document.profiles import data_table_common as common
 from asset_document.regions.target_lifecycle import generic_factory_lifecycle, lifecycle_requirements
+from asset_document import tolerance
+from asset_document.tolerance import authored_rule
 
 CLASS = "/Script/Engine.AnimComposite"
 PROFILE_ID = "profile.anim_composite.v1"
 PREFIX = "AnimComposite"
-BODY_KEYS = ("Skeleton", "PreviewMesh", "Segments")
+TIMELINE_KEYS = timeline_codec.TIMELINE_REGIONS
+BODY_KEYS = ("Skeleton", "PreviewMesh", "Segments") + TIMELINE_KEYS
 SEGMENT_FIELDS = {"StartTime": "start", "EndTime": "end", "PlayRate": "rate", "LoopCount": "loops"}
 LIFECYCLE = generic_factory_lifecycle(anim.ROUTE, ("factory_context",))
 REQUIREMENTS = (anim.requirements(anim.CLASS_RESOLVE, anim.RESOLVE, anim.REFERENCE_RESOLVE, anim.COMPOSITE_READ,
                                   anim.COMPOSITE_EDIT)
                 + lifecycle_requirements(LIFECYCLE))
 BY_ID = {item.primitive_id: item for item in REQUIREMENTS}
-BODY_OWNED = {"AnimationTrack": "Body.Segments", "Skeleton": "Body.Skeleton", "PreviewSkeletalMesh": "Body.PreviewMesh"}
+BODY_OWNED = {"AnimationTrack": "Body.Segments", "Skeleton": "Body.Skeleton", "PreviewSkeletalMesh": "Body.PreviewMesh",
+              "Notifies": "Body.Notifies", "AnimNotifyTracks": "Body.NotifyTracks"}
 
 
 def _error(path, message, code):
@@ -67,28 +76,34 @@ def _segment(row, path):
         if key != "Animation" and key not in SEGMENT_FIELDS:
             raise _error(f"{path}/{common.escape(key)}", f"Unknown segment key '{key}'. Keys: Animation, StartTime, "
                          "EndTime, PlayRate, LoopCount.", "AnimComposite.InvalidSegment")
-    item = {"Animation": anim.object_path(row.get("Animation"), f"{path}/Animation", "AnimComposite.InvalidSegment",
-                                          "Animation")}
+    item = {"Animation": anim.reference(row.get("Animation"), f"{path}/Animation", "AnimComposite.InvalidSegment",
+                                        "Animation", PREFIX)}
     for key in ("StartTime", "EndTime", "PlayRate"):
         if key in row:
             item[key] = anim.number(row[key], f"{path}/{key}", "AnimComposite.InvalidSegment", key)
+    # The segment Details rows refuse these; an older asset can still hold them (read as they are).
     if "StartTime" in item and item["StartTime"] < 0:
-        raise _error(f"{path}/StartTime", "StartTime is >= 0.", "AnimComposite.InvalidSegment")
+        authored_rule(f"{path}/StartTime", "AnimComposite.InvalidSegment", "StartTime is >= 0.")
     if "StartTime" in item and "EndTime" in item and not item["StartTime"] < item["EndTime"]:
-        raise _error(f"{path}/EndTime", "EndTime must be after StartTime.", "AnimComposite.InvalidSegment")
+        authored_rule(f"{path}/EndTime", "AnimComposite.InvalidSegment", "EndTime must be after StartTime.",
+                      judged=(f"{path}/StartTime", f"{path}/EndTime"))
     if item.get("PlayRate") == 0:
-        raise _error(f"{path}/PlayRate", "PlayRate must not be 0.", "AnimComposite.InvalidSegment")
+        authored_rule(f"{path}/PlayRate", "AnimComposite.InvalidSegment", "PlayRate must not be 0.")
     if "LoopCount" in row:
-        item["LoopCount"] = anim.integer(row["LoopCount"], 1, 100000)
+        item["LoopCount"] = anim.integer(row["LoopCount"])
         if item["LoopCount"] is None:
             raise _error(f"{path}/LoopCount", "LoopCount is an integer within 1..100000.", "AnimComposite.InvalidSegment")
+        if not 1 <= item["LoopCount"] <= 100000:
+            authored_rule(f"{path}/LoopCount", "AnimComposite.InvalidSegment", "LoopCount is an integer within "
+                          "1..100000.")
     return item
 
 
 def canonical_body(body):
     out = {}
     if "Skeleton" in body:
-        out["Skeleton"] = anim.object_path(body["Skeleton"], "/Body/Skeleton", "AnimComposite.InvalidSkeleton", "Skeleton")
+        out["Skeleton"] = anim.reference(body["Skeleton"], "/Body/Skeleton", "AnimComposite.InvalidSkeleton", "Skeleton",
+                                         PREFIX)
     if "PreviewMesh" in body:
         out["PreviewMesh"] = anim.optional_path(body["PreviewMesh"], "/Body/PreviewMesh",
                                                 "AnimComposite.InvalidPreviewMesh", "PreviewMesh")
@@ -97,7 +112,36 @@ def canonical_body(body):
         if type(rows) is not list:
             raise _error("/Body/Segments", "Segments is the ordered list of segments.", "AnimComposite.InvalidSegment")
         out["Segments"] = [_segment(row, f"/Body/Segments/{index}") for index, row in enumerate(rows)]
+    out.update(timeline_body(body))
     return out
+
+
+def timeline_body(body):
+    """The authored timeline regions, validated as the AnimSequence Profile validates them."""
+    return timeline_codec.canonical_body({key: body[key] for key in TIMELINE_KEYS if key in body})
+
+
+def live_timeline(live):
+    return timeline_codec.timeline_to_document(live["timeline"]) if "timeline" in live else {}
+
+
+def timeline_matches(authored, live):
+    """Whether the authored (canonical) timeline regions hold on the live ones (document form, as read)."""
+    with tolerance.settled():
+        # The live rows are read as they are; the authored-input rules are not judged on them.
+        live = timeline_body(live)
+    return all(timeline_codec.region_matches(key, authored[key], live.get(key, []), authored, live)
+               for key in TIMELINE_KEYS if key in authored)
+
+
+def timeline_op(authored, live):
+    """The timeline edit: the sequence authoring intent of the authored regions (rows keep the notify objects they
+    pair with, as on a sequence)."""
+    reuse = None
+    if any(key in authored for key in timeline_codec.REUSED_REGIONS):
+        reuse = timeline_codec.reuse_plan(authored, live.get("timeline"))
+    intent, _ = timeline_codec.lower(authored, {}, set(), reuse)
+    return {"op": "timeline", "intent": intent}
 
 
 def canonicalize(document):
@@ -116,13 +160,13 @@ def read_live(calls):
 
 
 def live_segments(live):
-    return [{"Animation": row["animation"], "StartTime": row["start"], "EndTime": row["end"], "PlayRate": row["rate"],
-             "LoopCount": row["loops"]} for row in live.get("segments", [])]
+    return [{"Animation": anim.live_reference(row["animation"]), "StartTime": row["start"], "EndTime": row["end"],
+             "PlayRate": row["rate"], "LoopCount": row["loops"]} for row in live.get("segments", [])]
 
 
 def body_from_live(live):
-    return {"Skeleton": live.get("skeleton", ""), "PreviewMesh": live.get("preview_mesh", ""),
-            "Segments": live_segments(live)}
+    return {"Skeleton": anim.live_reference(live.get("skeleton")), "PreviewMesh": live.get("preview_mesh", ""),
+            "Segments": live_segments(live), **live_timeline(live)}
 
 
 def segments_match(authored, live, exact=False):
@@ -137,9 +181,21 @@ def segments_match(authored, live, exact=False):
 
 
 def segments_op(authored, live):
-    """The positional replace: omitted fields keep the live value where index and animation match."""
+    """The positional replace. A segment the track already holds (same animation) is written from that segment
+    ({"keep": live index} plus the fields that change), so values it keeps are not judged again: a segment whose
+    animation is missing or whose values the Details rows would refuse survives an edit of another value. Other
+    segments are written whole; omitted fields keep the live value where index and animation match."""
     rows = []
+    pairs = tolerance.pair_lists(authored, live)
     for index, row in enumerate(authored):
+        partner = pairs[index]
+        if partner is not None and live[partner]["Animation"] == row["Animation"]:
+            item = {"keep": partner}
+            for key, arg in SEGMENT_FIELDS.items():
+                if key in row and not common.same(row[key], live[partner][key], exact=True):
+                    item[arg] = row[key]
+            rows.append(item)
+            continue
         have = live[index] if index < len(live) and live[index]["Animation"] == row["Animation"] else {}
         item = {"animation": row["Animation"]}
         for key, arg in SEGMENT_FIELDS.items():
@@ -161,6 +217,8 @@ def map_path(primitive_path, op_paths):
                       "loops": "/LoopCount"}
             if len(parts) > 4 and parts[4] in fields:
                 path += fields[parts[4]]
+        elif len(parts) >= 3 and parts[2] == "intent":
+            path = sequence.document_path("/" + "/".join(parts[3:]))
         return path
     return "/Body"
 
@@ -181,7 +239,7 @@ def apply(document, read, mutable, context):
     region.check_owned(properties)
     calls = anim.AnimCalls(context, BY_ID, read, mutable, PREFIX)
     live = read_live(calls)
-    anim.require_unchanged(body, "Skeleton", live.get("skeleton", ""), PREFIX,
+    anim.require_unchanged(body, "Skeleton", anim.live_reference(live.get("skeleton")), PREFIX,
                            "An Anim Composite's Skeleton is chosen when it is created and the editor offers no change")
     ops = []
     current = live_segments(live)
@@ -189,6 +247,9 @@ def apply(document, read, mutable, context):
         ops.append((segments_op(body["Segments"], current), "/Body/Segments"))
     if "PreviewMesh" in body and body["PreviewMesh"] != live.get("preview_mesh", ""):
         ops.append(({"op": "preview_mesh", "path": body["PreviewMesh"]}, "/Body/PreviewMesh"))
+    authored_timeline = {key: body[key] for key in TIMELINE_KEYS if key in body}
+    if authored_timeline and not timeline_matches(authored_timeline, live_timeline(live)):
+        ops.append((timeline_op(authored_timeline, live), "/Body"))
     changes = edit(calls, ops) if ops else []
     changes.extend(region.apply(properties, read, mutable, context))
     return tuple(changes)
@@ -204,7 +265,11 @@ def create_target_context(document, context):
 
 def extract(target, read, context, include_defaults=True):
     live = read_live(anim.AnimCalls(context, BY_ID, read, prefix=PREFIX))
-    return common.document(target, CLASS, _properties().extract(read, context, include_defaults), body_from_live(live))
+    body = body_from_live(live)
+    for region in timeline_codec.REUSED_REGIONS:
+        if region in body:
+            markers.warn_all(body[region], PREFIX, f"/Body/{region}")
+    return common.document(target, CLASS, _properties().extract(read, context, include_defaults), body)
 
 
 def diff(authored, extracted, exact):
@@ -216,6 +281,10 @@ def diff(authored, extracted, exact):
             changes.append(Difference(f"/Body/{key}", DiffKind.REPLACE, True, body[key], key in live, live.get(key)))
     if "Segments" in body and not segments_match(body["Segments"], live.get("Segments", []), exact):
         changes.append(Difference("/Body/Segments", DiffKind.REPLACE, True, body["Segments"], True, live.get("Segments")))
+    for key in TIMELINE_KEYS:
+        if key in body and (key not in live or not timeline_codec.region_matches(key, body[key], live[key], body, live)):
+            raw = authored.get("Body", {}), extracted.get("Body", {})
+            changes.append(Difference(f"/Body/{key}", DiffKind.REPLACE, True, raw[0][key], key in raw[1], raw[1].get(key)))
     changes.extend(common.properties_diff(authored.get("Properties", {}), extracted.get("Properties", {}), exact))
     return tuple(changes)
 
@@ -288,7 +357,12 @@ ANIM_COMPOSITE_PROFILE_META = ProfileMeta(
           for name, key, identity, order, comparison in (
               ("skeleton", "Skeleton", IdentityPolicy.POSITIONAL, OrderPolicy.CANONICAL, ComparisonPolicy.CANONICAL),
               ("preview_mesh", "PreviewMesh", IdentityPolicy.POSITIONAL, OrderPolicy.CANONICAL, ComparisonPolicy.CANONICAL),
-              ("segments", "Segments", IdentityPolicy.POSITIONAL, OrderPolicy.PRESERVE, ComparisonPolicy.ORDERED))),
+              ("segments", "Segments", IdentityPolicy.POSITIONAL, OrderPolicy.PRESERVE, ComparisonPolicy.ORDERED),
+              ("curves", "Curves", IdentityPolicy.STABLE_KEY, OrderPolicy.CANONICAL, ComparisonPolicy.CANONICAL),
+              ("notify_tracks", "NotifyTracks", IdentityPolicy.STABLE_KEY, OrderPolicy.PRESERVE, ComparisonPolicy.ORDERED),
+              ("notifies", "Notifies", IdentityPolicy.POSITIONAL, OrderPolicy.CANONICAL, ComparisonPolicy.CANONICAL),
+              ("notify_states", "NotifyStates", IdentityPolicy.POSITIONAL, OrderPolicy.CANONICAL,
+               ComparisonPolicy.CANONICAL))),
     REQUIREMENTS)
 ANIM_COMPOSITE_RUNTIME_REGISTRATION = RuntimeProfileRegistration(
     ANIM_COMPOSITE_PROFILE_META, create_anim_composite_runtime_handler, RuntimeTargetPolicy.CREATE_OR_UPDATE, LIFECYCLE)

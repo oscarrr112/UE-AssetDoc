@@ -21,11 +21,14 @@
 #include "BehaviorTree/Services/BTService_BlackboardBase.h"
 #include "BehaviorTree/Tasks/BTTask_BlackboardBase.h"
 #include "BehaviorTreeGraph.h"
+#include "BehaviorTreeEditorTypes.h"
 #include "BehaviorTreeGraphNode.h"
+#include "BehaviorTreeGraphNode_Composite.h"
 #include "BehaviorTreeGraphNode_CompositeDecorator.h"
 #include "BehaviorTreeGraphNode_Decorator.h"
 #include "BehaviorTreeGraphNode_Root.h"
 #include "BehaviorTreeGraphNode_Service.h"
+#include "BehaviorTreeGraphNode_Task.h"
 #include "Containers/StringConv.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraphNode_Comment.h"
@@ -451,8 +454,19 @@ bool GetOrderedAuthoredChildren(
 	{
 		if (Pin == nullptr) return FailAuthoredProjection(Failure, TEXT("The authored graph contains a null pin."));
 		if (Pin->Direction != EGPD_Output) continue;
+		TArray<UEdGraphPin*> SortedLinks = Pin->LinkedTo;
+		for (const UEdGraphPin* LinkedPin : SortedLinks)
+		{
+			if (LinkedPin == nullptr || LinkedPin->GetOwningNode() == nullptr)
+			{
+				return FailAuthoredProjection(Failure, TEXT("The authored graph has an invalid or duplicate child link."));
+			}
+		}
+		// Stock runtime completion orders children by node X, then Y. Equal
+		// positions keep their link order, as the authored readback does.
+		SortedLinks.StableSort(FCompareNodeXLocation());
 		TArray<UBehaviorTreeGraphNode*> PinNodes;
-		for (UEdGraphPin* LinkedPin : Pin->LinkedTo)
+		for (UEdGraphPin* LinkedPin : SortedLinks)
 		{
 			UBehaviorTreeGraphNode* Child = LinkedPin != nullptr && LinkedPin->Direction == EGPD_Input
 				? Cast<UBehaviorTreeGraphNode>(LinkedPin->GetOwningNode()) : nullptr;
@@ -462,18 +476,6 @@ bool GetOrderedAuthoredChildren(
 			}
 			LinkedNodes.Add(Child);
 			PinNodes.Add(Child);
-		}
-		PinNodes.Sort([](const UBehaviorTreeGraphNode& Left, const UBehaviorTreeGraphNode& Right)
-		{
-			return Left.NodePosX != Right.NodePosX ? Left.NodePosX < Right.NodePosX : Left.NodePosY < Right.NodePosY;
-		});
-		for (int32 Index = 1; Index < PinNodes.Num(); ++Index)
-		{
-			if (PinNodes[Index - 1]->NodePosX == PinNodes[Index]->NodePosX
-				&& PinNodes[Index - 1]->NodePosY == PinNodes[Index]->NodePosY)
-			{
-				return FailAuthoredProjection(Failure, TEXT("An authored output pin has an ambiguous child layout order."));
-			}
 		}
 		Out.Append(PinNodes);
 	}
@@ -622,24 +624,34 @@ bool ValidateAuthoredServices(
 	TSet<const UBTNode*>& SeenNodes,
 	FAssetDocumentContractValidationResult& Failure)
 {
-	if (bCompareRuntime && (RuntimeServices == nullptr || RuntimeServices->Num() != Owner.Services.Num()))
+	// A service node whose class is missing has no instance; stock completion leaves it out of the runtime list.
+	int32 PresentServices = 0;
+	for (const UBehaviorTreeGraphNode* ServiceGraphNode : Owner.Services)
+	{
+		if (ServiceGraphNode == nullptr || !UE::AssetDocumentAI::BehaviorTreeAuthoredReadback::IsMissingClassNode(*ServiceGraphNode)) ++PresentServices;
+	}
+	if (bCompareRuntime && (RuntimeServices == nullptr || RuntimeServices->Num() != PresentServices))
 	{
 		return FailAuthoredProjection(Failure, TEXT("The runtime service count does not match the authored service order."));
 	}
+	int32 RuntimeIndex = 0;
 	for (int32 Index = 0; Index < Owner.Services.Num(); ++Index)
 	{
 		const UBehaviorTreeGraphNode* ServiceGraphNode = Owner.Services[Index];
+		if (ServiceGraphNode != nullptr && ServiceGraphNode->IsA(UBehaviorTreeGraphNode_Service::StaticClass())
+			&& UE::AssetDocumentAI::BehaviorTreeAuthoredReadback::IsMissingClassNode(*ServiceGraphNode)) continue;
 		const UBTService* Service = ServiceGraphNode != nullptr ? Cast<UBTService>(ServiceGraphNode->NodeInstance.Get()) : nullptr;
 		if (ServiceGraphNode == nullptr || !ServiceGraphNode->IsA(UBehaviorTreeGraphNode_Service::StaticClass()) || Service == nullptr)
 		{
 			return FailAuthoredProjection(Failure, TEXT("The authored graph has a null or wrong-type service node."));
 		}
 		if (!AdmitAuthoredProjectionNode(Service, SeenNodes, Failure)) return false;
-		if (bCompareRuntime && (*RuntimeServices)[Index].Get() != Service)
+		if (bCompareRuntime && (*RuntimeServices)[RuntimeIndex].Get() != Service)
 		{
 			return FailAuthoredProjection(Failure, TEXT("The runtime service identity does not match the authored service order."));
 		}
 		if (bCompareRuntime && !ValidateRuntimeAuxiliaryLink(*Service, ExpectedParent, ExpectedChildIndex, Failure)) return false;
+		++RuntimeIndex;
 	}
 	return true;
 }
@@ -661,6 +673,33 @@ bool ValidateAuthoredMainNode(
 	{
 		return FailAuthoredProjection(Failure, TEXT("The authored BehaviorTree graph has a cycle or reused main node."));
 	}
+	if (UE::AssetDocumentAI::BehaviorTreeAuthoredReadback::IsMissingClassNode(AuthoredNode))
+	{
+		// Stock completion leaves a node whose class is missing, and the branch below it, out of the runtime tree;
+		// the branch is checked for authored coherence only.
+		if (bCompareRuntime || RuntimeComposite != nullptr || RuntimeTask != nullptr
+			|| !(AuthoredNode.IsA(UBehaviorTreeGraphNode_Composite::StaticClass()) || AuthoredNode.IsA(UBehaviorTreeGraphNode_Task::StaticClass())))
+		{
+			return FailAuthoredProjection(Failure, TEXT("An authored main node whose class is missing cannot project a runtime node."));
+		}
+		Active.Add(&AuthoredNode);
+		if (!ValidateAuthoredServices(AuthoredNode, nullptr, nullptr, INDEX_NONE, false, SeenNodes, Failure)) return false;
+		TArray<UBehaviorTreeGraphNode*> Children;
+		if (!GetOrderedAuthoredChildren(Graph, AuthoredNode, Children, Failure)) return false;
+		if (AuthoredNode.IsA(UBehaviorTreeGraphNode_Task::StaticClass()) && Children.Num() != 0)
+		{
+			return FailAuthoredProjection(Failure, TEXT("An authored task node has an invalid child link."));
+		}
+		for (UBehaviorTreeGraphNode* Child : Children)
+		{
+			if (!ValidateAuthoredDecorators(*Child, nullptr, nullptr, nullptr, INDEX_NONE, false, SeenNodes, Failure)
+				|| !ValidateAuthoredMainNode(Graph, *Child, nullptr, nullptr, nullptr, INDEX_NONE, false,
+					Active, Complete, SeenNodes, Failure)) return false;
+		}
+		Active.Remove(&AuthoredNode);
+		Complete.Add(&AuthoredNode);
+		return true;
+	}
 	const UBTCompositeNode* AuthoredComposite = Cast<UBTCompositeNode>(AuthoredNode.NodeInstance.Get());
 	const UBTTaskNode* AuthoredTask = Cast<UBTTaskNode>(AuthoredNode.NodeInstance.Get());
 	if ((AuthoredComposite == nullptr && AuthoredTask == nullptr) || (AuthoredComposite != nullptr && AuthoredTask != nullptr))
@@ -679,10 +718,17 @@ bool ValidateAuthoredMainNode(
 			AuthoredComposite, BTSpecialChild::OwnedByComposite, bCompareRuntime, SeenNodes, Failure)) return false;
 		TArray<UBehaviorTreeGraphNode*> Children;
 		if (!GetOrderedAuthoredChildren(Graph, AuthoredNode, Children, Failure)) return false;
-		if (bCompareRuntime && (RuntimeComposite == nullptr || RuntimeComposite->Children.Num() != Children.Num()))
+		// Children whose class is missing take no runtime child slot, as in stock completion.
+		int32 PresentChildren = 0;
+		for (const UBehaviorTreeGraphNode* Child : Children)
+		{
+			if (!UE::AssetDocumentAI::BehaviorTreeAuthoredReadback::IsMissingClassNode(*Child)) ++PresentChildren;
+		}
+		if (bCompareRuntime && (RuntimeComposite == nullptr || RuntimeComposite->Children.Num() != PresentChildren))
 		{
 			return FailAuthoredProjection(Failure, TEXT("The runtime child count does not match the authored layout order."));
 		}
+		int32 RuntimeIndex = 0;
 		for (int32 Index = 0; Index < Children.Num(); ++Index)
 		{
 			if (Index >= BTSpecialChild::OwnedByComposite)
@@ -690,11 +736,18 @@ bool ValidateAuthoredMainNode(
 				return FailAuthoredProjection(Failure, TEXT("The authored graph exceeds the public auxiliary child-index range."));
 			}
 			UBehaviorTreeGraphNode& Child = *Children[Index];
-			const FBTCompositeChild* RuntimeChild = bCompareRuntime ? &RuntimeComposite->Children[Index] : nullptr;
+			if (UE::AssetDocumentAI::BehaviorTreeAuthoredReadback::IsMissingClassNode(Child))
+			{
+				if (!ValidateAuthoredDecorators(Child, nullptr, nullptr, nullptr, INDEX_NONE, false, SeenNodes, Failure)
+					|| !ValidateAuthoredMainNode(Graph, Child, nullptr, nullptr, nullptr, INDEX_NONE, false,
+						Active, Complete, SeenNodes, Failure)) return false;
+				continue;
+			}
+			const FBTCompositeChild* RuntimeChild = bCompareRuntime ? &RuntimeComposite->Children[RuntimeIndex] : nullptr;
 			if (!ValidateAuthoredDecorators(Child,
 				RuntimeChild != nullptr ? &RuntimeChild->Decorators : nullptr,
 				RuntimeChild != nullptr ? &RuntimeChild->DecoratorOps : nullptr,
-				AuthoredComposite, Index, bCompareRuntime, SeenNodes, Failure)) return false;
+				AuthoredComposite, RuntimeIndex, bCompareRuntime, SeenNodes, Failure)) return false;
 			if (bCompareRuntime && ((RuntimeChild->ChildComposite == nullptr) == (RuntimeChild->ChildTask == nullptr)))
 			{
 				return FailAuthoredProjection(Failure, TEXT("The runtime child must project exactly one main node kind."));
@@ -702,7 +755,8 @@ bool ValidateAuthoredMainNode(
 			if (!ValidateAuthoredMainNode(Graph, Child,
 				RuntimeChild != nullptr ? RuntimeChild->ChildComposite.Get() : nullptr,
 				RuntimeChild != nullptr ? RuntimeChild->ChildTask.Get() : nullptr,
-				AuthoredComposite, Index, bCompareRuntime, Active, Complete, SeenNodes, Failure)) return false;
+				AuthoredComposite, RuntimeIndex, bCompareRuntime, Active, Complete, SeenNodes, Failure)) return false;
+			++RuntimeIndex;
 		}
 	}
 	else
@@ -718,6 +772,38 @@ bool ValidateAuthoredMainNode(
 	}
 	Active.Remove(&AuthoredNode);
 	Complete.Add(&AuthoredNode);
+	return true;
+}
+
+// Main nodes other than the root with no incoming link head disconnected
+// branches. Stock completion leaves them out of the runtime tree, so they are
+// checked for authored coherence only, never against the runtime mirror.
+bool ValidateDetachedAuthoredBranches(
+	UBehaviorTreeGraph& Graph,
+	const UBehaviorTreeGraphNode_Root& Root,
+	TSet<UBehaviorTreeGraphNode*>& Active,
+	TSet<UBehaviorTreeGraphNode*>& Complete,
+	TSet<const UBTNode*>& SeenNodes,
+	FAssetDocumentContractValidationResult& Failure)
+{
+	for (UEdGraphNode* RawNode : Graph.Nodes)
+	{
+		UBehaviorTreeGraphNode* Candidate = Cast<UBehaviorTreeGraphNode>(RawNode);
+		if (Candidate == nullptr || Candidate == &Root || Complete.Contains(Candidate) || Candidate->IsSubNode()
+			|| Candidate->Pins.IsEmpty() || Candidate->Pins[0] == nullptr
+			|| Candidate->Pins[0]->Direction != EGPD_Input || !Candidate->Pins[0]->LinkedTo.IsEmpty()) continue;
+		if (!ValidateAuthoredDecorators(*Candidate, nullptr, nullptr, nullptr, INDEX_NONE, false, SeenNodes, Failure)) return false;
+		if (!ValidateAuthoredMainNode(Graph, *Candidate, nullptr, nullptr, nullptr, INDEX_NONE, false,
+			Active, Complete, SeenNodes, Failure)) return false;
+	}
+	for (UEdGraphNode* RawNode : Graph.Nodes)
+	{
+		if (RawNode->IsA(UEdGraphNode_Comment::StaticClass())) continue;
+		if (RawNode != &Root && (!RawNode->IsA(UBehaviorTreeGraphNode::StaticClass()) || !Complete.Contains(static_cast<UBehaviorTreeGraphNode*>(RawNode))))
+		{
+			return FailAuthoredProjection(Failure, TEXT("The authored graph contains an orphan or wrong-type top-level node."));
+		}
+	}
 	return true;
 }
 
@@ -752,8 +838,12 @@ bool ValidateAuthoredRuntimeProjection(
 	{
 		using namespace UE::AssetDocumentAI::BehaviorTreeAuthoredReadback;
 		FString Identity, Diagnostic;
+		TSet<UBehaviorTreeGraphNode*> Active;
+		TSet<UBehaviorTreeGraphNode*> Complete;
+		TSet<const UBTNode*> SeenNodes;
 		if (!UE::AssetDocumentAI::BehaviorTreeDerivedCompletion::Private::IsExactEmptyAuthoredGraph(Graph)
-			|| !CaptureGraphIdentity(Tree, Identity, Diagnostic, EAuthoredGraphReadbackVersion::V2)
+			&& !ValidateDetachedAuthoredBranches(Graph, *Root, Active, Complete, SeenNodes, Failure)) return false;
+		if (!CaptureGraphIdentity(Tree, Identity, Diagnostic, EAuthoredGraphReadbackVersion::V2)
 			|| !ValidateInstalledGraphOwnership(Tree).bValid
 			|| Root->BlackboardAsset.Get()!=Tree.GetBlackboardAsset()
 			|| Tree.RootNode || !Tree.RootDecorators.IsEmpty() || !Tree.RootDecoratorOps.IsEmpty())
@@ -779,15 +869,7 @@ bool ValidateAuthoredRuntimeProjection(
 		nullptr, INDEX_NONE, bCompareRuntime, SeenNodes, Failure)) return false;
 	if (!ValidateAuthoredMainNode(Graph, RootChild, bCompareRuntime ? Tree.RootNode.Get() : nullptr, nullptr,
 		nullptr, INDEX_NONE, bCompareRuntime, Active, Complete, SeenNodes, Failure)) return false;
-	for (UEdGraphNode* RawNode : Graph.Nodes)
-	{
-		if (RawNode->IsA(UEdGraphNode_Comment::StaticClass())) continue;
-		if (RawNode != Root && (!RawNode->IsA(UBehaviorTreeGraphNode::StaticClass()) || !Complete.Contains(static_cast<UBehaviorTreeGraphNode*>(RawNode))))
-		{
-			return FailAuthoredProjection(Failure, TEXT("The authored graph contains an orphan or wrong-type top-level node."));
-		}
-	}
-	return true;
+	return ValidateDetachedAuthoredBranches(Graph, *Root, Active, Complete, SeenNodes, Failure);
 }
 
 bool ReadSemanticEvidence(
@@ -844,8 +926,59 @@ bool ReadSemanticEvidence(
 	return true;
 }
 
+// The rebuild sorts each parent's child links by position (FCompareNodeXLocation), and that sort does not keep the
+// order of children at the same position. Before it, each parent whose children are in position order with a tie is
+// arranged so that the same sort lands on its current order; afterwards every arranged parent holds its current
+// order again (a parent the rebuild does not reach is not sorted and is put back here).
+TArray<TPair<UEdGraphPin*, TArray<UEdGraphPin*>>> ArrangeTiedChildLinks(UBehaviorTreeGraph& Graph)
+{
+	TArray<TPair<UEdGraphPin*, TArray<UEdGraphPin*>>> Arranged;
+	const FCompareNodeXLocation Less;
+	for (UEdGraphNode* Node : Graph.Nodes)
+	{
+		if (Cast<UBehaviorTreeGraphNode>(Node) == nullptr)
+		{
+			continue;
+		}
+		for (UEdGraphPin* Pin : Node->Pins)
+		{
+			if (Pin == nullptr || Pin->Direction != EGPD_Output || Pin->LinkedTo.Num() < 2
+				|| Pin->LinkedTo.Contains(nullptr)
+				|| Pin->LinkedTo.ContainsByPredicate([](const UEdGraphPin* Link) { return Link->GetOwningNodeUnchecked() == nullptr; }))
+			{
+				continue;
+			}
+			const TArray<UEdGraphPin*>& Current = Pin->LinkedTo;
+			bool bInOrder = true;
+			bool bTied = false;
+			for (int32 Index = 1; Index < Current.Num() && bInOrder; ++Index)
+			{
+				bInOrder = !Less(*Current[Index], *Current[Index - 1]);
+				bTied |= !Less(*Current[Index - 1], *Current[Index]);
+			}
+			if (!bInOrder || !bTied)
+			{
+				continue;
+			}
+			// The sort moves the element at Order[K] to K whatever the elements are, as long as they compare alike.
+			TArray<UEdGraphPin*> Probe = Current;
+			Probe.Sort(Less);
+			TArray<UEdGraphPin*> Input;
+			Input.SetNumZeroed(Current.Num());
+			for (int32 Index = 0; Index < Probe.Num(); ++Index)
+			{
+				Input[Current.IndexOfByKey(Probe[Index])] = Current[Index];
+			}
+			Arranged.Emplace(Pin, Current);
+			Pin->LinkedTo = MoveTemp(Input);
+		}
+	}
+	return Arranged;
+}
+
 void RebuildStockMirror(UBehaviorTreeGraph& Graph, bool bInitializeFromAsset)
 {
+	const TArray<TPair<UEdGraphPin*, TArray<UEdGraphPin*>>> Arranged = ArrangeTiedChildLinks(Graph);
 	if (bInitializeFromAsset)
 	{
 		Graph.UpdateAsset(UBehaviorTreeGraph::KeepRebuildCounter);
@@ -856,6 +989,10 @@ void RebuildStockMirror(UBehaviorTreeGraph& Graph, bool bInitializeFromAsset)
 		// Rebuild their runtime links without invoking project asset lifecycle.
 		Graph.CreateBTFromGraph(FindAuthoredRuntimeRootGraphNode(Graph));
 		Graph.UpdateErrorMessages();
+	}
+	for (const TPair<UEdGraphPin*, TArray<UEdGraphPin*>>& Parent : Arranged)
+	{
+		Parent.Key->LinkedTo = Parent.Value;
 	}
 }
 

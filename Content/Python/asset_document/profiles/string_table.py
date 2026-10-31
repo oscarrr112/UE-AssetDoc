@@ -31,6 +31,7 @@ from asset_document.mutation_intent_projection import SNAPSHOT_COVERED
 from asset_document.profile_runtime import RuntimeProfileRegistration, RuntimeTargetPolicy
 from asset_document.profiles import data_table_common as common
 from asset_document.regions.target_lifecycle import generic_factory_lifecycle, lifecycle_requirements
+from asset_document.tolerance import authored_rule, key as judged_key
 
 STRING_TABLE_CLASS = "/Script/Engine.StringTable"
 PROFILE_ID = "profile.string_table.v1"
@@ -45,11 +46,15 @@ _INVALID = "\"' ,\n\r\t"
 
 
 def _identity(value, path, what):
-    if type(value) is not str or not value.strip() or any(char in value for char in _INVALID) \
-            or any(marker in value for marker in ("[", "]")):
-        raise common.error(path, f"A string table {what} is a non-empty string without spaces, quotes, commas, "
-                                 f"line breaks or [ ] (got {value!r}).",
-                           "StringTable.InvalidNamespace" if what == "namespace" else "StringTable.InvalidKey")
+    """The String Table editor's identity rules (Import from CSV accepts any key, so a table may hold others: they
+    are read as they are, and the rules judge only new or changed keys)."""
+    code = "StringTable.InvalidNamespace" if what == "namespace" else "StringTable.InvalidKey"
+    message = (f"A string table {what} is a non-empty string without spaces, quotes, commas, line breaks or [ ] "
+               f"(got {value!r}).")
+    if type(value) is not str:
+        raise common.error(path, message, code)
+    if not value.strip() or any(char in value for char in _INVALID) or any(marker in value for marker in ("[", "]")):
+        authored_rule(path, code, message, judged=None if what == "namespace" else (judged_key(path),))
     return value
 
 
@@ -64,9 +69,11 @@ def canonical_body(body):
         for key, source in entries.items():
             path = f"/Body/Entries/{common.escape(key)}"
             _identity(key, path, "key")
-            if type(source) is not str or not source:
-                raise common.error(path, "A source string is a non-empty string (the String Table editor does not "
-                                         "add empty entries).", "StringTable.EmptySourceString")
+            if type(source) is not str:
+                raise common.error(path, "A source string is a string.", "StringTable.InvalidEntries")
+            if not source:
+                authored_rule(path, "StringTable.EmptySourceString", "A source string is a non-empty string (the "
+                                    "String Table editor does not add empty entries).")
         out["Entries"] = dict(entries)
     if "MetaData" in body:
         metadata = body["MetaData"]
@@ -80,7 +87,7 @@ def canonical_body(body):
             if type(values) is not dict or any(type(value) is not str for value in values.values()):
                 raise common.error(path, "Entry metadata is an object of metadata id -> string.", "StringTable.InvalidMetaData")
             for name in values:
-                common.validate_name(name, f"{path}/{common.escape(name)}", PREFIX, "metadata id")
+                common.name_rule(name, f"{path}/{common.escape(name)}", PREFIX, "metadata id")
             if values:
                 canonical[key] = dict(values)
             if "Entries" in out and key not in out["Entries"]:

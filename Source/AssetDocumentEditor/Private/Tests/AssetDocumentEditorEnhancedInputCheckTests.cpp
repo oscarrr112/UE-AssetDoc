@@ -7,6 +7,8 @@
 //   - a mapping without an action;
 //   - an Input Action ValueType change while loaded Blueprint nodes bind the action with the old value type, and a
 //     mapping context whose action no longer matches the Blueprint nodes using it.
+// AppendMappingSummary: Validate of a mapping context with one more mapping is one change (the mappings' omitted
+// default members are not removals); one mapping fewer is one removal.
 
 #include "AssetDocumentModule.h"
 #include "AssetDocumentService.h"
@@ -237,5 +239,67 @@ bool FAssetDocumentEnhancedInputDomainWarningsTest::RunTest(const FString& Param
 		TestEqual(*(Stage + TEXT(": both Swizzles warn now")), CountWarnings(Result, TEXT("EnhancedInput.ModifierDropsValue")), 2);
 	});
 	return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentEnhancedInputAppendMappingSummaryTest,
+	"UEAssetDoc.GenericProvider.EnhancedInput.AppendMappingSummary",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAssetDocumentEnhancedInputAppendMappingSummaryTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	using namespace AssetDocumentEditorEnhancedInputCheckTests;
+	if (FindObject<UClass>(nullptr, MappingContextClass) == nullptr)
+	{
+		AddError(TEXT("Enhanced Input is not loaded"));
+		return false;
+	}
+	const FString Folder = FString(TEXT("/Game/AssetDocumentEnhancedInputChecks/"))
+		+ FGuid::NewGuid().ToString(EGuidFormats::Digits).Left(10);
+	const FInputTarget Move(Folder, TEXT("IA_Move"));
+	const FInputTarget Jump(Folder, TEXT("IA_Jump"));
+	const FInputTarget Context(Folder, TEXT("IMC_Default"));
+	ON_SCOPE_EXIT
+	{
+		if (GEditor != nullptr && GEditor->Trans != nullptr && !GIsTransacting && !GEditor->IsTransactionActive())
+		{
+			GEditor->ResetTransaction(NSLOCTEXT("AssetDocumentEnhancedInputCheckTests", "AppendCleanup", "Enhanced Input summary test cleanup"));
+		}
+		Context.Cleanup();
+		Jump.Cleanup();
+		Move.Cleanup();
+		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+	};
+	if (!TestTrue(TEXT("IA_Move applies"), Apply(*this, Move, Move.Generic(InputActionClass, TEXT("{\"ValueType\":\"Axis2D\"}")), TEXT("IA_Move")).IsSuccess())
+		|| !TestTrue(TEXT("IA_Jump applies"), Apply(*this, Jump, Jump.Generic(InputActionClass, TEXT("{\"ValueType\":\"Boolean\"}")), TEXT("IA_Jump")).IsSuccess()))
+	{
+		return false;
+	}
+	// Mappings as an extract writes them: Action and Key, every other member at its default.
+	const FString W = FString::Printf(TEXT("{\"Action\":\"%s\",\"Key\":\"W\"}"), *Move.ObjectPath);
+	const FString Space = FString::Printf(TEXT("{\"Action\":\"%s\",\"Key\":\"SpaceBar\"}"), *Jump.ObjectPath);
+	const FString Pad = FString::Printf(TEXT("{\"Action\":\"%s\",\"Key\":\"Gamepad_FaceButton_Bottom\"}"), *Jump.ObjectPath);
+	const auto Mappings = [&Context](const FString& Rows)
+	{
+		return Context.Generic(MappingContextClass, FString::Printf(TEXT("{\"DefaultKeyMappings\":{\"Mappings\":[%s]}}"), *Rows));
+	};
+	if (!TestTrue(TEXT("two mappings apply"), Apply(*this, Context, Mappings(W + TEXT(",") + Space), TEXT("IMC")).IsSuccess()))
+	{
+		return false;
+	}
+	const auto Count = [](const FAssetDocumentResult& Result, const TCHAR* Field)
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+		return Result.Payload.IsValid() && Result.Payload->TryGetArrayField(Field, Values) ? Values->Num() : 0;
+	};
+	const FAssetDocumentResult Appended = Validate(*this, Mappings(W + TEXT(",") + Space + TEXT(",") + Pad), TEXT("validate append"));
+	TestTrue(*FString::Printf(TEXT("one more mapping removes nothing (%s)"), *Appended.Message),
+		Appended.IsSuccess() && !Appended.Message.Contains(TEXT("removing")));
+	TestEqual(TEXT("one more mapping lists no removal"), Count(Appended, TEXT("removals")), 0);
+	TestEqual(TEXT("one more mapping is one change"), Count(Appended, TEXT("changes")), 1);
+	const FAssetDocumentResult Shorter = Validate(*this, Mappings(W), TEXT("validate removal"));
+	TestTrue(*FString::Printf(TEXT("one mapping fewer removes one entry (%s)"), *Shorter.Message),
+		Shorter.IsSuccess() && Shorter.Message.Contains(TEXT("removing 1 entry")));
+	TestEqual(TEXT("one mapping fewer lists one removal"), Count(Shorter, TEXT("removals")), 1);
+	return !HasAnyErrors();
 }
 #endif

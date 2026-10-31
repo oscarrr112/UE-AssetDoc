@@ -5,8 +5,10 @@
 // as stored (after the engine's PostLoad upgrades, design §7.1); nothing is rebuilt or written.
 //
 // Args {offset?, defaults_at?[document paths]}. Records (paged under the value budget), in document order:
-//   {kind: "header", settings, folders[], markers[], director, metadata, counts{}}
-//   {kind: "binding", id, parent, entry: {Name, Id?, Class?, Bind? | Spawnable? | CustomBinding? | References?, Tags?, Folder?}}
+//   {kind: "header", settings, folders[], markers[], director, groups[], metadata{Author?, Notes?, Objects?},
+//    binding_tags{tag: [binding reference]}, counts{}}
+//   {kind: "binding", id, parent, entry: {Name, Id?, Class?, Bind? | Spawnable? | CustomBinding? | References?, SpawnedBy?, Tags?,
+//                                         Folder?}}  (SpawnedBy: the spawnable a possessable possesses, a binding reference)
 //                                       (every binding, depth first in Sequencer's order; Python builds the tree)
 //   Template / Camera Animation Sequences (design §3.4.3): one root binding
 //   {Name, Id?, Root: {Class, Template?, Ownership?, ContinuouslyRespawn?, NetAddressableName?, LevelName?, SpawnTransform?},
@@ -14,7 +16,9 @@
 //   {Name, Id?, Class?, Component, Tags?} (Component: the component the binding locates by name, "" for none).
 //   {kind: "track", binding, object, entry: {Type, Property?, Name?, Id?, Folder?, Muted?, MutedRows?, Properties?}}
 //                                       (global tracks first, then per binding; binding "" = global)
-//   {kind: "section", object, entry: {Class?, Start?, End?, Row?, ..., Properties?, Channels, Event?}}   (of the last track)
+//   {kind: "section", object, entry: {Class?, Start?, End?, Row?, ..., Properties?, Channels, Event?, ChannelOverrides?}}
+//                                       (of the last track; ChannelOverrides: the marker {"Unsupported": reason} of
+//                                       procedural channel overrides)
 //                                       (object: the track's / section's object name, how seq.edit.v1 addresses them)
 //   {kind: "keys" | "columns", channel, ...}                     (keys of the last section's channel; AssetDocumentSequencerChannels.cpp)
 //   {kind: "warning", code, message, path}                       (content shown raw / kept as it is, design §3.9)
@@ -46,9 +50,11 @@
 #include "MovieSceneMarkedFrame.h"
 #include "MovieSceneMetaData.h"
 #include "MovieSceneNameableTrack.h"
+#include "MovieSceneObjectBindingID.h"
 #include "MovieScenePossessable.h"
 #include "MovieSceneSection.h"
 #include "MovieSceneSequence.h"
+#include "MovieSceneSequenceID.h"
 #include "MovieSceneSpawnable.h"
 #include "MovieSceneTrack.h"
 #include "TemplateSequence.h"
@@ -59,6 +65,28 @@
 
 namespace UE::AssetDocument::Graph::Sequencer
 {
+// The sequence's metadata objects (ULevelSequence::MetaDataObjects is private; the find / add calls go by class).
+TArray<const UObject*> MetaDataObjectsOf(const ULevelSequence& Level)
+{
+	TArray<const UObject*> Objects;
+#if WITH_EDITORONLY_DATA
+	static const FArrayProperty* Property = FindFProperty<FArrayProperty>(ULevelSequence::StaticClass(), TEXT("MetaDataObjects"));
+	const FObjectPropertyBase* Inner = Property != nullptr ? CastField<FObjectPropertyBase>(Property->Inner) : nullptr;
+	if (Inner != nullptr)
+	{
+		FScriptArrayHelper Helper(Property, Property->ContainerPtrToValuePtr<void>(&Level));
+		for (int32 Index = 0; Index < Helper.Num(); ++Index)
+		{
+			if (const UObject* Object = Inner->GetObjectPropertyValue(Helper.GetRawPtr(Index)))
+			{
+				Objects.Add(Object);
+			}
+		}
+	}
+#endif
+	return Objects;
+}
+
 namespace SequencerReadLocal
 {
 bool IsDeclaredBy(const FProperty& Property, std::initializer_list<const UClass*> Bases)
@@ -225,22 +253,85 @@ FValue ReadMarkers(const FSequenceModel& Model)
 	return MakeArray(MoveTemp(Markers));
 }
 
-FValue ReadMetaData(const UMovieSceneSequence& Sequence)
+// Author and Notes of the sequence's UMovieSceneMetaData, and the other metadata objects (take, shot, clip metadata)
+// as Objects [{Class, Properties?}] sorted by class: their stored fields that differ from the class defaults.
+FValue ReadMetaData(const FSequenceModel& Model, FWarnings& Warnings)
 {
 	FObjectBuilder Object;
-	if (const ULevelSequence* Level = Cast<ULevelSequence>(&Sequence))
+	const ULevelSequence* Level = Cast<ULevelSequence>(Model.Sequence);
+	if (Level == nullptr)
 	{
-		if (const UMovieSceneMetaData* MetaData = Level->FindMetaData<UMovieSceneMetaData>())
+		return Object.Build();
+	}
+	if (const UMovieSceneMetaData* MetaData = Level->FindMetaData<UMovieSceneMetaData>())
+	{
+		if (!MetaData->GetAuthor().IsEmpty())
 		{
-			if (!MetaData->GetAuthor().IsEmpty())
-			{
-				Object.AddString(TEXT("Author"), MetaData->GetAuthor());
-			}
-			if (!MetaData->GetNotes().IsEmpty())
-			{
-				Object.AddString(TEXT("Notes"), MetaData->GetNotes());
-			}
+			Object.AddString(TEXT("Author"), MetaData->GetAuthor());
 		}
+		if (!MetaData->GetNotes().IsEmpty())
+		{
+			Object.AddString(TEXT("Notes"), MetaData->GetNotes());
+		}
+	}
+	TArray<const UObject*> Others = MetaDataObjectsOf(*Level);
+	Others.RemoveAll([](const UObject* Item) { return Item->GetClass() == UMovieSceneMetaData::StaticClass(); });
+	Others.Sort([](const UObject& A, const UObject& B) { return A.GetClass()->GetPathName() < B.GetClass()->GetPathName(); });
+	if (!Others.IsEmpty())
+	{
+		TArray<FValue> Rows;
+		for (int32 Index = 0; Index < Others.Num(); ++Index)
+		{
+			FEncodeContext Context{Model, Model.Time, Warnings, FString::Printf(TEXT("/Body/MetaData/Objects/%d"), Index)};
+			Rows.Add(EncodeSubobject(Others[Index], Context));
+		}
+		Object.Add(TEXT("Objects"), MakeArray(MoveTemp(Rows)));
+	}
+	return Object.Build();
+}
+
+// A tagged binding: {"Binding": path} for a binding of this sequence ("#<Id>" when it no longer exists), the
+// sub-sequence form when a sub / shot section reaches it, else the raw form (warned).
+FValue EncodeTaggedBinding(const FMovieSceneObjectBindingID& Id, FEncodeContext& Context)
+{
+	if (Id.GetRelativeSequenceID() == MovieSceneSequenceID::Root)
+	{
+		FObjectBuilder Object;
+		const FBindingInfo* Binding = Context.Model.FindBinding(Id.GetGuid());
+		Object.AddString(TEXT("Binding"), Binding != nullptr ? Binding->Path : TEXT("#") + Id.GetGuid().ToString(EGuidFormats::Digits));
+		return Object.Build();
+	}
+	FValue Remote;
+	if (DescribeRemoteBinding(Context.Model, Id.GetRelativeSequenceID(), Id.GetGuid(), Remote))
+	{
+		return Remote;
+	}
+	return EncodeBindingId(Id, Context);
+}
+
+// Binding tags (Sequencer's binding tag panel, UMovieScene::AllTaggedBindings): {tag: [tagged binding, ...]}, tags
+// sorted by name; a tag with no binding has no effect and is left out.
+FValue ReadBindingTags(const FSequenceModel& Model, FWarnings& Warnings)
+{
+	const TMap<FName, FMovieSceneObjectBindingIDs>& Groups = Model.MovieScene->AllTaggedBindings();
+	TArray<FName> Tags;
+	Groups.GetKeys(Tags);
+	Tags.Sort(FNameLexicalLess());
+	FObjectBuilder Object;
+	for (const FName& Tag : Tags)
+	{
+		const TArray<FMovieSceneObjectBindingID>& Ids = Groups[Tag].IDs;
+		if (Ids.IsEmpty())
+		{
+			continue;
+		}
+		TArray<FValue> Rows;
+		for (int32 Index = 0; Index < Ids.Num(); ++Index)
+		{
+			FEncodeContext Context{Model, Model.Time, Warnings, FString::Printf(TEXT("/Body/BindingTags/%s/%d"), *Escape(Tag.ToString()), Index)};
+			Rows.Add(EncodeTaggedBinding(Ids[Index], Context));
+		}
+		Object.Add(Tag.ToString(), MakeArray(MoveTemp(Rows)));
 	}
 	return Object.Build();
 }
@@ -648,6 +739,13 @@ void AddBinding(const FSequenceModel& Model, const FBindingInfo& Info, TArray<FV
 		}
 		Entry.Add(TEXT("References"), MakeArray(MoveTemp(Raw)));
 	}
+	if (Possessable != nullptr && Possessable->GetSpawnableObjectBindingID().IsValid())
+	{
+		// A parent sequence's spawnable has no path from here: its raw form is how it is written, so it is not warned.
+		FWarnings Quiet;
+		FEncodeContext SpawnedContext{Model, Model.Time, Quiet, Info.DocumentPath + TEXT("/SpawnedBy")};
+		Entry.Add(TEXT("SpawnedBy"), EncodeBindingId(Possessable->GetSpawnableObjectBindingID(), SpawnedContext));
+	}
 	if (Possessable != nullptr)
 	{
 		AddTags(Entry, Possessable->Tags);
@@ -815,8 +913,11 @@ void AddSection(const FSequenceModel& Model, const FTrackInfo& Track, const UMov
 		if (Registry->GetObjectPropertyValue_InContainer(&Section) != nullptr)
 		{
 			Warnings.Add(TEXT("Sequencer.UnsupportedChannelOverride"), TEXT("This section has procedural channel overrides (channel override "
-				"registry); they are kept as they are and cannot be written yet."), Path);
-			Entry.AddString(TEXT("Unsupported"), TEXT("ChannelOverrides"));
+				"registry); they are kept as they are and cannot be written yet."), Path + TEXT("/ChannelOverrides"));
+			// The marker of the overrides (the Python profile's CHANNEL_OVERRIDES has the same reason).
+			FObjectBuilder Overrides;
+			Overrides.AddString(TEXT("Unsupported"), TEXT("Procedural channel overrides (noise) have no document form; AssetDoc keeps them."));
+			Entry.Add(TEXT("ChannelOverrides"), Overrides.Build());
 		}
 	}
 	FObjectBuilder Channels;
@@ -916,8 +1017,9 @@ void AddTrack(const FSequenceModel& Model, const FTrackInfo& Info, TArray<FValue
 	}
 	if (Track.GetClass()->GetName().Contains(TEXT("ControlRig")))
 	{
-		Warnings.Add(TEXT("Sequencer.ControlRigTrack"), TEXT("Control Rig tracks are read through the generic channel proxy; authoring them "
-			"belongs to the Control Rig profile."), Info.DocumentPath);
+		Warnings.Add(TEXT("Sequencer.ControlRigTrack"), TEXT("Control Rig tracks are read through the generic channel proxy: their rig and "
+			"control parameters are not part of the document (sections list no Parameters). Listed as extracted, the track is kept; a new "
+			"Control Rig track is refused (it needs its rig set up in Sequencer)."), Info.DocumentPath);
 	}
 	FObjectBuilder Record;
 	Record.AddString(TEXT("kind"), TEXT("track"));
@@ -1115,7 +1217,8 @@ bool HandleRead(FCall& Call, FObjectBuilder& Result)
 		Header.Add(TEXT("markers"), ReadMarkers(Model));
 		Header.Add(TEXT("director"), DescribeDirectorHeader(*Sequence));
 		Header.Add(TEXT("groups"), ReadNodeGroups(Model));
-		Header.Add(TEXT("metadata"), ReadMetaData(*Sequence));
+		Header.Add(TEXT("metadata"), ReadMetaData(Model, Warnings));
+		Header.Add(TEXT("binding_tags"), ReadBindingTags(Model, Warnings));
 		FObjectBuilder Counts;
 		Counts.AddInt(TEXT("bindings"), Model.Order.Num());
 		Counts.AddInt(TEXT("tracks"), Model.Tracks.Num());

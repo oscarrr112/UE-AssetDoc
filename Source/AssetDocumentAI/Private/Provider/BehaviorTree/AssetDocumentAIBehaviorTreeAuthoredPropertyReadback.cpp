@@ -3,6 +3,8 @@
 
 #include "Provider/BehaviorTree/AssetDocumentAIBehaviorTreeAuthoredReadbackInternal.h"
 
+#include "AssetDocumentEditorPropertyValueCodec.h"
+
 #include "BehaviorTree/BehaviorTreeTypes.h"
 #include "BehaviorTree/BTService.h"
 #include "DetailWidgetRow.h"
@@ -318,7 +320,8 @@ bool ReadExtendedLeaf(const IPropertyHandle& Handle, FPropertyReadContext& Conte
 	{
 		FText Value;
 		if (Handle.GetValue(Value) != FPropertyAccess::Success) return false;
-		OutValue = StringValue(Value.ToString());
+		// The shared text form: the source string, or LOCTABLE / INVTEXT / NSLOCTEXT when that keeps the identity.
+		OutValue = StringValue(UE::AssetDocument::EditorPropertyValueCodec::EncodeText(Value));
 		return true;
 	}
 	if (CastField<FObjectProperty>(Property) || CastField<FSoftObjectProperty>(Property))
@@ -377,6 +380,47 @@ bool ReadAuthoredProperty(IPropertyHandle& Handle, FPropertyReadContext& Context
 
 namespace
 {
+bool IsNonFiniteNumberProperty(const IPropertyHandle& Handle)
+{
+	const FProperty* Property = Handle.GetProperty();
+	if (CastField<FFloatProperty>(Property))
+	{
+		float Value = 0.0f;
+		return Handle.GetValue(Value) == FPropertyAccess::Success && !FMath::IsFinite(Value);
+	}
+	if (CastField<FDoubleProperty>(Property))
+	{
+		double Value = 0.0;
+		return Handle.GetValue(Value) == FPropertyAccess::Success && !FMath::IsFinite(Value);
+	}
+	return false;
+}
+
+// {"Text": export text, "Unsupported": reason}: the value a document cannot hold, with the text that names it.
+bool MakeUnsupportedPropertyMarker(const IPropertyHandle& Handle, FAssetDocumentRuntimeValueDto& OutValue)
+{
+	const FProperty* Property = Handle.GetProperty();
+	if (!Property) return false;
+	FString Reason;
+	if (IsNonFiniteNumberProperty(Handle))
+		Reason = TEXT("A non-finite number has no document form; AssetDoc keeps the value.");
+	else
+	{
+		FString Extended;
+		const FString Type = Property->GetCPPType(&Extended);
+		Reason = FString::Printf(TEXT("A %s%s property value has no document form; AssetDoc keeps the value."),
+			*Type, *Extended);
+	}
+	FString Text;
+	if (Handle.GetValueAsFormattedString(Text, PPF_None) != FPropertyAccess::Success)
+	{
+		OutValue = ObjectValue({TEXT("Unsupported")}, {StringValue(MoveTemp(Reason))});
+		return true;
+	}
+	OutValue = ObjectValue({TEXT("Text"), TEXT("Unsupported")}, {StringValue(MoveTemp(Text)), StringValue(MoveTemp(Reason))});
+	return true;
+}
+
 bool BuildProperties(UObject& Object, FPropertyReadContext& Context, int32 Depth,
  FAssetDocumentRuntimeValueDto& OutProperties)
 {
@@ -416,11 +460,18 @@ bool BuildProperties(UObject& Object, FPropertyReadContext& Context, int32 Depth
 	for (const FString& Key : Keys)
 	{
 		FAssetDocumentRuntimeValueDto Value;
-		if (!ReadAuthoredProperty(*Handles.FindChecked(Key), Context, Depth + 1, Value))
+		IPropertyHandle& Handle = *Handles.FindChecked(Key);
+		if (!ReadAuthoredProperty(Handle, Context, Depth + 1, Value))
 		{
-			UE_LOG(LogTemp, Display, TEXT("BehaviorTree authored property rejected: %s (%s), overflow=%d"),
-				*Key, *Handles.FindChecked(Key)->GeneratePathToProperty(), Context.bOverflow);
-			return false;
+			// A node's own property without a document form reads as a marker holding its export text; the
+			// node stays readable and the value is kept. Budget overflow and nested objects still fail.
+			if (Context.bOverflow || Depth != 0 || Context.Version != EAuthoredGraphReadbackVersion::V2
+				|| Context.RootObject != &Object || !MakeUnsupportedPropertyMarker(Handle, Value))
+			{
+				UE_LOG(LogTemp, Display, TEXT("BehaviorTree authored property rejected: %s (%s), overflow=%d"),
+					*Key, *Handle.GeneratePathToProperty(), Context.bOverflow);
+				return false;
+			}
 		}
 		Values.Add(MoveTemp(Value));
 	}

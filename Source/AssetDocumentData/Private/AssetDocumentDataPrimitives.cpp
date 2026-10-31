@@ -377,9 +377,36 @@ bool EncodeMember(FProperty& Member, const void* ContainerPtr, FValue& OutValue,
 
 bool DecodeMember(FProperty& Member, const FValue& Value, void* ContainerPtr, FString& OutCode, UObject* Owner)
 {
+	FString Message;
+	FString ValuePath;
+	return DecodeMember(Member, Value, ContainerPtr, OutCode, Owner, Message, ValuePath);
+}
+
+bool DecodeMember(FProperty& Member, const FValue& Value, void* ContainerPtr, FString& OutCode, UObject* Owner,
+	FString& OutMessage, FString& OutValuePath)
+{
 	FValue Coerced = Value;
 	Walk(Member, Coerced, false, false);
-	return EditorPropertyValueCodec::Decode(Member, Coerced, Member.ContainerPtrToValuePtr<void>(ContainerPtr), OutCode, Owner);
+	return EditorPropertyValueCodec::Decode(Member, Coerced, Member.ContainerPtrToValuePtr<void>(ContainerPtr), OutCode, Owner,
+		OutMessage, OutValuePath);
+}
+
+FValue MakeUnsupportedMarker(const FProperty& Member, const void* ValuePtr, const FString* Text)
+{
+	FString Exported;
+	if (Text != nullptr)
+	{
+		Exported = *Text;
+	}
+	else if (ValuePtr != nullptr)
+	{
+		Member.ExportText_Direct(Exported, ValuePtr, nullptr, nullptr, PPF_None);
+	}
+	FObjectBuilder Marker;
+	Marker.AddString(TEXT("Unsupported"), FString::Printf(TEXT("%s has no document form; AssetDoc keeps the value."),
+		*Member.GetCPPType()));
+	Marker.AddString(TEXT("Text"), Exported);
+	return Marker.Build();
 }
 
 FValue DescribeMember(FProperty& Member)

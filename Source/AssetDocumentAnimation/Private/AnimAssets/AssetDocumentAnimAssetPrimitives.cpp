@@ -62,6 +62,7 @@ FAssetDocumentPrimitiveDescriptor MakeDescriptor(const TCHAR* PrimitiveId, bool 
 		TEXT("BlendSpace.InvalidAxis"), TEXT("BlendSpace.SampleNotFound"), TEXT("BlendSpace.InvalidSample"),
 		TEXT("BlendSpace.SampleOutOfRange"), TEXT("BlendSpace.IncompatibleAnimation"),
 		TEXT("PoseAsset.PoseNotFound"), TEXT("PoseAsset.PoseExists"), TEXT("PoseAsset.InvalidPoseName"),
+		TEXT("PoseAsset.CurveNotFound"), TEXT("PoseAsset.PoseAddUnsupported"),
 		TEXT("AnimComposite.InvalidSegment"), TEXT("AnimComposite.IncompatibleAnimation")};
 	Descriptor.RequiredConsumerIds = {TEXT("route.generic.v1")};
 	Descriptor.AllowedHandleKinds = {EAssetDocumentHandleKind::Asset};
@@ -93,17 +94,17 @@ TArray<FAssetDocumentPrimitiveDescriptor> BuildDescriptors()
 {
 	return {
 		MakeDescriptor(TEXT("animation_asset.skeleton.read.v1"), false,
-			TEXT("USkeleton::GetReferenceSkeleton;USkeleton::GetSlotGroups;USkeleton::GetVirtualBones;USkeleton::GetBlendProfile;USkeleton::GetCurveMetaData")),
+			TEXT("USkeleton::GetReferenceSkeleton;USkeleton::GetSlotGroups;USkeleton::GetVirtualBones;USkeleton::GetBlendProfile;USkeleton::GetCurveMetaData;USkeleton::GetAssetUserDataArray")),
 		MakeDescriptor(TEXT("animation_asset.skeleton.edit.v1"), true,
-			TEXT("USkeleton::AddSlotGroupName;USkeleton::SetSlotGroupName;USkeleton::RemoveSlotName;USkeleton::RemoveSlotGroup;USkeleton::RenameSlotName;USkeleton::AddNewNamedVirtualBone;USkeleton::RemoveVirtualBones;USkeleton::RenameVirtualBone;USkeleton::CreateNewBlendProfile;USkeleton::RenameBlendProfile;UBlendProfile::SetBoneBlendScale;UBlendProfile::RemoveEntry;USkeleton::SetBoneTranslationRetargetingMode;USkeleton::AddCurveMetaData;USkeleton::RenameCurveMetaData;USkeleton::RemoveCurveMetaData;USkeleton::SetCurveMetaDataMaterial;USkeleton::SetCurveMetaDataMorphTarget")),
+			TEXT("USkeleton::AddSlotGroupName;USkeleton::SetSlotGroupName;USkeleton::RemoveSlotName;USkeleton::RemoveSlotGroup;USkeleton::RenameSlotName;USkeleton::AddNewNamedVirtualBone;USkeleton::RemoveVirtualBones;USkeleton::RenameVirtualBone;USkeleton::CreateNewBlendProfile;USkeleton::RenameBlendProfile;UBlendProfile::SetBoneBlendScale;UBlendProfile::RemoveEntry;USkeleton::SetBoneTranslationRetargetingMode;USkeleton::AddCurveMetaData;USkeleton::RenameCurveMetaData;USkeleton::RemoveCurveMetaData;USkeleton::SetCurveMetaDataMaterial;USkeleton::SetCurveMetaDataMorphTarget;IInterface_AnimCurveMetaData::SetCurveMetaDataBoneLinks;IEditableSkeleton::SetPreviewMesh;IEditableSkeleton::SetAdditionalPreviewSkeletalMeshes;IEditableSkeleton::AddNotify")),
 		MakeDescriptor(TEXT("animation_asset.blend_space.read.v1"), false,
 			TEXT("UBlendSpace::GetBlendParameter;UBlendSpace::GetBlendSample")),
 		MakeDescriptor(TEXT("animation_asset.blend_space.edit.v1"), true,
 			TEXT("UBlendSpace::AddSample;UBlendSpace::DeleteSample;UBlendSpace::ReplaceSampleAnimation;UBlendSpace::ValidateSampleData;UBlendSpace::ResampleData;UObject::PostEditChangeProperty;UAnimationAsset::SetPreviewMesh")),
 		MakeDescriptor(TEXT("animation_asset.pose_asset.read.v1"), false,
-			TEXT("UPoseAsset::GetPoseFNames;UPoseAsset::GetCurveFNames;UPoseAsset::GetBasePoseIndex")),
+			TEXT("UPoseAsset::GetPoseFNames;UPoseAsset::GetCurveFNames;UPoseAsset::GetBasePoseIndex;UPoseAsset::GetCurveValues;UPoseAsset::GetFullPose")),
 		MakeDescriptor(TEXT("animation_asset.pose_asset.edit.v1"), true,
-			TEXT("UPoseAsset::ModifyPoseName;UPoseAsset::DeletePoses;UPoseAsset::ConvertSpace;UPoseAsset::UpdatePoseFromAnimation;UAnimationAsset::SetPreviewMesh")),
+			TEXT("UPoseAsset::ModifyPoseName;UPoseAsset::DeletePoses;UPoseAsset::DeleteCurves;UPoseAsset::AddReferencePose;UPoseAsset::ConvertSpace;UPoseAsset::UpdatePoseFromAnimation;UAnimationAsset::SetPreviewMesh")),
 		MakeDescriptor(TEXT("animation_asset.composite.read.v1"), false,
 			TEXT("UAnimComposite::AnimationTrack;UAnimSequenceBase::GetPlayLength")),
 		MakeDescriptor(TEXT("animation_asset.composite.edit.v1"), true,

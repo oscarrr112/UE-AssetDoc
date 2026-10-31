@@ -30,19 +30,25 @@ bool StringEquals(const FValue& Value, FStringView Expected)
 {
 	return Value.Kind == EKind::String && Value.StringValue == Expected;
 }
+bool HasNoBytes(const FValue& Value)
+{
+	if (Value.Kind == EKind::Bytes) return false;
+	for (const FValue& Child : Value.Elements) if (!HasNoBytes(Child)) return false;
+	return true;
+}
+// This rejects transport/state envelopes, not authored-domain semantics: the envelope names are reserved as the
+// intent's own fields (exact spelling). Nested objects are the authored values, where a property may have any name
+// (a variable called Slot or Body).
 bool IsValueIntent(const FValue& Value)
 {
-	// This rejects transport/state envelopes, not authored-domain semantics.
 	static const TCHAR* const Forbidden[] = {TEXT("Body"), TEXT("Handle"), TEXT("Handles"),
 		TEXT("HandleArguments"), TEXT("OpaqueHandle"), TEXT("Address"), TEXT("Pointer"),
 		TEXT("Rollback"), TEXT("RollbackCode"), TEXT("TransactionId"), TEXT("Slot"), TEXT("Generation")};
-	if (Value.Kind == EKind::Bytes) return false;
 	for (const FString& Key : Value.ObjectKeys)
 	{
-		for (const TCHAR* Reserved : Forbidden) if (Key == Reserved) return false;
+		for (const TCHAR* Reserved : Forbidden) if (Key.Equals(Reserved, ESearchCase::CaseSensitive)) return false;
 	}
-	for (const FValue& Child : Value.Elements) if (!IsValueIntent(Child)) return false;
-	return true;
+	return HasNoBytes(Value);
 }
 }
 

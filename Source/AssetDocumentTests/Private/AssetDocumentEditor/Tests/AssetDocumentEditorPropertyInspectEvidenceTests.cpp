@@ -428,8 +428,9 @@ bool FAssetDocumentGenericProviderPropertyInspectEvidenceTest::RunTest(const FSt
 		}(FindRow(*LiveAdmitted, TEXT("EditConstValue"))));
 	TestTrue(TEXT("transient code is stable"),
 		HasReason(*LiveRejected, TEXT("TransientValue"), TEXT("Transient")));
-	TestTrue(TEXT("duplicate transient code is stable"),
-		HasReason(*LiveRejected, TEXT("DuplicateTransientValue"), TEXT("DuplicateTransient")));
+	// Saved with the asset and edited in Details; only a duplicate of the asset resets it.
+	TestNotNull(TEXT("duplicate transient value is admitted"),
+		FindRow(*LiveAdmitted, TEXT("DuplicateTransientValue")));
 	TestTrue(TEXT("deprecated code is stable"),
 		HasReason(*LiveRejected, TEXT("DeprecatedValue"), TEXT("Deprecated")));
 	TestTrue(TEXT("skip serialization code is stable"),

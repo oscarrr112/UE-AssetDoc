@@ -137,6 +137,10 @@ inline bool Compatible(const TArray<FSlotAnimationTrack>& Tracks, const USkeleto
 }
 inline bool Compatible(const UAnimMontage& Target, const USkeleton* Desired)
 { return Compatible(Target.SlotAnimTracks, Desired); }
+// Setting the Skeleton the Montage already has changes nothing, so its tracks are kept as they are
+// (a slot its Skeleton no longer lists, a segment whose animation is gone).
+inline bool KeepsSkeleton(const UAnimMontage& Target, const USkeleton* Desired)
+{ return Desired && Target.GetSkeleton() == Desired && Target.GetSkeletonGuid() == Desired->GetGuid(); }
 // Why Compatible() refuses Desired: the first slot it lacks (with the slots it has) or the first
 // animation whose skeleton it does not accept, so an author can fix the document or the Skeleton.
 inline FString IncompatibleReason(const TArray<FSlotAnimationTrack>& Tracks, const USkeleton* Desired)

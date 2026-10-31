@@ -19,6 +19,8 @@ from typing import Callable
 
 from asset_document.canonical.document_codec import DocumentCodec
 from asset_document.diagnostics import AssetDocumentContractError, contract_error
+from asset_document.markers import is_marker
+from asset_document.tolerance import authored_rule
 
 PropertyMapper = Callable[[str, dict], dict]
 ClassEvidence = Callable[[str], dict]
@@ -125,7 +127,6 @@ class _Lower:
         self.existing_comments = {_guid(item["Id"], "/Existing/Comments/Id"): item for item in existing_comments}
         self.ids = set()
         self.ordinal = 0
-        self.positions = set()
 
     def identity(self, node, path):
         value = _guid(node.get("Id"), path + "/Id")
@@ -144,26 +145,32 @@ class _Lower:
         class_path = _text(node.get("Class"), path + "/Class", "InvalidBehaviorTreeNodeClass").strip()
         if not class_path:
             _fail(path + "/Class", "Class is required", "InvalidBehaviorTreeNodeClass")
+        if "Unsupported" in node:
+            # A node whose class is missing: it has no properties to write and is kept as the asset holds it.
+            reason = _text(node["Unsupported"], path + "/Unsupported", "BehaviorTree.UnrepresentedValue")
+            if not reason:
+                _fail(path + "/Unsupported", "Unsupported must name its reason", "BehaviorTree.UnrepresentedValue")
+            if "Properties" in node:
+                _fail(path + "/Properties", "A node whose class is missing has no properties to write",
+                      "BehaviorTree.UnrepresentedValue")
+            return {"stable_node_id": identity, "node_class_path": class_path, "authored_properties": {},
+                    "editor": self.editor(node, depth, path), "unsupported": reason}
         return {"stable_node_id": identity, "node_class_path": class_path,
                 "authored_properties": _map_properties(node, self.mapper, path),
                 "editor": self.editor(node, depth, path)}
 
     def main(self, node, path, depth=0):
-        _object(node, ("Id", "Class", "Properties", "Editor", "Children", "Decorators", "Services"), path,
-                code="InvalidBehaviorTreeNode")
+        _object(node, ("Id", "Class", "Properties", "Editor", "Children", "Decorators", "Services", "Unsupported"),
+                path, code="InvalidBehaviorTreeNode")
+        # Nodes may share a coordinate (pasted on top of each other): the editor keeps both.
         result = self.simple(node, path, depth)
-        position = tuple(result["editor"]["position"].values())
-        if position in self.positions:
-            _fail(path + "/Editor/Position/X", "Main nodes cannot share a coordinate",
-                  "DuplicateBehaviorTreeSiblingCoordinate")
-        self.positions.add(position)
         result["decorators"] = [self.decorator(item, f"{path}/Decorators/{i}")
                                 for i, item in enumerate(_array(node.get("Decorators", []), path + "/Decorators",
                                                                "InvalidBehaviorTreeArray"))]
         result["services"] = []
         for i, item in enumerate(_array(node.get("Services", []), path + "/Services", "InvalidBehaviorTreeArray")):
             subpath = f"{path}/Services/{i}"
-            _object(item, ("Id", "Class", "Properties", "Editor"), subpath, code="InvalidBehaviorTreeService")
+            _object(item, ("Id", "Class", "Properties", "Editor", "Unsupported"), subpath, code="InvalidBehaviorTreeService")
             result["services"].append(self.simple(item, subpath))
         result["children"] = [self.main(item, f"{path}/Children/{i}", depth + 1)
                               for i, item in enumerate(_array(node.get("Children", []), path + "/Children",
@@ -176,7 +183,7 @@ class _Lower:
         if "Kind" in node and node["Kind"] != "Composite":
             _fail(path + "/Kind", "Decorator Kind must be Composite when present", "InvalidBehaviorTreeDecoratorKind")
         if "Kind" not in node:
-            _object(node, ("Id", "Class", "Properties", "Editor"), path)
+            _object(node, ("Id", "Class", "Properties", "Editor", "Unsupported"), path)
             return dict(self.simple(node, path), kind="simple", bound_graph=None)
         _object(node, ("Id", "Kind", "Properties", "Editor", "BoundGraph"), path)
         properties = _object(node.get("Properties", {}), ("CompositeName", "bShowOperations"), path + "/Properties",
@@ -195,17 +202,24 @@ class _Lower:
                 "editor": editor, "bound_graph": bound}
 
     def bound(self, graph, path):
-        _object(graph, ("GraphGuid", "Nodes", "Links"), path, code="InvalidBehaviorTreeObject")
+        _object(graph, ("GraphGuid", "Nodes", "Links", "Comments"), path, code="InvalidBehaviorTreeObject")
         graph_guid = _guid(graph.get("GraphGuid"), path + "/GraphGuid", "InvalidBehaviorTreeGraphGuid")
-        nodes, node_paths = [], {}
+        nodes, node_paths, declared_inputs = [], {}, {}
         for i, node in enumerate(_array(graph.get("Nodes"), path + "/Nodes", "InvalidBehaviorTreeArray")):
             subpath = f"{path}/Nodes/{i}"
-            _object(node, ("Id", "Kind", "Class", "Properties", "Editor"), subpath,
+            _object(node, ("Id", "Kind", "Class", "Properties", "Editor", "InputCount"), subpath,
                     code="InvalidBehaviorTreeDecoratorNode")
             identity = self.identity(node, subpath)
             kind = node.get("Kind")
             if kind not in ("Sink", "Test", "And", "Or", "Not"):
                 _fail(subpath + "/Kind", "Unknown bound node kind", "InvalidBehaviorTreeDecoratorKind")
+            if "InputCount" in node:
+                count = _int(node["InputCount"], subpath + "/InputCount", "InvalidBehaviorTreeDecoratorInput")
+                fixed = {"Test": 0, "Sink": 1, "Not": 1}.get(kind)
+                if (fixed is not None and count != fixed) or (fixed is None and count < 2):
+                    _fail(subpath + "/InputCount", "InputCount is 0 for Test, 1 for Sink and Not, and at least 2 for And and Or",
+                          "InvalidBehaviorTreeDecoratorInput")
+                declared_inputs[identity] = count
             if kind == "Test":
                 class_path = _text(node.get("Class"), subpath + "/Class", "InvalidBehaviorTreeNodeClass").strip()
                 if not class_path:
@@ -261,29 +275,38 @@ class _Lower:
         sinks = []
         for node in nodes:
             identity, kind = node["stable_node_id"], node["kind"]
-            count = sum(target == identity for target, _ in inputs)
-            expected = count if kind in ("and", "or") else (0 if kind == "test" else 1)
-            if count != expected or (kind in ("and", "or") and count < 2) or any((identity, i) not in inputs for i in range(expected)):
-                _fail(node_paths[identity], "Bound graph requires contiguous complete input arity",
-                      "InvalidBehaviorTreeDecoratorArity")
-            node["input_count"] = expected
+            slots = [slot for target, slot in inputs if target == identity]
+            if kind in ("and", "or"):
+                count = declared_inputs.get(identity, max([2] + [slot + 1 for slot in slots]))
+            else:
+                count = 0 if kind == "test" else 1
+            if any(slot >= count for slot in slots):
+                _fail(node_paths[identity], "A link names an input the node does not have", "InvalidBehaviorTreeDecoratorArity")
+            node["input_count"] = count
             if kind == "sink":
                 sinks.append(identity)
                 if identity in outgoing:
                     _fail(node_paths[identity], "Sink cannot have an outgoing link", "InvalidBehaviorTreeDecoratorArity")
-            elif identity not in outgoing:
-                _fail(node_paths[identity], "Node does not reach the Sink", "UnreachableBehaviorTreeDecoratorNode")
+            # An input left unwired (a third input added to an And, not yet connected) is a rule for new input:
+            # the editor keeps such a graph and ignores the open input.
+            if len(slots) != count:
+                authored_rule(node_paths[identity], "InvalidBehaviorTreeDecoratorArity",
+                              "Every input of a bound graph node must be connected.")
         if len(sinks) != 1:
             _fail(path + "/Nodes", "Bound graph requires exactly one Sink", "InvalidBehaviorTreeDecoratorSink")
         for node in nodes:
             identity = node["stable_node_id"]
             seen, current = set(), identity
-            while current != sinks[0]:
-                if current in seen or current not in outgoing:
-                    _fail(node_paths[identity], "Node does not reach the Sink", "UnreachableBehaviorTreeDecoratorNode")
+            while current != sinks[0] and current not in seen and current in outgoing:
                 seen.add(current)
                 current = outgoing[current][0]
-        return {"graph_guid": graph_guid, "comments": [],
+            if current != sinks[0]:
+                # A node not wired to the Sink is ignored by the editor's compile; it is kept as authored.
+                authored_rule(node_paths[identity], "UnreachableBehaviorTreeDecoratorNode",
+                              "Every bound graph node must reach the Sink.")
+        comments = [self.comment(item, f"{path}/Comments/{i}")
+                    for i, item in enumerate(_array(graph.get("Comments", []), path + "/Comments", "InvalidBehaviorTreeArray"))]
+        return {"graph_guid": graph_guid, "comments": sorted(comments, key=lambda item: item["stable_node_id"]),
                 "nodes": sorted(nodes, key=lambda item: item["stable_node_id"]),
                 "links": sorted(links, key=lambda item: (item["from_stable_node_id"], item["to_stable_node_id"], item["to_input_index"]))}
 
@@ -346,7 +369,7 @@ def tree_to_semantic_projection(tree: dict, *, property_mapper: PropertyMapper |
     omitted fields of comments with an existing Id, without ambient state access.
     """
     DocumentCodec().validate(tree)
-    _object(tree, ("GraphGuid", "Root", "Comments"), "/Body/Tree", ("Root",),
+    _object(tree, ("GraphGuid", "Root", "Detached", "Comments"), "/Body/Tree", ("Root",),
             code="InvalidBehaviorTreeObject")
     if existing_tree is not None:
         DocumentCodec().validate(existing_tree)
@@ -363,9 +386,15 @@ def tree_to_semantic_projection(tree: dict, *, property_mapper: PropertyMapper |
     root = tree["Root"]
     if type(root) is not dict:
         _fail("/Body/Tree/Root", "Root must be an object; empty object denotes an empty tree", "InvalidBehaviorTreeObject")
-    return {"graph_state": "present", "graph_guid": graph_guid,
-            "comments": sorted(comments, key=lambda item: item["stable_node_id"]),
-            "root": lower.main(root, "/Body/Tree/Root") if root else None}
+    result = {"graph_state": "present", "graph_guid": graph_guid,
+              "comments": sorted(comments, key=lambda item: item["stable_node_id"]),
+              "root": lower.main(root, "/Body/Tree/Root") if root else None}
+    # Disconnected main branches (no parent): the editor keeps them in the graph, out of the runtime tree.
+    detached = [lower.main(item, f"/Body/Tree/Detached/{i}")
+                for i, item in enumerate(_array(tree.get("Detached", []), "/Body/Tree/Detached", "InvalidBehaviorTreeArray"))]
+    if detached:
+        result["detached"] = sorted(detached, key=lambda item: item["stable_node_id"])
+    return result
 
 
 def canonicalize_body(body: dict) -> dict:
@@ -411,12 +440,13 @@ def _raise_comment(value):
 def readback_v2_to_tree(value: dict, *, property_mapper: PropertyMapper | None = None) -> dict:
     """Map full public D2 Value to legacy authored shape without guessing types.
 
-    Bound comments and unconnected input slots have no legacy wire field. Reject
-    that unrepresentable extension explicitly instead of dropping authored data.
-    The caller may retain the original V2 value for overlay equivalence/digests.
+    A bound graph's comments read as its ``Comments``, and a node with an open input
+    as its ``InputCount``. The caller may retain the original V2 value for overlay
+    equivalence/digests.
     """
     DocumentCodec().validate(value)
-    _object(value, ("comments", "graph_guid", "graph_state", "root"), "/Readback", ("comments", "graph_guid", "graph_state", "root"))
+    _object(value, ("comments", "detached", "graph_guid", "graph_state", "root"), "/Readback",
+            ("comments", "graph_guid", "graph_state", "root"))
     if value["graph_state"] not in ("absent", "present"):
         _fail("/Readback", "Unknown graph state")
 
@@ -425,24 +455,30 @@ def readback_v2_to_tree(value: dict, *, property_mapper: PropertyMapper | None =
         return property_mapper(node[class_key], props) if property_mapper else props
 
     def simple(node, class_key="node_class_path"):
+        if "unsupported" in node:
+            # Its class is missing: the node reads as that class and the reason, without properties.
+            return {"Id": node["stable_node_id"], "Class": node[class_key], "Unsupported": node["unsupported"],
+                    "Editor": _raise_editor(node["editor"])}
         return {"Id": node["stable_node_id"], "Class": node[class_key],
                 "Properties": properties(node, class_key), "Editor": _raise_editor(node["editor"])}
 
     def bound(graph):
-        if graph["comments"]:
-            _fail("/Readback/BoundGraph/comments", "Legacy BoundGraph has no Comments field", "BehaviorTree.UnrepresentableReadback")
         nodes = []
         for node in graph["nodes"]:
             linked = sum(link["to_stable_node_id"] == node["stable_node_id"] for link in graph["links"])
-            if linked != node["input_count"]:
-                _fail("/Readback/BoundGraph/input_count", "Legacy BoundGraph cannot encode unconnected input slots", "BehaviorTree.UnrepresentableReadback")
             entry = simple(node, "node_class_path_or_null") if node["kind"] == "test" else {
                 "Id": node["stable_node_id"], "Editor": _raise_editor(node["editor"])}
             entry["Kind"] = node["kind"].capitalize()
+            # Written only when an input is open, so a fully wired graph reads as before.
+            if linked != node["input_count"]:
+                entry["InputCount"] = node["input_count"]
             nodes.append(entry)
-        return {"GraphGuid": graph["graph_guid"], "Nodes": nodes,
-                "Links": [{"From": item["from_stable_node_id"], "To": item["to_stable_node_id"],
-                           "ToInput": item["to_input_index"]} for item in graph["links"]]}
+        result = {"GraphGuid": graph["graph_guid"], "Nodes": nodes,
+                  "Links": [{"From": item["from_stable_node_id"], "To": item["to_stable_node_id"],
+                             "ToInput": item["to_input_index"]} for item in graph["links"]]}
+        if graph["comments"]:
+            result["Comments"] = [_raise_comment(item) for item in graph["comments"]]
+        return result
 
     def decorator(node):
         if node["kind"] == "simple":
@@ -458,12 +494,15 @@ def readback_v2_to_tree(value: dict, *, property_mapper: PropertyMapper | None =
                     Services=[simple(child) for child in node["services"]])
 
     if value["graph_state"] == "absent":
-        if value["graph_guid"] is not None or value["root"] is not None or value["comments"]:
+        if value["graph_guid"] is not None or value["root"] is not None or value["comments"] or value.get("detached"):
             _fail("/Readback", "Absent graph must have no authored content")
         return {"Root": {}, "Comments": []}
     result = {"GraphGuid": _guid(value["graph_guid"], "/Readback/graph_guid"),
               "Root": main(value["root"]) if value["root"] is not None else {},
               "Comments": [_raise_comment(item) for item in value["comments"]]}
+    # Written only when present, so a tree with every node connected reads as before.
+    if value.get("detached"):
+        result["Detached"] = [main(item) for item in _array(value["detached"], "/Readback/detached")]
     # Reuse the legacy topology validator, including global identity and arity.
     tree_to_semantic_projection(result)
     return result
@@ -574,6 +613,12 @@ def _property_value(value, schema, default, path, to_native, struct_schemas, obj
     if type(schema) is not dict:
         _fail(path, "Missing property type evidence", "BehaviorTree.InvalidClassEvidence")
     kind = schema.get("kind")
+    if kind == "unsupported":
+        # A property without a document form holds the marker a read gave it; no value can be written to it.
+        if not is_marker(value):
+            _fail(path, "This property has no document form; leave its marker as extracted, or omit it to keep the "
+                  "current value.", "BehaviorTree.UnrepresentedValue")
+        return deepcopy(value)
     if kind == "instanced_object":
         if value is None:
             return None
@@ -605,6 +650,19 @@ def _property_value(value, schema, default, path, to_native, struct_schemas, obj
     if kind == "name":
         name = _text(value, path, "InvalidPropertyValue")
         return "None" if not name or name.casefold() == "none" else name
+    if kind == "gameplay_tag":
+        # The tag name as the tag picker shows it; no tag is "None".
+        tag = _text(value, path, "InvalidPropertyValue")
+        return "None" if not tag or tag.casefold() == "none" else tag
+    if kind == "gameplay_tag_container":
+        _array(value, path, "InvalidPropertyValue")
+        tags = [_text(item, f"{path}/{index}", "InvalidPropertyValue") for index, item in enumerate(value)]
+        for index, tag in enumerate(tags):
+            if not tag or tag.casefold() == "none":
+                _fail(f"{path}/{index}", "A tag container lists tag names; remove the empty entry", "InvalidPropertyValue")
+            if tag in tags[:index]:
+                _fail(f"{path}/{index}", "A tag container lists each tag once", "InvalidPropertyValue")
+        return tags
     if kind == "instanced_struct":
         if value is None:
             return None
@@ -744,7 +802,10 @@ def lower_authored_properties(class_path: str, authored: dict, *, evidence: Clas
     DocumentCodec().validate(authored)
     result = {}
     for name, shape in schema.items():
-        if name in authored:
+        if name in authored and is_marker(authored[name]):
+            # A node's own property read as a marker (a value of no document form, such as a non-finite number).
+            result[name] = deepcopy(authored[name])
+        elif name in authored:
             result[name] = _property_value(authored[name], shape, defaults[name], _path("/Properties", name), True, structs, object_evidence, reference_resolver)
         else:
             result[name] = deepcopy(defaults[name])
@@ -763,7 +824,8 @@ def extract_authored_properties(class_path: str, observed: dict, *, evidence: Cl
     if type(observed) is not dict or set(observed) != set(schema):
         _fail("/Properties", "Readback must cover the complete inspected authored inventory", "BehaviorTree.IncompleteReadback")
     DocumentCodec().validate(observed)
-    return {name: _property_value(value, schema[name], defaults[name], _path("/Properties", name), False, structs, object_evidence, reference_resolver)
+    return {name: deepcopy(value) if is_marker(value) else
+            _property_value(value, schema[name], defaults[name], _path("/Properties", name), False, structs, object_evidence, reference_resolver)
             for name, value in observed.items()
             if not omit_defaults or encode_runtime_value(value) != encode_runtime_value(defaults[name])}
 
@@ -794,6 +856,8 @@ def selector_inventory(readback_value: dict, *, evidence: ClassEvidence,
 
     def scan(value, shape, path, identity, structs, unsupported=False, inner=False):
         kind = shape.get("kind")
+        if is_marker(value):
+            return
         if kind == "selector":
             if unsupported or inner:
                 _fail(path, "Selector requires an observed native owner/property locator", "BehaviorTree.SelectorLocatorEvidenceRequired")
@@ -834,6 +898,8 @@ def selector_inventory(readback_value: dict, *, evidence: ClassEvidence,
         if identity in identities:
             _fail("/Readback", "Duplicate node identity in selector inventory")
         identities.add(identity)
+        if "unsupported" in value:
+            return
         _, fields, structs = _class_evidence(value[class_key], evidence)
         properties = value["authored_properties"]
         if set(properties) != set(fields):
@@ -857,4 +923,6 @@ def selector_inventory(readback_value: dict, *, evidence: ClassEvidence,
 
     if readback_value["root"] is not None:
         main(readback_value["root"])
+    for branch in readback_value.get("detached", []):
+        main(branch)
     return sorted(result, key=lambda item: (item["stable_node_id"], item["property_path"]))

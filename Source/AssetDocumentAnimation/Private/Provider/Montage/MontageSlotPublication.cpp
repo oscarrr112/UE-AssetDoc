@@ -103,8 +103,10 @@ FAssetDocumentContractValidationResult BuildMontageSlots(
  for (int32 SlotIndex = 0; SlotIndex < Input.Num(); ++SlotIndex)
  {
   const auto& Slot = Input[SlotIndex];
+  // A slot the Montage already has is kept even when its Skeleton no longer lists it; a new name must be listed.
+  const bool bExisting = Target.SlotAnimTracks.ContainsByPredicate([&Slot](const FSlotAnimationTrack& Track) { return Track.SlotName == Slot.Name; });
   if (Slot.Name.IsNone() || Names.Contains(Slot.Name) || !IsValid(Target.GetSkeleton())
-   || !Target.GetSkeleton()->ContainsSlotName(Slot.Name))
+   || (!bExisting && !Target.GetSkeleton()->ContainsSlotName(Slot.Name)))
    return Result(false, TEXT("AnimationProvider.Montage.InvalidSlot"), InvalidSlotMessage(Slot.Name, Names.Contains(Slot.Name), Target.GetSkeleton()));
   Names.Add(Slot.Name);
   FSlotAnimationTrack Native;

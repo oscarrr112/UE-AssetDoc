@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import unittest
 
-from asset_document.diagnostics import AssetDocumentContractError
+from asset_document.diagnostics import AssetDocumentContractError, collecting_read_warnings
 from asset_document.profiles import material
 
 TARGET = "/Game/Materials/M_Test"
@@ -374,6 +374,79 @@ class ExtractDiffTests(unittest.TestCase):
         paths = sorted(item.path for item in self._diff(body))
         self.assertEqual(paths, ["/Body/Expressions/Mul/Inputs/A", "/Body/Expressions/New", "/Body/Expressions/Note",
                                  "/Body/Outputs"])
+
+
+class UnplaceableClassTests(unittest.TestCase):
+    """A node of a deprecated class (or one replaced by a newer version): the class query has no row for it, so
+    the node reads with every property; the extract re-applies as a no-op and warns that the engine does not save
+    such nodes."""
+
+    OLD = "/Script/Project.OldExpression"
+
+    class _Calls:
+        def __init__(self, rows, classes):
+            self.rows, self.classes, self.asked = rows, classes, []
+
+        def query_all(self, read, what):
+            return {"host": "material", "outputs": {"Roughness": "Mul"}, "parameter_groups": {},
+                    "compile_errors": []}, self.rows
+
+        def query(self, read, args):
+            self.asked.extend(args["classes"])
+            return {"classes": {label: row for label, row in self.classes.items() if label in args["classes"]}}
+
+    def _live(self):
+        rows = [{"key": "Old", "class": self.OLD, "position": [-700, 0], "unplaceable": True,
+                 "properties": {"Scale": 2.0, "Desc": ""}, "inputs": {}, "outputs": [""]},
+                {"key": "Mul", "class": "Multiply", "position": [-200, 0], "properties": {}, "inputs": {"A": "Old"},
+                 "outputs": [""]}]
+        calls = self._Calls(rows, {"Multiply": DEFAULTS["Multiply"]})
+        live = material.read_live(calls)
+        saved = dict(material._CLASS_DEFAULTS)
+        self.addCleanup(lambda: (material._CLASS_DEFAULTS.clear(), material._CLASS_DEFAULTS.update(saved)))
+        defaults = material.class_defaults(calls, {row["Class"] for row in live["expressions"].values()})
+        return live, defaults, calls
+
+    def test_read_lists_every_property_and_warns(self):
+        live, defaults, calls = self._live()
+        self.assertIn(self.OLD, calls.asked)
+        self.assertNotIn(self.OLD, defaults)
+        self.assertTrue(live["expressions"]["Old"]["unplaceable"])
+        self.assertFalse(live["expressions"]["Mul"]["unplaceable"])
+        with collecting_read_warnings() as warnings:
+            material.warn_unplaceable(live)
+        self.assertEqual([(item.code, item.path) for item in warnings],
+                         [("Material.UnplaceableExpression", "/Body/Expressions/Old")])
+        body = material._body(live, material.MATERIAL_CLASS)
+        self.assertEqual(body["Expressions"]["Old"], {"Class": self.OLD, "Position": [-700, 0],
+                                                      "Properties": {"Scale": 2.0, "Desc": ""}})
+
+    def test_warning_only_inside_a_read(self):
+        live, _, _ = self._live()
+        material.warn_unplaceable(live)  # (Validate / Apply / Diff: nothing recorded, nothing raised)
+
+    def test_extract_reapplies_as_a_no_op(self):
+        live, defaults, _ = self._live()
+        extracted = material.canonicalize(_document(material._body(live, material.MATERIAL_CLASS)))
+        self.assertEqual(material.graph_ops(material.canonical_body(extracted["Body"], material.MATERIAL_CLASS), live,
+                                            defaults), [])
+        self.assertEqual(material.diff(extracted, extracted, False, defaults=defaults), ())
+
+    def test_other_edits_leave_the_node(self):
+        live, defaults, _ = self._live()
+        body = material._body(live, material.MATERIAL_CLASS)
+        body["Expressions"]["Mul"]["Properties"] = {"ConstB": 3.0}
+        ops = material.graph_ops(material.canonical_body(body, material.MATERIAL_CLASS), live, defaults)
+        self.assertEqual([op for op, _ in ops], [{"op": "set", "key": "Mul", "properties": {"ConstB": 3.0}}])
+
+    def test_new_node_of_the_class_is_sent_as_a_create(self):
+        # (The editor side refuses it: Material.UnknownExpressionClass.)
+        live, defaults, _ = self._live()
+        body = material._body(live, material.MATERIAL_CLASS)
+        body["Expressions"]["Another"] = {"Class": self.OLD, "Position": [-900, 0]}
+        ops = material.graph_ops(material.canonical_body(body, material.MATERIAL_CLASS), live, defaults)
+        self.assertEqual(ops[0], ({"op": "create", "key": "Another", "class": self.OLD, "position": [-900, 0]},
+                                  "/Body/Expressions/Another/Class"))
 
 
 class ChangedParameterDefaultsTest(unittest.TestCase):

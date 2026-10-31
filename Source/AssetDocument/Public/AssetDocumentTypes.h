@@ -82,6 +82,10 @@ inline const TCHAR* const AssetDocumentBaseRevisionField = TEXT("BaseRevision");
 // what the file cannot express ("Skipped"). Apply, validate and diff ignore it; Extract never emits it.
 inline const TCHAR* const AssetDocumentSyncMetaField = TEXT("_meta");
 
+// The top-level object a profile's extract hands the graph nodes' sizes in (FAssetDocumentExtractRequest::bIncludeLayout):
+// the service moves it to the result's Layout, so a document never holds it.
+inline const TCHAR* const AssetDocumentExtractLayoutField = TEXT("_Layout");
+
 struct ASSETDOCUMENT_API FAssetDocumentExtractRequest
 {
 	FString AssetPath;
@@ -89,6 +93,9 @@ struct ASSETDOCUMENT_API FAssetDocumentExtractRequest
 	bool bIncludeAllWritable = false;
 	// Add BaseRevision (after Target) to the extracted document (the HTTP extract does).
 	bool bIncludeBaseRevision = false;
+	// Also measure the graph nodes as the graph editor draws them (the result's Layout; the HTTP extract does by
+	// default). Never part of the document.
+	bool bIncludeLayout = false;
 };
 
 struct ASSETDOCUMENT_API FAssetDocumentValidateRequest
@@ -101,6 +108,13 @@ struct ASSETDOCUMENT_API FAssetDocumentDiffRequest
 {
 	TSharedPtr<FJsonObject> Document;
 	FString FilePath;
+};
+
+// Sidecar mirroring evidence (the read-only Sync operation): Options is {"Mode", "Text", ...} as
+// asset_document/sync_evidence.py describes.
+struct ASSETDOCUMENT_API FAssetDocumentSyncRequest
+{
+	TSharedPtr<FJsonObject> Options;
 };
 
 // Duplicate an asset the way the Content Browser's Duplicate does (IAssetTools::DuplicateAsset):
@@ -125,6 +139,10 @@ struct ASSETDOCUMENT_API FAssetDocumentResult
 	TSharedPtr<FJsonObject> Payload;
 	// Blueprint-family targets: the editor's compile status ({Status, Messages}), serialized as "compile".
 	TSharedPtr<FJsonObject> Compile;
+	// An extract with bIncludeLayout of an asset with graphs: each graph node's drawn size
+	// ({"Graphs": {<graph id>: {<node Id>: {Width, Height}}}}), serialized as "layout". Read only: it depends on
+	// fonts, DPI scale and the engine version, so it is never part of the document.
+	TSharedPtr<FJsonObject> Layout;
 	// Extract of engine or plugin content (outside /Game): the document cannot be applied to
 	// its own Target. Serialized as "read_only": true when set.
 	bool bReadOnly = false;

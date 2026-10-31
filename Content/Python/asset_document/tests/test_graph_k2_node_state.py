@@ -13,7 +13,9 @@ from asset_document.graphs.extract import extract_graph
 from asset_document.graphs.live import decode_live_asset
 from asset_document.graphs.model import LocalVariable, PinType
 from asset_document.graphs.schemas import k2
-from asset_document.tests.graph_support import ACTOR_CLASS, N_ENTRY, N_RESULT, fixture, ok, pin, ptype
+from asset_document.tests.graph_support import (
+    ACTOR_CLASS, N_BEGIN, N_ENTRY, N_OVERLAP, N_RESULT, N_TICK, fixture, ok, pin, ptype,
+)
 from asset_document.tests.test_graph_reconcile import SIGNATURE, plan_for
 
 
@@ -74,6 +76,38 @@ class ClassPickTests(unittest.TestCase):
             "Links": []}]}
         ops = [op for op in plan_for(body).ops if op.op == "graph.pin.default.set"]
         self.assertEqual([op.args.get("optional", False) for op in ops], [False])
+
+
+class HiddenFieldsTests(unittest.TestCase):
+    BREAK, MULT = "B" + "8" * 31, "B" + "9" * 31
+
+    def plan(self, live_hidden, wanted, link=True, doc_link=False):
+        brk = live_node(self.BREAK, "K2:BreakStruct:/Script/CoreUObject.Vector",
+                        [pin("Vector", "input", VECTOR), pin("X", "output", FLOAT), pin("Y", "output", FLOAT)]
+                        + ([pin("Z", "output", FLOAT)] if "Z" not in live_hidden else []),
+                        {"properties": {"HiddenFields": live_hidden}, "property_defaults": {"HiddenFields": []}},
+                        cls="/Script/BlueprintGraph.K2Node_BreakStruct")
+        body = {"UbergraphPages": [{"Name": "EventGraph", "Nodes": [
+            {"Id": "Break", "Action": "K2:BreakStruct:/Script/CoreUObject.Vector", "NodeGuid": self.BREAK,
+             "Properties": {"HiddenFields": wanted}},
+            {"Id": "Mult", "Action": MULTIPLY, "NodeGuid": self.MULT}],
+            "Links": [{"From": "Break:Z", "To": "Mult:A"}] if doc_link else []}]}
+        edit = add_nodes(brk, multiply(self.MULT, FLOAT, FLOAT, FLOAT),
+                         links=[(self.BREAK, "X", self.MULT, "A")] if link else [])
+        return [(op.op, op.args.get("value")) for op in plan_for(body, edit=edit).ops
+                if op.op in ("graph.node.property.set", "graph.pin.break", "graph.pin.connect")]
+
+    def test_a_pin_is_hidden_after_its_links_are_broken(self):
+        self.assertEqual(self.plan([], ["X"]), [("graph.pin.break", None), ("graph.node.property.set", ["X"])])
+
+    def test_a_pin_is_shown_before_links_and_another_hidden_after(self):
+        self.assertEqual(self.plan(["Z"], ["X"], doc_link=True),
+                         [("graph.node.property.set", []), ("graph.pin.break", None), ("graph.pin.connect", None),
+                          ("graph.node.property.set", ["X"])])
+
+    def test_showing_pins_only_is_set_before_links(self):
+        self.assertEqual(self.plan(["Z"], [], link=False, doc_link=True),
+                         [("graph.node.property.set", []), ("graph.pin.connect", None)])
 
 
 class PromotableOperatorTests(unittest.TestCase):
@@ -143,9 +177,12 @@ class PromotableOperatorTests(unittest.TestCase):
             {"Id": "Get_V", "Action": "K2:Get:V", "NodeGuid": source}],
             "Links": [{"From": "Get_V:V", "To": "Multiply:A"}]}]}
         plan = plan_for(body, edit=edit)
-        ops = [(op.op, op.args.get("pin")) for op in plan.ops
+        ops = [(op.op, op.args.get("pin") or op.args.get("node_guid")) for op in plan.ops
                if op.op in ("graph.node.pin_type.set", "graph.pin.connect", "graph.node.remove", "graph.node.spawn")]
-        self.assertEqual(ops, [("graph.node.pin_type.set", "B"), ("graph.pin.connect", None)])
+        # Only the fixture's unlisted ghost events are removed.
+        self.assertEqual(ops, [("graph.node.remove", N_BEGIN), ("graph.node.remove", N_OVERLAP),
+                               ("graph.node.remove", N_TICK), ("graph.node.pin_type.set", "B"),
+                               ("graph.pin.connect", None)])
 
 
 class CreateDelegateTests(unittest.TestCase):
@@ -192,6 +229,29 @@ class PurityTests(unittest.TestCase):
 
     def test_purity_is_compared_against_the_node_setting(self):
         self.assertEqual(k2.K2_ADAPTER.live_properties(self.node(False), "node")["Pure"], False)
+
+    def test_an_add_component_template_extracts_its_changed_values(self):
+        _, graph = live_graph(add_nodes(live_node(
+            "B" + "5" * 31, "K2:AddComponent:/Script/Engine.StaticMeshComponent",
+            [pin("execute", "input", ptype("exec"))],
+            {"template_changed": {"StaticMesh": "/Game/SM_Door.SM_Door"}},
+            cls="/Script/BlueprintGraph.K2Node_AddComponent")))
+        extracted = k2.K2_ADAPTER.extract_properties(graph.node("B" + "5" * 31), None)
+        self.assertEqual((dict(extracted.node), dict(extracted.template)), ({}, {"StaticMesh": "/Game/SM_Door.SM_Door"}))
+
+    def test_an_instanced_template_value_is_a_warning(self):
+        from asset_document.diagnostics import collecting_read_warnings
+        _, graph = live_graph(add_nodes(live_node(
+            "B" + "6" * 31, "K2:AddComponent:/Script/Engine.ChildActorComponent",
+            [pin("execute", "input", ptype("exec"))],
+            {"template_changed": {"ChildActorClass": "/Script/Engine.StaticMeshActor"},
+             "template_instanced": ["Overrides"]},
+            cls="/Script/BlueprintGraph.K2Node_AddComponent")))
+        with collecting_read_warnings() as warnings:
+            extracted = k2.K2_ADAPTER.extract_properties(graph.node("B" + "6" * 31), None)
+        self.assertEqual(dict(extracted.template), {"ChildActorClass": "/Script/Engine.StaticMeshActor"})
+        self.assertEqual([item.code for item in warnings], ["Graph.UnrepresentedValue"])
+        self.assertIn("Overrides", warnings[0].message)
 
     def test_stated_purity_is_set_before_links(self):
         body = {"UbergraphPages": [{"Name": "EventGraph", "Nodes": [
@@ -502,7 +562,7 @@ class NodeStateExecutorTests(unittest.TestCase):
             context._graph_node_dynamic_pin_add_v1 = add_pin
             execute(context, {"UbergraphPages": [{"Name": "EventGraph", "Nodes": [
                 {"Id": "Add", "Action": "K2:Multiply", "PinTypes": {"C": "int64"}}], "Links": []}]})
-            self.assertEqual(mutations(context)[:3],
+            self.assertEqual(mutations(context)[3:6],  # after removing the three unlisted ghost events
                              ["graph.node.spawn.v1", "graph.node.dynamic_pin.add.v1", "graph.node.pin_type.set.v1"])
         finally:
             del TEMPLATES[MULTIPLY]

@@ -128,7 +128,9 @@ _SELF_MEMBER_KINDS = frozenset({"VariableGet", "VariableSet", "CallFunction", "E
 # a dispatcher of the asset's own class.
 DISPATCHER_KINDS = frozenset({"CallDelegate", "AddDelegate", "RemoveDelegate", "ClearDelegate", "AssignDelegate",
                               "CustomEvent"})
-_KEY = re.compile(r"[A-Za-z][A-Za-z0-9]*:[A-Za-z_][A-Za-z0-9_]*(:[^:@#\s][^:@#]*)*(@[^:@#\s]+)?(#[0-9A-Fa-f]{8})?\Z")
+# A binding may hold spaces after its first character, as owner and field segments do: an animation getter's
+# source is the state, state machine or asset name its editor title shows ("@Jump Start").
+_KEY = re.compile(r"[A-Za-z][A-Za-z0-9]*:[A-Za-z_][A-Za-z0-9_]*(:[^:@#\s][^:@#]*)*(@[^:@#\s][^:@#]*)?(#[0-9A-Fa-f]{8})?\Z")
 
 # Legacy Body ``Class`` paths handled by the K2 legacy node form.
 LEGACY_K2_CLASS_PREFIX = "/Script/BlueprintGraph.K2Node_"
@@ -221,6 +223,44 @@ def actions_equal(desired: str | None, live: str | None) -> bool:
     if desired_base != live_base:
         return False
     return desired_suffix is None or desired_suffix == live_suffix
+
+
+def names_factory_class(desired: str | None, live: str | None) -> bool:
+    """Whether ``desired`` is the older key form of the async-task node ``live`` names: ``K2:<Kind>:<Class>``,
+    the factory class alone, where the node now keys as ``K2:<Kind>:<Class>:<Factory function>``. Accepted
+    only for a node its NodeGuid already identifies."""
+    if desired is None or live is None or "#" in desired or "@" in desired:
+        return False
+    live_base = split_disambiguator(live)[0]
+    if "@" in live_base:
+        return False
+    want, have = desired.split(":"), live_base.split(":")
+    return (len(want) == 3 and len(have) == 4 and want[0] == have[0] == "K2" and want[1] == have[1]
+            and want[2].casefold() == have[2].casefold() and bool(have[3]))
+
+
+# An animation getter (Time Remaining (ratio), State Weight, ...) is keyed by its function and, after "@", the source it
+# reads: "K2:AnimGetter:/Script/Engine.AnimInstance:GetInstanceAssetPlayerTimeFromEndFraction@Jump_Start".
+ANIM_GETTER = "AnimGetter"
+
+
+def getter_without_source(key: str | None) -> str | None:
+    """The key of an animation getter without its source (``K2:AnimGetter:<owner>:<function>``), for a getter key that
+    names one; None for any other key."""
+    if not key or action_kind(key) != ANIM_GETTER:
+        return None
+    base = split_disambiguator(key)[0]
+    head, sep, _ = base.partition("@")
+    return head if sep else None
+
+
+def omits_getter_source(desired: str | None, live: str | None) -> bool:
+    """Whether ``desired`` is the older key form of the animation getter ``live`` names: the function without the
+    source (``K2:AnimGetter:<owner>:<function>``). Such a key names the node only where no other getter of that
+    function could be meant."""
+    if desired is None or "@" in desired or "#" in desired or action_kind(desired) != ANIM_GETTER:
+        return False
+    return getter_without_source(live) == desired
 
 
 def legacy_k2_action(class_path: object, member: object, *, self_class: str | None, path: str) -> str:

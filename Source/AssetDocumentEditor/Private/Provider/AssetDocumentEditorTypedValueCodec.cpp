@@ -3,11 +3,14 @@
 
 #include "Provider/AssetDocumentEditorTypedValueCodec.h"
 #include "AssetDocumentEditorFloatPrecision.h"
+#include "AssetDocumentEditorMarkerText.h"
 #include "AssetDocumentEditorPropertyValueCodec.h"
 #include "Internationalization/Text.h"
 #include "Internationalization/TextPackageNamespaceUtil.h"
 #include "JsonObjectConverter.h"
+#include "Misc/OutputDeviceNull.h"
 #include "PropertyEditorUtils.h"
+#include "Runtime/AssetDocumentTextDisplays.h"
 #include "Provider/AssetDocumentEditorValueDto.h"
 #include "StructUtils/InstancedStruct.h"
 #include "StructUtils/PropertyBag.h"
@@ -15,6 +18,7 @@
 #include "Misc/PackageName.h"
 #include "UObject/Package.h"
 #include "UObject/PropertyAccessUtil.h"
+#include "UObject/PropertyOptional.h"
 #include "UObject/SoftObjectPath.h"
 #include "UObject/StructOnScope.h"
 #include "UObject/UObjectGlobals.h"
@@ -34,9 +38,13 @@
 //   FInstancedStruct (instanced_struct.v1)
 //                                    {"Struct": "<struct path>", "Properties": {<non-default members>}} | null
 //   struct with native text export (struct_text.v1)
-//                                    the struct's ExportText string (FGuid, FSoftObjectPath, gameplay tags, ...)
-//   other structs (struct.v1)        object with every member
-//   arrays/sets (array.v1/set.v1), maps keyed by string/name/enum/object/text-struct/integer (string_key_map.v1)
+//                                    the struct's ExportText string (FGuid, FSoftObjectPath, ...)
+//   TOptional (optional.v1)          null when unset, else the value's own form
+//   other structs (struct.v1)        object with every member; a member of a type with no document form
+//                                    (delegate, field path, a map keyed by float, ...) is the marker
+//                                    {"Unsupported": "<reason>", "Text": "<export text>"}, which a write keeps
+//   arrays/sets (array.v1/set.v1), maps keyed by string/name/enum/object/soft reference/text-struct/integer/other
+//   struct (string_key_map.v1): a gameplay tag key is its tag name, another struct key its export text
 namespace
 {
 constexpr int32 AssetDocumentEditorTypedValueMaximumDepth = 64;
@@ -336,19 +344,13 @@ bool IsAssetDocumentEditorStructCodecField(const FProperty& Field)
 	return !Field.HasAnyPropertyFlags(CPF_Transient | CPF_Deprecated);
 }
 
+// A struct is admitted whatever its members are: a member the codec has no form for reads as a marker (see
+// ExportAssetDocumentEditorMarker) and keeps its value on write. Only the nesting depth bounds it.
 bool IsAssetDocumentEditorStructAdmitted(
 	const FStructProperty& StructProperty,
 	int32 Depth)
 {
-	for (TFieldIterator<FProperty> It(StructProperty.Struct); It; ++It)
-	{
-		if (IsAssetDocumentEditorStructCodecField(**It)
-			&& !IsAssetDocumentEditorPropertyAdmitted(**It, false, Depth + 1))
-		{
-			return false;
-		}
-	}
-	return true;
+	return Depth <= AssetDocumentEditorTypedValueMaximumDepth;
 }
 
 // An integer map key (not an enum): TMap<int32, ...>, e.g. FPerQualityLevelInt::PerQuality (keyed by quality level).
@@ -389,6 +391,98 @@ bool TryParseAssetDocumentEditorIntegerMapKey(const FNumericProperty& Key, const
 		: Key.GetSignedIntPropertyValue(Buffer) == OutValue;
 }
 
+bool IsAssetDocumentEditorGameplayTag(const FProperty& Property)
+{
+	const FStructProperty* Struct = CastField<FStructProperty>(&Property);
+	return Struct != nullptr && Struct->Struct != nullptr
+		&& Struct->Struct->GetPathName() == TEXT("/Script/GameplayTags.GameplayTag");
+}
+
+// A struct map key with no native text export: a gameplay tag is written as its tag name ("Ability.Cooldown"), which is
+// how the tag picker shows it; any other struct as its export text ("(Type=Bone,Name=\"root\")").
+bool IsAssetDocumentEditorStructMapKey(const FProperty& Key)
+{
+	return CastField<FStructProperty>(&Key) != nullptr && Key.ArrayDim == 1
+		&& !IsAssetDocumentEditorInstancedStruct(Key) && !IsAssetDocumentEditorPropertyBag(Key)
+		&& !IsAssetDocumentEditorTextFormStruct(Key);
+}
+
+bool IsAssetDocumentEditorMapKeyProperty(const FProperty& Property)
+{
+	const FMapProperty* Map = Property.GetOwner<FMapProperty>();
+	return Map != nullptr && Map->KeyProp == &Property;
+}
+
+FString ExportAssetDocumentEditorStructMapKey(const FProperty& Key, const void* Value)
+{
+	if (IsAssetDocumentEditorGameplayTag(Key))
+	{
+		const FNameProperty* TagName = FindFProperty<FNameProperty>(CastFieldChecked<FStructProperty>(&Key)->Struct, TEXT("TagName"));
+		if (TagName != nullptr)
+		{
+			return TagName->GetPropertyValue_InContainer(Value).ToString();
+		}
+	}
+	FString Text;
+	Key.ExportTextItem_Direct(Text, Value, nullptr, nullptr, PPF_None);
+	return Text;
+}
+
+// Reads a struct map key from its document form; the key must be written exactly as it reads back (one name per key).
+// A gameplay tag must be registered (or a redirected name), as the tag picker requires.
+bool ParseAssetDocumentEditorStructMapKey(const FProperty& Key, const FString& Text, void* Out)
+{
+	FString Buffer = Text;
+	if (IsAssetDocumentEditorGameplayTag(Key))
+	{
+		Buffer = FString::Printf(TEXT("\"%s\""), *Text.Replace(TEXT("\\"), TEXT("\\\\")).Replace(TEXT("\""), TEXT("\\\"")));
+	}
+	FOutputDeviceNull Errors;
+	const TCHAR* End = Key.ImportText_Direct(*Buffer, Out, nullptr, PPF_None, &Errors);
+	if (End == nullptr)
+	{
+		return false;
+	}
+	while (FChar::IsWhitespace(*End))
+	{
+		++End;
+	}
+	return *End == TCHAR('\0');
+}
+
+// The entry of the map at Base whose key reads as Text (INDEX_NONE: none). A key already in the map is kept as it is
+// stored, whether or not it parses today (an unregistered or redirected gameplay tag).
+int32 FindAssetDocumentEditorStructMapKeyIndex(const FMapProperty& Map, const void* Base, const FString& Text)
+{
+	if (Base == nullptr)
+	{
+		return INDEX_NONE;
+	}
+	FScriptMapHelper Helper(&Map, Base);
+	for (FScriptMapHelper::FIterator It(Helper); It; ++It)
+	{
+		if (ExportAssetDocumentEditorStructMapKey(*Map.KeyProp, Helper.GetKeyPtr(It)).Equals(Text, ESearchCase::CaseSensitive))
+		{
+			return It.GetInternalIndex();
+		}
+	}
+	return INDEX_NONE;
+}
+
+// Writes the key named Text into Out: the stored key of that name in the map at Current, else the parsed key.
+bool ImportAssetDocumentEditorStructMapKey(const FMapProperty& Map, const void* Current, const FString& Text, void* Out)
+{
+	const int32 CurrentIndex = FindAssetDocumentEditorStructMapKeyIndex(Map, Current, Text);
+	if (CurrentIndex != INDEX_NONE)
+	{
+		FScriptMapHelper CurrentHelper(&Map, Current);
+		Map.KeyProp->CopyCompleteValue(Out, CurrentHelper.GetKeyPtr(CurrentIndex));
+		return true;
+	}
+	return ParseAssetDocumentEditorStructMapKey(*Map.KeyProp, Text, Out)
+		&& ExportAssetDocumentEditorStructMapKey(*Map.KeyProp, Out).Equals(Text, ESearchCase::CaseSensitive);
+}
+
 // Map keys travel as JSON object member names.
 bool IsAssetDocumentEditorMapKeyAdmitted(FProperty& Key)
 {
@@ -398,7 +492,9 @@ bool IsAssetDocumentEditorMapKeyAdmitted(FProperty& Key)
 		|| CastField<FEnumProperty>(&Key) != nullptr
 		|| (CastField<FNumericProperty>(&Key) != nullptr && CastField<FNumericProperty>(&Key)->IsEnum())
 		|| (AsAssetDocumentEditorHardReference(Key) != nullptr && Key.ArrayDim == 1)
-		|| IsAssetDocumentEditorTextFormStruct(Key);
+		|| (IsAssetDocumentEditorSoftReference(Key) && Key.ArrayDim == 1)
+		|| IsAssetDocumentEditorTextFormStruct(Key)
+		|| IsAssetDocumentEditorStructMapKey(Key);
 }
 
 bool IsAssetDocumentEditorMapAdmitted(
@@ -427,6 +523,11 @@ bool IsAssetDocumentEditorContainerAdmitted(
 	if (const FMapProperty* Map = CastField<FMapProperty>(&Property))
 	{
 		return IsAssetDocumentEditorMapAdmitted(*Map, Depth);
+	}
+	if (const FOptionalProperty* Optional = CastField<FOptionalProperty>(&Property))
+	{
+		return IsAssetDocumentEditorPropertyAdmitted(
+			*Optional->GetValueProperty(), false, Depth + 1);
 	}
 	return false;
 }
@@ -477,6 +578,10 @@ FString GetAssetDocumentEditorContainerCodecId(FProperty& Property)
 	{
 		return TEXT("string_key_map.v1");
 	}
+	if (CastField<FOptionalProperty>(&Property) != nullptr)
+	{
+		return TEXT("optional.v1");
+	}
 	return TEXT("struct.v1");
 }
 
@@ -495,11 +600,13 @@ FString GetAssetDocumentEditorCodecId(FProperty& Property)
 }
 
 // Editable fields of an instanced subobject class: the same rule as the top-level
-// writable admission (Details-visible, serialized, not EditConst, typed codec).
+// writable admission (Details-visible, serialized, not EditConst, typed codec). A
+// DuplicateTransient field is saved with the subobject and edited in Details, as at
+// the top level.
 bool IsAssetDocumentEditorSubobjectField(FProperty& Field, int32 Depth)
 {
 	constexpr uint64 RejectedFlags =
-		CPF_Transient | CPF_DuplicateTransient | CPF_Deprecated | CPF_SkipSerialization;
+		CPF_Transient | CPF_Deprecated | CPF_SkipSerialization;
 	return Field.HasAnyPropertyFlags(CPF_Edit)
 		&& !Field.HasAnyPropertyFlags(RejectedFlags)
 		&& PropertyAccessUtil::CanGetPropertyValue(&Field) == EPropertyAccessResultFlags::Success
@@ -526,10 +633,7 @@ FProperty* FindAssetDocumentEditorInstancedStructField(const UScriptStruct& Stru
 	{
 		if (It->GetAuthoredName() == Name)
 		{
-			return IsAssetDocumentEditorStructCodecField(**It)
-					&& IsAssetDocumentEditorPropertyAdmitted(**It, false, Depth + 1)
-				? *It
-				: nullptr;
+			return IsAssetDocumentEditorStructCodecField(**It) ? *It : nullptr;
 		}
 	}
 	return nullptr;
@@ -831,6 +935,13 @@ bool IsAssetDocumentEditorValueChecked(
 	const FString& Path,
 	FAssetDocumentEditorValueCheck& Check);
 
+bool CheckAssetDocumentEditorMarkedMember(
+	FProperty& Field,
+	const FValue& Value,
+	const void* Current,
+	const FString& Path,
+	FAssetDocumentEditorValueCheck& Check);
+
 bool CheckAssetDocumentEditorExactKeys(
 	const FValue& Value,
 	TConstArrayView<const TCHAR*> Required,
@@ -1114,7 +1225,16 @@ bool CheckAssetDocumentEditorInstancedStruct(
 		if (Field == nullptr)
 		{
 			return FailAssetDocumentEditorCheck(Check, FieldPath, FString::Printf(
-				TEXT("'%s' is not a supported member of %s."), *Name, *Struct->GetName()));
+				TEXT("'%s' is not a member of %s."), *Name, *Struct->GetName()));
+		}
+		if (!IsAssetDocumentEditorPropertyAdmitted(*Field, false, Depth + 1))
+		{
+			if (!CheckAssetDocumentEditorMarkedMember(*Field, Properties->Elements[Index],
+				MemberBase != nullptr ? Field->ContainerPtrToValuePtr<void>(MemberBase) : nullptr, FieldPath, Check))
+			{
+				return false;
+			}
+			continue;
 		}
 		if (!IsAssetDocumentEditorValueChecked(*Field, Properties->Elements[Index],
 			MemberBase != nullptr ? Field->ContainerPtrToValuePtr<void>(MemberBase) : nullptr,
@@ -1243,6 +1363,59 @@ EKind GetAssetDocumentEditorScalarExpectedKind(FProperty& Property)
 	return EKind::String;
 }
 
+TSharedPtr<FJsonValue> ExportAssetDocumentEditorJson(FProperty& Property, const void* Value);
+bool AreAssetDocumentEditorJsonValuesEqual(const TSharedPtr<FJsonValue>& Left, const TSharedPtr<FJsonValue>& Right);
+
+// Whether an authored marker is the marker the current value (held by Within) reads as. Text naming objects inside
+// the asset compares as the asset's own path names them (EditorMarkerText): the same content reads alike in the
+// asset, in Validate's copy of it, and after a move; any other path compares as it is. Without Within the text
+// compares exactly.
+bool IsAssetDocumentEditorSameMarker(const TSharedPtr<FJsonValue>& Authored, const TSharedPtr<FJsonValue>& Current,
+	const UObject* Within = nullptr)
+{
+	const TSharedPtr<FJsonObject>* AuthoredObject = nullptr;
+	const TSharedPtr<FJsonObject>* CurrentObject = nullptr;
+	if (!Authored.IsValid() || !Current.IsValid() || !Authored->TryGetObject(AuthoredObject) || !Current->TryGetObject(CurrentObject))
+	{
+		return false;
+	}
+	FString AuthoredReason, CurrentReason, AuthoredText, CurrentText;
+	if (!(*AuthoredObject)->TryGetStringField(TEXT("Unsupported"), AuthoredReason)
+		|| !(*CurrentObject)->TryGetStringField(TEXT("Unsupported"), CurrentReason) || AuthoredReason != CurrentReason
+		|| (*AuthoredObject)->Values.Num() != (*CurrentObject)->Values.Num())
+	{
+		return false;
+	}
+	(*AuthoredObject)->TryGetStringField(TEXT("Text"), AuthoredText);
+	(*CurrentObject)->TryGetStringField(TEXT("Text"), CurrentText);
+	return UE::AssetDocument::EditorMarkerText::IsSameText(AuthoredText, CurrentText, Within);
+}
+
+// A struct member the codec has no form for (it reads as a marker). A value given for it must be what the current
+// value reads as, which keeps that value; there is no form to write another one.
+bool CheckAssetDocumentEditorMarkedMember(
+	FProperty& Field,
+	const FValue& Value,
+	const void* Current,
+	const FString& Path,
+	FAssetDocumentEditorValueCheck& Check)
+{
+	if (Check.Mode == EAssetDocumentEditorCheckMode::Encode)
+	{
+		return true;
+	}
+	TSharedPtr<FJsonValue> Authored;
+	FString Code;
+	if (Current != nullptr && TryConvertAssetDocumentEditorValueToJson(Value, Authored, Code)
+		&& IsAssetDocumentEditorSameMarker(Authored, ExportAssetDocumentEditorJson(Field, Current), Check.Owner))
+	{
+		return true;
+	}
+	return FailAssetDocumentEditorCheck(Check, Path, FString::Printf(
+		TEXT("%s has no document form, so it cannot be written: leave its \"Unsupported\" marker as read, or omit the member to keep its value."),
+		*Field.GetCPPType()));
+}
+
 bool CheckAssetDocumentEditorStruct(
 	const FStructProperty& StructProperty,
 	const FValue& Value,
@@ -1267,6 +1440,16 @@ bool CheckAssetDocumentEditorStruct(
 		const FString Name = It->GetAuthoredName();
 		Expected.Add(Name);
 		const FValue* FieldValue = FindAssetDocumentEditorTypedField(Value, Name);
+		if (!IsAssetDocumentEditorPropertyAdmitted(**It, false, Depth + 1))
+		{
+			// Omitted: keeps its value (or the member default).
+			if (FieldValue != nullptr && !CheckAssetDocumentEditorMarkedMember(**It, *FieldValue,
+				Base != nullptr ? It->ContainerPtrToValuePtr<void>(Base) : nullptr, AppendAssetDocumentEditorPath(Path, Name), Check))
+			{
+				return false;
+			}
+			continue;
+		}
 		if (FieldValue == nullptr)
 		{
 			// An omitted member keeps its current value; with nothing to keep
@@ -1298,6 +1481,430 @@ bool CheckAssetDocumentEditorStruct(
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// Array elements identified by their marked content
+// ---------------------------------------------------------------------------
+// An array element edit starts from a current element. Where elements hold content with no document form (read as
+// markers), that content belongs to one element only, so an element is matched to the current element whose markers
+// it carries, wherever that element stands now (a removed, inserted or moved element keeps its own content).
+
+bool IsAssetDocumentEditorMarkerJson(const TSharedPtr<FJsonValue>& Json)
+{
+	const TSharedPtr<FJsonObject>* Object = nullptr;
+	FString Reason;
+	return Json.IsValid() && Json->TryGetObject(Object) && Object != nullptr && Object->IsValid()
+		&& (*Object)->TryGetStringField(TEXT("Unsupported"), Reason);
+}
+
+bool HoldsAssetDocumentEditorMarkerJson(const TSharedPtr<FJsonValue>& Json, int32 Depth = 0)
+{
+	if (!Json.IsValid() || Depth > AssetDocumentEditorTypedValueMaximumDepth)
+	{
+		return false;
+	}
+	if (IsAssetDocumentEditorMarkerJson(Json))
+	{
+		return true;
+	}
+	const TSharedPtr<FJsonObject>* Object = nullptr;
+	if (Json->TryGetObject(Object) && Object != nullptr && Object->IsValid())
+	{
+		for (const auto& Entry : (*Object)->Values)
+		{
+			if (HoldsAssetDocumentEditorMarkerJson(Entry.Value, Depth + 1))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+	const TArray<TSharedPtr<FJsonValue>>* Elements = nullptr;
+	if (Json->TryGetArray(Elements) && Elements != nullptr)
+	{
+		for (const TSharedPtr<FJsonValue>& Element : *Elements)
+		{
+			if (HoldsAssetDocumentEditorMarkerJson(Element, Depth + 1))
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+// The marker an earlier read gave a whole optional, map, array or set whose type had no document form then. The codec
+// now reads such a value, but a document written before still holds the marker there: it keeps the current value, as
+// it did when it was read, and is never decoded as the value (a map would take its two members for keys).
+const TCHAR* const AssetDocumentEditorFormerMarkerSuffix = TEXT(" has no document form; AssetDoc keeps the value.");
+
+bool IsAssetDocumentEditorFormerMarkerReason(const FString& Reason)
+{
+	for (const TCHAR* Type : { TEXT("TOptional"), TEXT("TMap"), TEXT("TArray"), TEXT("TSet") })
+	{
+		if (Reason.Equals(FString(Type) + AssetDocumentEditorFormerMarkerSuffix, ESearchCase::CaseSensitive))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool IsAssetDocumentEditorFormerMarkerProperty(const FProperty& Property, const FString& Reason)
+{
+	const bool bContainer = CastField<FOptionalProperty>(&Property) != nullptr || CastField<FMapProperty>(&Property) != nullptr
+		|| CastField<FArrayProperty>(&Property) != nullptr || CastField<FSetProperty>(&Property) != nullptr;
+	return bContainer && Property.ArrayDim == 1
+		&& Reason.Equals(Property.GetCPPType() + AssetDocumentEditorFormerMarkerSuffix, ESearchCase::CaseSensitive);
+}
+
+// Only the marker's own members: "Unsupported" and the read-only "Text".
+bool IsAssetDocumentEditorFormerMarkerValue(const FProperty& Property, const FValue& Value)
+{
+	if (Value.Kind != EKind::Object || Value.ObjectKeys.Num() > 2)
+	{
+		return false;
+	}
+	const FValue* Reason = nullptr;
+	for (int32 Index = 0; Index < Value.ObjectKeys.Num(); ++Index)
+	{
+		if (Value.Elements[Index].Kind != EKind::String)
+		{
+			return false;
+		}
+		if (Value.ObjectKeys[Index] == TEXT("Unsupported"))
+		{
+			Reason = &Value.Elements[Index];
+		}
+		else if (Value.ObjectKeys[Index] != TEXT("Text"))
+		{
+			return false;
+		}
+	}
+	return Reason != nullptr && IsAssetDocumentEditorFormerMarkerProperty(Property, Reason->StringValue);
+}
+
+bool GetAssetDocumentEditorFormerMarkerJsonReason(const TSharedPtr<FJsonValue>& Json, FString& OutReason)
+{
+	const TSharedPtr<FJsonObject>* Object = nullptr;
+	if (!Json.IsValid() || !Json->TryGetObject(Object) || Object == nullptr || !Object->IsValid() || (*Object)->Values.Num() > 2)
+	{
+		return false;
+	}
+	for (const auto& Entry : (*Object)->Values)
+	{
+		const FString Name(*Entry.Key);
+		if (!Entry.Value.IsValid() || Entry.Value->Type != EJson::String || (Name != TEXT("Unsupported") && Name != TEXT("Text")))
+		{
+			return false;
+		}
+	}
+	return (*Object)->TryGetStringField(TEXT("Unsupported"), OutReason);
+}
+
+bool IsAssetDocumentEditorFormerMarkerJson(const FProperty& Property, const TSharedPtr<FJsonValue>& Json)
+{
+	FString Reason;
+	return GetAssetDocumentEditorFormerMarkerJsonReason(Json, Reason) && IsAssetDocumentEditorFormerMarkerProperty(Property, Reason);
+}
+
+// Whether a value of Property can hold members with no document form (they read as markers): a struct member-wise
+// value with such a member, at any depth, or a container of such values.
+bool HasAssetDocumentEditorUnformedMembers(FProperty& Property, int32 Depth)
+{
+	FString LeafCodecId;
+	if (Depth > AssetDocumentEditorTypedValueMaximumDepth || IsAssetDocumentEditorPropertyBag(Property)
+		|| TryGetAssetDocumentEditorLeafCodecId(Property, LeafCodecId))
+	{
+		return false;
+	}
+	if (const FStructProperty* Struct = CastField<FStructProperty>(&Property))
+	{
+		for (TFieldIterator<FProperty> It(Struct->Struct); It; ++It)
+		{
+			if (IsAssetDocumentEditorStructCodecField(**It)
+				&& (!IsAssetDocumentEditorPropertyAdmitted(**It, false, Depth + 1) || HasAssetDocumentEditorUnformedMembers(**It, Depth + 1)))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+	if (const FArrayProperty* Array = CastField<FArrayProperty>(&Property))
+	{
+		return HasAssetDocumentEditorUnformedMembers(*Array->Inner, Depth + 1);
+	}
+	if (const FSetProperty* Set = CastField<FSetProperty>(&Property))
+	{
+		return HasAssetDocumentEditorUnformedMembers(*Set->ElementProp, Depth + 1);
+	}
+	if (const FMapProperty* Map = CastField<FMapProperty>(&Property))
+	{
+		return HasAssetDocumentEditorUnformedMembers(*Map->ValueProp, Depth + 1);
+	}
+	return false;
+}
+
+// How an authored value relates to a current value's export, ordered from no match to an exact one:
+// Different: a marker it carries is not the current value's at the same place;
+// Nested: its own markers are the current value's, but a marked element of an array inside it is not found there
+//         (that array matches its elements itself);
+// Kept: every marker it carries is the current value's;
+// Equal: Kept, and every other value it gives is the current one too.
+enum class EAssetDocumentEditorMarkedMatch : uint8
+{
+	Different,
+	Nested,
+	Kept,
+	Equal,
+};
+
+// bStrictArrays: a marked element of an inner array must be found in the current array (Different otherwise).
+EAssetDocumentEditorMarkedMatch MatchAssetDocumentEditorMarkedJson(
+	const TSharedPtr<FJsonValue>& Authored,
+	const TSharedPtr<FJsonValue>& Current,
+	const UObject* Within,
+	bool bStrictArrays,
+	int32 Depth)
+{
+	using EMatch = EAssetDocumentEditorMarkedMatch;
+	if (!Authored.IsValid() || Depth > AssetDocumentEditorTypedValueMaximumDepth)
+	{
+		return EMatch::Different;
+	}
+	if (IsAssetDocumentEditorMarkerJson(Authored))
+	{
+		if (IsAssetDocumentEditorSameMarker(Authored, Current, Within))
+		{
+			return EMatch::Equal;
+		}
+		// The marker of a value the codec now reads keeps that value wherever it stands.
+		FString Reason;
+		return GetAssetDocumentEditorFormerMarkerJsonReason(Authored, Reason) && IsAssetDocumentEditorFormerMarkerReason(Reason)
+			&& Current.IsValid() && !IsAssetDocumentEditorMarkerJson(Current) ? EMatch::Kept : EMatch::Different;
+	}
+	const TSharedPtr<FJsonObject>* AuthoredObject = nullptr;
+	if (Authored->TryGetObject(AuthoredObject) && AuthoredObject != nullptr && AuthoredObject->IsValid())
+	{
+		const TSharedPtr<FJsonObject>* CurrentObject = nullptr;
+		const bool bObject = Current.IsValid() && Current->TryGetObject(CurrentObject) && CurrentObject != nullptr && CurrentObject->IsValid();
+		EMatch Out = bObject ? EMatch::Equal : EMatch::Kept;
+		for (const auto& Entry : (*AuthoredObject)->Values)
+		{
+			const TSharedPtr<FJsonValue> Inner = bObject ? (*CurrentObject)->TryGetField(Entry.Key) : nullptr;
+			const EMatch Member = MatchAssetDocumentEditorMarkedJson(Entry.Value, Inner, Within, bStrictArrays, Depth + 1);
+			if (Member == EMatch::Different)
+			{
+				return EMatch::Different;
+			}
+			Out = Member < Out ? Member : Out;
+		}
+		return Out;
+	}
+	const TArray<TSharedPtr<FJsonValue>>* AuthoredElements = nullptr;
+	if (Authored->TryGetArray(AuthoredElements) && AuthoredElements != nullptr)
+	{
+		const TArray<TSharedPtr<FJsonValue>>* CurrentElements = nullptr;
+		const bool bArray = Current.IsValid() && Current->TryGetArray(CurrentElements) && CurrentElements != nullptr;
+		bool bEqual = bArray && CurrentElements->Num() == AuthoredElements->Num();
+		bool bFoundAll = true;
+		for (int32 Index = 0; Index < AuthoredElements->Num(); ++Index)
+		{
+			const TSharedPtr<FJsonValue>& Element = (*AuthoredElements)[Index];
+			if (bEqual && MatchAssetDocumentEditorMarkedJson(Element, (*CurrentElements)[Index], Within, bStrictArrays, Depth + 1) == EMatch::Equal)
+			{
+				continue;
+			}
+			bEqual = false;
+			if (!HoldsAssetDocumentEditorMarkerJson(Element))
+			{
+				continue;
+			}
+			bool bFound = false;
+			for (int32 Candidate = 0; bArray && !bFound && Candidate < CurrentElements->Num(); ++Candidate)
+			{
+				bFound = MatchAssetDocumentEditorMarkedJson(Element, (*CurrentElements)[Candidate], Within, bStrictArrays, Depth + 1) != EMatch::Different;
+			}
+			bFoundAll = bFoundAll && bFound;
+		}
+		if (!bFoundAll)
+		{
+			return bStrictArrays ? EMatch::Different : EMatch::Nested;
+		}
+		return bEqual ? EMatch::Equal : EMatch::Kept;
+	}
+	return Current.IsValid() && FJsonValue::CompareEqual(*Authored, *Current) ? EMatch::Equal : EMatch::Kept;
+}
+
+// Whether an element without markers, decoded as an edit of Current (the current element at its index), would keep
+// marked content of Current that it leaves out and that the default element does not hold: the element cannot be
+// told to be that one, so that content could belong to another element.
+bool LeavesOutAssetDocumentEditorMarkedContent(
+	const TSharedPtr<FJsonValue>& Authored,
+	const TSharedPtr<FJsonValue>& Current,
+	const TSharedPtr<FJsonValue>& Default,
+	const UObject* Within,
+	int32 Depth)
+{
+	if (!Current.IsValid() || Depth > AssetDocumentEditorTypedValueMaximumDepth)
+	{
+		return false;
+	}
+	if (!Authored.IsValid())
+	{
+		return HoldsAssetDocumentEditorMarkerJson(Current)
+			&& MatchAssetDocumentEditorMarkedJson(Current, Default, Within, true, Depth) == EAssetDocumentEditorMarkedMatch::Different;
+	}
+	const TSharedPtr<FJsonObject>* AuthoredObject = nullptr;
+	const TSharedPtr<FJsonObject>* CurrentObject = nullptr;
+	if (IsAssetDocumentEditorMarkerJson(Current) || !Authored->TryGetObject(AuthoredObject) || AuthoredObject == nullptr
+		|| !AuthoredObject->IsValid() || !Current->TryGetObject(CurrentObject) || CurrentObject == nullptr || !CurrentObject->IsValid())
+	{
+		// A whole value given (an array given matches its own elements).
+		return false;
+	}
+	const TSharedPtr<FJsonObject>* DefaultObject = nullptr;
+	const bool bDefaultObject = Default.IsValid() && Default->TryGetObject(DefaultObject) && DefaultObject != nullptr && DefaultObject->IsValid();
+	for (const auto& Entry : (*CurrentObject)->Values)
+	{
+		if (LeavesOutAssetDocumentEditorMarkedContent((*AuthoredObject)->TryGetField(Entry.Key), Entry.Value,
+			bDefaultObject ? (*DefaultObject)->TryGetField(Entry.Key) : nullptr, Within, Depth + 1))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+// Whether the elements of an array value are matched by identity (MatchAssetDocumentEditorArrayElements) rather than
+// by index: its element type has members with no document form, or the value carries markers.
+bool IsAssetDocumentEditorArrayMatchedByIdentity(const FArrayProperty& Array, const TArray<TSharedPtr<FJsonValue>>& Elements)
+{
+	if (HasAssetDocumentEditorUnformedMembers(*Array.Inner, 0))
+	{
+		return true;
+	}
+	for (const TSharedPtr<FJsonValue>& Element : Elements)
+	{
+		if (HoldsAssetDocumentEditorMarkerJson(Element))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+enum class EAssetDocumentEditorArrayMatchFailure : uint8
+{
+	None,
+	// An element carries markers no current element left and the default element do not have.
+	MarkerNotFound,
+	// An element without markers would take marked content of the current element at its index (see
+	// LeavesOutAssetDocumentEditorMarkedContent).
+	MarkedContentLeftOut,
+};
+
+// The current element each authored element continues (OutMatch: its index in Current, or INDEX_NONE for one that
+// starts from DefaultElement). An element carrying markers continues the current element (not continued by another)
+// whose markers it carries: an equal one first, the one at its own index next, else the first. One whose markers are
+// the default element's and that no current element has starts from the default. An element without markers continues
+// the current element at its index when no element carrying markers took it, else starts from the default.
+// False (OutFailedIndex, OutFailure) when an element cannot be matched that way.
+bool MatchAssetDocumentEditorArrayElements(
+	const FArrayProperty& Array,
+	const TArray<TSharedPtr<FJsonValue>>& Authored,
+	const void* Current,
+	const void* DefaultElement,
+	const UObject* Within,
+	TArray<int32>& OutMatch,
+	int32& OutFailedIndex,
+	EAssetDocumentEditorArrayMatchFailure& OutFailure)
+{
+	using EMatch = EAssetDocumentEditorMarkedMatch;
+	FProperty& Inner = *Array.Inner;
+	FScriptArrayHelper CurrentHelper(&Array, Current);
+	const int32 CurrentNum = Current != nullptr ? CurrentHelper.Num() : 0;
+	TArray<TSharedPtr<FJsonValue>> CurrentJson;
+	CurrentJson.SetNum(CurrentNum);
+	auto CurrentAt = [&](int32 Index) -> const TSharedPtr<FJsonValue>&
+	{
+		if (!CurrentJson[Index].IsValid())
+		{
+			CurrentJson[Index] = ExportAssetDocumentEditorJson(Inner, CurrentHelper.GetRawPtr(Index));
+		}
+		return CurrentJson[Index];
+	};
+	const TSharedPtr<FJsonValue> DefaultJson = ExportAssetDocumentEditorJson(Inner, DefaultElement);
+	TArray<bool> Taken;
+	Taken.Init(false, CurrentNum);
+	OutMatch.Init(INDEX_NONE, Authored.Num());
+	OutFailedIndex = INDEX_NONE;
+	OutFailure = EAssetDocumentEditorArrayMatchFailure::None;
+	for (int32 Index = 0; Index < Authored.Num(); ++Index)
+	{
+		if (!HoldsAssetDocumentEditorMarkerJson(Authored[Index]))
+		{
+			continue;
+		}
+		int32 Best = INDEX_NONE;
+		EMatch BestMatch = EMatch::Different;
+		for (int32 Step = -1; Step < CurrentNum && BestMatch != EMatch::Equal; ++Step)
+		{
+			const int32 Candidate = Step < 0 ? Index : Step;
+			if (Candidate >= CurrentNum || (Step >= 0 && Candidate == Index) || Taken[Candidate])
+			{
+				continue;
+			}
+			const EMatch Match = MatchAssetDocumentEditorMarkedJson(Authored[Index], CurrentAt(Candidate), Within, false, 0);
+			if (Match > BestMatch)
+			{
+				Best = Candidate;
+				BestMatch = Match;
+			}
+		}
+		if (Best != INDEX_NONE)
+		{
+			OutMatch[Index] = Best;
+			Taken[Best] = true;
+		}
+		else if (MatchAssetDocumentEditorMarkedJson(Authored[Index], DefaultJson, Within, false, 0) == EMatch::Different)
+		{
+			OutFailedIndex = Index;
+			OutFailure = EAssetDocumentEditorArrayMatchFailure::MarkerNotFound;
+			return false;
+		}
+	}
+	for (int32 Index = 0; Index < FMath::Min(Authored.Num(), CurrentNum); ++Index)
+	{
+		if (HoldsAssetDocumentEditorMarkerJson(Authored[Index]) || Taken[Index])
+		{
+			continue;
+		}
+		if (LeavesOutAssetDocumentEditorMarkedContent(Authored[Index], CurrentAt(Index), DefaultJson, Within, 0))
+		{
+			OutFailedIndex = Index;
+			OutFailure = EAssetDocumentEditorArrayMatchFailure::MarkedContentLeftOut;
+			return false;
+		}
+		OutMatch[Index] = Index;
+	}
+	return true;
+}
+
+FString DescribeAssetDocumentEditorArrayMatchFailure(const FProperty& Inner, EAssetDocumentEditorArrayMatchFailure Failure)
+{
+	if (Failure == EAssetDocumentEditorArrayMatchFailure::MarkerNotFound)
+	{
+		return FString::Printf(TEXT("this %s element carries an \"Unsupported\" marker that no element of the current array has "
+			"(each current element's marked content can be kept by one element only). Elements whose content has no "
+			"document form are matched by their markers: leave each element's markers as read (an element may move), "
+			"and do not edit or copy them."), *Inner.GetCPPType());
+	}
+	return FString::Printf(TEXT("this %s element leaves out members with no document form, and the current element at "
+		"this index holds content for them: AssetDoc cannot tell whether it is that element. Give the element's "
+		"\"Unsupported\" markers as read to keep that content with it, or remove the element (in a separate apply) "
+		"before adding a new one here."), *Inner.GetCPPType());
+}
+
 bool CheckAssetDocumentEditorElements(
 	FProperty& Element,
 	TConstArrayView<FValue> Elements,
@@ -1318,6 +1925,37 @@ bool CheckAssetDocumentEditorElements(
 	return true;
 }
 
+// A struct map key names a key the map holds (kept as stored) or parses to a key that reads back as the same text.
+bool IsAssetDocumentEditorStructMapKeyChecked(
+	const FMapProperty& Map,
+	const void* Base,
+	const FString& Text,
+	const FString& Path,
+	FAssetDocumentEditorValueCheck& Check)
+{
+	// An encoded value is the asset's own key (only its shape is checked).
+	if (Check.Mode == EAssetDocumentEditorCheckMode::Encode || FindAssetDocumentEditorStructMapKeyIndex(Map, Base, Text) != INDEX_NONE)
+	{
+		return true;
+	}
+	FAssetDocumentEditorScopedPropertyValue Parsed(*Map.KeyProp);
+	const bool bGameplayTag = IsAssetDocumentEditorGameplayTag(*Map.KeyProp);
+	if (!Parsed.IsValid() || !ParseAssetDocumentEditorStructMapKey(*Map.KeyProp, Text, Parsed.GetMemory()))
+	{
+		return FailAssetDocumentEditorCheck(Check, Path, bGameplayTag
+			? FString::Printf(TEXT("'%s' is not a registered gameplay tag: write the key as a tag name the tag picker lists ('Ability.Cooldown')."), *Text)
+			: FString::Printf(TEXT("'%s' is not a %s map key: write the key as the struct's export text, as extract shows it."),
+				*Text, *CastFieldChecked<FStructProperty>(Map.KeyProp)->Struct->GetName()));
+	}
+	const FString Canonical = ExportAssetDocumentEditorStructMapKey(*Map.KeyProp, Parsed.GetMemory());
+	if (!Canonical.Equals(Text, ESearchCase::CaseSensitive))
+	{
+		return FailAssetDocumentEditorCheck(Check, Path, FString::Printf(
+			TEXT("the map key '%s' reads back as '%s': write the key as '%s' (one name per key)."), *Text, *Canonical, *Canonical));
+	}
+	return true;
+}
+
 bool CheckAssetDocumentEditorContainer(
 	FProperty& Property,
 	const FValue& Value,
@@ -1333,9 +1971,35 @@ bool CheckAssetDocumentEditorContainer(
 			return FailAssetDocumentEditorCheck(Check, Path, FString::Printf(
 				TEXT("expected an object (map keyed by string), got %s."), DescribeAssetDocumentEditorKind(Value.Kind)));
 		}
+		// Names, strings, paths and the names inside struct keys compare ignoring case, so keys that differ only in
+		// case are one key: the map would keep only one of the entries.
+		const bool bFoldedKeys = AsAssetDocumentEditorIntegerMapKey(*Map->KeyProp) == nullptr;
+		TMap<FString, int32> FoldedKeys;
 		for (int32 Index = 0; Index < Value.ObjectKeys.Num(); ++Index)
 		{
 			const FString EntryPath = AppendAssetDocumentEditorPath(Path, Value.ObjectKeys[Index]);
+			if (bFoldedKeys && Check.Mode == EAssetDocumentEditorCheckMode::Decode)
+			{
+				const FString Folded = Value.ObjectKeys[Index].ToLower();
+				if (const int32* Earlier = FoldedKeys.Find(Folded))
+				{
+					return FailAssetDocumentEditorCheck(Check, EntryPath, FString::Printf(
+						TEXT("the map keys '%s' and '%s' are one %s key (keys compare ignoring case): give one entry for it."),
+						*Value.ObjectKeys[*Earlier], *Value.ObjectKeys[Index], *Map->KeyProp->GetCPPType()));
+				}
+				FoldedKeys.Add(Folded, Index);
+			}
+			if (IsAssetDocumentEditorSoftReference(*Map->KeyProp) && Check.Mode == EAssetDocumentEditorCheckMode::Decode
+				&& !Value.ObjectKeys[Index].IsEmpty())
+			{
+				const FSoftObjectPath KeyPath(Value.ObjectKeys[Index]);
+				if (!KeyPath.IsValid() || KeyPath.ToString() != Value.ObjectKeys[Index])
+				{
+					return FailAssetDocumentEditorCheck(Check, EntryPath, FString::Printf(
+						TEXT("'%s' is not an object path: write the key as the object's path ('/Game/Folder/Asset.Asset'), as extract shows it."),
+						*Value.ObjectKeys[Index]));
+				}
+			}
 			FValue Key;
 			Key.Kind = EKind::String;
 			Key.StringValue = Value.ObjectKeys[Index];
@@ -1356,7 +2020,14 @@ bool CheckAssetDocumentEditorContainer(
 				return FailAssetDocumentEditorCheck(Check, EntryPath,
 					TEXT("an instanced subobject map value cannot be null; give it a {\"Class\", \"Properties\"} value or remove the entry."));
 			}
-			if (!IsAssetDocumentEditorValueChecked(*Map->KeyProp, Key, nullptr, false, Depth + 1, EntryPath, Check))
+			if (IsAssetDocumentEditorStructMapKey(*Map->KeyProp))
+			{
+				if (!IsAssetDocumentEditorStructMapKeyChecked(*Map, Base, Value.ObjectKeys[Index], EntryPath, Check))
+				{
+					return false;
+				}
+			}
+			else if (!IsAssetDocumentEditorValueChecked(*Map->KeyProp, Key, nullptr, false, Depth + 1, EntryPath, Check))
 			{
 				return false;
 			}
@@ -1404,7 +2075,39 @@ bool CheckAssetDocumentEditorContainer(
 		}
 	}
 	// Array elements keep the current element at the same index; set elements
-	// are whole values.
+	// are whole values. Elements with content that has no document form keep
+	// the current element they are identified with (see
+	// MatchAssetDocumentEditorArrayElements; the import matches them alike).
+	if (Array != nullptr && Base != nullptr && Check.Mode == EAssetDocumentEditorCheckMode::Decode)
+	{
+		TSharedPtr<FJsonValue> Json;
+		FString Code;
+		const TArray<TSharedPtr<FJsonValue>>* JsonElements = nullptr;
+		if (TryConvertAssetDocumentEditorValueToJson(Value, Json, Code) && Json.IsValid() && Json->TryGetArray(JsonElements)
+			&& JsonElements != nullptr && IsAssetDocumentEditorArrayMatchedByIdentity(*Array, *JsonElements))
+		{
+			FAssetDocumentEditorScopedPropertyValue DefaultElement(*Element);
+			TArray<int32> Match;
+			int32 FailedIndex = INDEX_NONE;
+			EAssetDocumentEditorArrayMatchFailure Failure = EAssetDocumentEditorArrayMatchFailure::None;
+			if (!DefaultElement.IsValid())
+			{
+				return FailAssetDocumentEditorCheck(Check, Path, TEXT("the array's element type could not be initialized."));
+			}
+			if (!MatchAssetDocumentEditorArrayElements(*Array, *JsonElements, Base, DefaultElement.GetMemory(), Check.Owner, Match, FailedIndex, Failure))
+			{
+				return FailAssetDocumentEditorCheck(Check, AppendAssetDocumentEditorPath(Path, FailedIndex),
+					DescribeAssetDocumentEditorArrayMatchFailure(*Element, Failure));
+			}
+			return CheckAssetDocumentEditorElements(*Element, Value.Elements,
+				[Array, Base, &Match, &DefaultElement](int32 Index) -> const void*
+				{
+					return Match.IsValidIndex(Index) && Match[Index] != INDEX_NONE
+						? FScriptArrayHelper(Array, Base).GetRawPtr(Match[Index]) : DefaultElement.GetMemory();
+				},
+				false, Depth, Path, Check);
+		}
+	}
 	const int32 BaseNum = Array != nullptr && Base != nullptr ? FScriptArrayHelper(Array, Base).Num() : 0;
 	return CheckAssetDocumentEditorElements(*Element, Value.Elements,
 		[Array, Base, BaseNum](int32 Index) -> const void*
@@ -1425,7 +2128,8 @@ bool IsAssetDocumentEditorNullable(FProperty& Property, bool bIgnoreStaticArray)
 	return AsAssetDocumentEditorInstancedObject(Property) != nullptr
 		|| AsAssetDocumentEditorHardReference(Property) != nullptr
 		|| CastField<FInterfaceProperty>(&Property) != nullptr
-		|| IsAssetDocumentEditorInstancedStruct(Property);
+		|| IsAssetDocumentEditorInstancedStruct(Property)
+		|| CastField<FOptionalProperty>(&Property) != nullptr;
 }
 
 bool IsAssetDocumentEditorValueChecked(
@@ -1447,6 +2151,14 @@ bool IsAssetDocumentEditorValueChecked(
 			TEXT("null is not a %s value (only references, instanced subobjects and instanced structs take null); give a value, or omit a struct member to keep its current value."),
 			*Property.GetCPPType()));
 	}
+	if (IsAssetDocumentEditorFormerMarkerValue(Property, Value))
+	{
+		// Kept, never decoded; with no current value there is nothing to keep.
+		return Check.Mode == EAssetDocumentEditorCheckMode::Encode || Base != nullptr
+			|| FailAssetDocumentEditorCheck(Check, Path, FString::Printf(
+				TEXT("this %s has a document form now and no current value to keep: write the value as extract shows it."),
+				*Property.GetCPPType()));
+	}
 	if (HasAssetDocumentEditorStaticArrayShape(Property, bIgnoreStaticArray))
 	{
 		if (Value.Kind != EKind::Array || Value.Elements.Num() != Property.ArrayDim)
@@ -1461,6 +2173,13 @@ bool IsAssetDocumentEditorValueChecked(
 				return Base != nullptr ? static_cast<const uint8*>(Base) + Index * ElementSize : nullptr;
 			},
 			true, Depth, Path, Check);
+	}
+	if (const FOptionalProperty* Optional = CastField<FOptionalProperty>(&Property))
+	{
+		// null is the unset optional; any other value is the set value, an edit of the current one when it is set.
+		return Value.Kind == EKind::Null
+			|| IsAssetDocumentEditorValueChecked(*Optional->GetValueProperty(), Value,
+				Base != nullptr ? Optional->GetValuePointerForReadIfSet(Base) : nullptr, false, Depth + 1, Path, Check);
 	}
 	if (CastField<FTextProperty>(&Property) != nullptr)
 	{
@@ -1495,6 +2214,12 @@ bool IsAssetDocumentEditorValueChecked(
 	FString ScalarCodecId;
 	if (TryGetAssetDocumentEditorScalarCodecId(Property, ScalarCodecId))
 	{
+		if (CastField<FNumericProperty>(&Property) != nullptr && Value.Kind == EKind::Object
+			&& FindAssetDocumentEditorTypedField(Value, TEXT("Unsupported")) != nullptr)
+		{
+			// The marker of a number with no JSON form (NaN, an infinity): kept, never written.
+			return CheckAssetDocumentEditorMarkedMember(Property, Value, Base, Path, Check);
+		}
 		if (!IsAssetDocumentEditorScalarValueCompatible(Property, Value))
 		{
 			return FailAssetDocumentEditorCheck(Check, Path, FString::Printf(
@@ -1536,6 +2261,7 @@ FString EncodeAssetDocumentEditorText(const FText& Text)
 	if (Text.IsFromStringTable() || Text.IsCultureInvariant())
 	{
 		FTextStringHelper::WriteToBuffer(Complex, Text);
+		UE::AssetDocument::TextDisplays::Record(Complex, Text.ToString());
 		return Complex;
 	}
 	const FString* Source = FTextInspector::GetSourceString(Text);
@@ -1543,6 +2269,7 @@ FString EncodeAssetDocumentEditorText(const FText& Text)
 	if (FTextStringHelper::IsComplexText(*Plain))
 	{
 		FTextStringHelper::WriteToBuffer(Complex, Text);
+		UE::AssetDocument::TextDisplays::Record(Complex, Text.ToString());
 		return Complex;
 	}
 	return Plain;
@@ -1631,7 +2358,7 @@ TSharedPtr<FJsonValue> ExportAssetDocumentEditorInstancedStruct(const FInstanced
 	TSharedRef<FJsonObject> Properties = MakeShared<FJsonObject>();
 	for (TFieldIterator<FProperty> It(Struct); It; ++It)
 	{
-		if (!IsAssetDocumentEditorStructCodecField(**It) || !IsAssetDocumentEditorPropertyAdmitted(**It, false, 1))
+		if (!IsAssetDocumentEditorStructCodecField(**It))
 		{
 			continue;
 		}
@@ -1662,11 +2389,64 @@ TSharedPtr<FJsonValue> ExportAssetDocumentEditorObjectPath(const UObject* Object
 	return MakeShared<FJsonValueString>(Object->GetPathName());
 }
 
+// The marker of a value the codec has no form for: the reason and the engine's export text (read only).
+TSharedPtr<FJsonValue> ExportAssetDocumentEditorMarker(const FProperty& Property, const void* Value)
+{
+	FString Text;
+	Property.ExportText_Direct(Text, Value, nullptr, nullptr, PPF_None);
+	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
+	Out->SetStringField(TEXT("Unsupported"), FString::Printf(TEXT("%s has no document form; AssetDoc keeps the value."),
+		*Property.GetCPPType()));
+	Out->SetStringField(TEXT("Text"), Text);
+	return MakeShared<FJsonValueObject>(Out);
+}
+
+bool HasAssetDocumentEditorOptionalMember(const UStruct& Struct)
+{
+	for (TFieldIterator<FProperty> It(&Struct); It; ++It)
+	{
+		if (CastField<FOptionalProperty>(*It) != nullptr && IsAssetDocumentEditorStructCodecField(**It))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+// Every codec member of a struct, each in its document form.
+TSharedPtr<FJsonValue> ExportAssetDocumentEditorStructMembers(const UStruct& Struct, const void* Value)
+{
+	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
+	for (TFieldIterator<FProperty> It(&Struct); It; ++It)
+	{
+		if (!IsAssetDocumentEditorStructCodecField(**It))
+		{
+			continue;
+		}
+		const TSharedPtr<FJsonValue> Member = ExportAssetDocumentEditorJson(**It, It->ContainerPtrToValuePtr<void>(Value));
+		if (!Member.IsValid())
+		{
+			return nullptr;
+		}
+		Out->SetField(It->GetAuthoredName(), Member);
+	}
+	return MakeShared<FJsonValueObject>(Out);
+}
+
 TSharedPtr<FJsonValue> ExportAssetDocumentEditorCustom(FProperty* Property, const void* Value)
 {
 	if (Property == nullptr || Value == nullptr)
 	{
 		return nullptr;
+	}
+	if (IsAssetDocumentEditorStructMapKey(*Property) && IsAssetDocumentEditorMapKeyProperty(*Property))
+	{
+		return MakeShared<FJsonValueString>(ExportAssetDocumentEditorStructMapKey(*Property, Value));
+	}
+	// A struct member (or one element of a fixed-size member) of a type the codec has no form for.
+	if (!IsAssetDocumentEditorPropertyAdmitted(*Property, true, 1))
+	{
+		return ExportAssetDocumentEditorMarker(*Property, Value);
 	}
 	if (const FNumericProperty* Numeric = CastField<FNumericProperty>(Property))
 	{
@@ -1676,7 +2456,7 @@ TSharedPtr<FJsonValue> ExportAssetDocumentEditorCustom(FProperty* Property, cons
 				LexToString(Numeric->GetSignedIntPropertyValue(Value)));
 		}
 		// A stored float extracts as the shortest decimal that reads back as it (0.3,
-		// not 0.30000001192092896); doubles keep their exact value.
+		// not 0.30000001192092896); doubles keep their exact value. NaN and infinities have no JSON form.
 		if (const FFloatProperty* Float = CastField<FFloatProperty>(Numeric))
 		{
 			const float Stored = Float->GetPropertyValue(Value);
@@ -1684,6 +2464,12 @@ TSharedPtr<FJsonValue> ExportAssetDocumentEditorCustom(FProperty* Property, cons
 			{
 				return MakeShared<FJsonValueNumber>(UE::AssetDocument::EditorFloatPrecision::ShortestFloatDecimal(Stored));
 			}
+			return ExportAssetDocumentEditorMarker(*Property, Value);
+		}
+		if (const FDoubleProperty* Double = CastField<FDoubleProperty>(Numeric); Double != nullptr
+			&& !FMath::IsFinite(Double->GetPropertyValue(Value)))
+		{
+			return ExportAssetDocumentEditorMarker(*Property, Value);
 		}
 		return nullptr;
 	}
@@ -1714,23 +2500,21 @@ TSharedPtr<FJsonValue> ExportAssetDocumentEditorCustom(FProperty* Property, cons
 	{
 		return ExportAssetDocumentEditorInstancedStruct(*static_cast<const FInstancedStruct*>(Value));
 	}
+	if (const FOptionalProperty* Optional = CastField<FOptionalProperty>(Property))
+	{
+		const void* Inner = Optional->GetValuePointerForReadIfSet(Value);
+		return Inner != nullptr ? ExportAssetDocumentEditorJson(*Optional->GetValueProperty(), Inner) : MakeShared<FJsonValueNull>();
+	}
 	if (IsAssetDocumentEditorPropertyBag(*Property))
 	{
-		TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
-		for (TFieldIterator<FProperty> It(FInstancedPropertyBag::StaticStruct()); It; ++It)
-		{
-			if (!IsAssetDocumentEditorStructCodecField(**It))
-			{
-				continue;
-			}
-			const TSharedPtr<FJsonValue> Member = ExportAssetDocumentEditorJson(**It, It->ContainerPtrToValuePtr<void>(Value));
-			if (!Member.IsValid())
-			{
-				return nullptr;
-			}
-			Out->SetField(It->GetAuthoredName(), Member);
-		}
-		return MakeShared<FJsonValueObject>(Out);
+		return ExportAssetDocumentEditorStructMembers(*FInstancedPropertyBag::StaticStruct(), Value);
+	}
+	// The engine's JSON export leaves out an unset optional member; it reads as null.
+	if (const FStructProperty* Struct = CastField<FStructProperty>(Property); Struct != nullptr
+		&& !IsAssetDocumentEditorTextFormStruct(*Property) && !IsAssetDocumentEditorInstancedStruct(*Property)
+		&& HasAssetDocumentEditorOptionalMember(*Struct->Struct))
+	{
+		return ExportAssetDocumentEditorStructMembers(*Struct->Struct, Value);
 	}
 	return nullptr;
 }
@@ -1757,7 +2541,8 @@ TSharedPtr<FJsonValue> ExportAssetDocumentEditorJsonAsAuthored(
 	int32 Depth)
 {
 	if (!Authored.IsValid() || Depth > AssetDocumentEditorTypedValueMaximumDepth
-		|| HasAssetDocumentEditorStaticArrayShape(Property, bIgnoreStaticArray) || Property.ArrayDim > 1)
+		|| HasAssetDocumentEditorStaticArrayShape(Property, bIgnoreStaticArray) || Property.ArrayDim > 1
+		|| !IsAssetDocumentEditorPropertyAdmitted(Property, true, Depth))
 	{
 		return ExportAssetDocumentEditorJson(Property, Value);
 	}
@@ -1859,15 +2644,18 @@ TSharedPtr<FJsonValue> ExportAssetDocumentEditorJsonAsAuthored(
 	{
 		const TArray<TSharedPtr<FJsonValue>>* AuthoredElements = nullptr;
 		FScriptArrayHelper Helper(Array, Value);
-		if (!Authored->TryGetArray(AuthoredElements) || AuthoredElements->Num() != Helper.Num())
+		if (!Authored->TryGetArray(AuthoredElements))
 		{
 			return ExportAssetDocumentEditorJson(Property, Value);
 		}
+		// The elements the authored array shares with the live one by index are read in the authored shape; live
+		// elements past its end are read in full (the authored array removes them).
 		TArray<TSharedPtr<FJsonValue>> Elements;
 		for (int32 Index = 0; Index < Helper.Num(); ++Index)
 		{
-			const TSharedPtr<FJsonValue> Exported = ExportAssetDocumentEditorJsonAsAuthored(
-				*Array->Inner, Helper.GetRawPtr(Index), (*AuthoredElements)[Index], false, Depth + 1);
+			const TSharedPtr<FJsonValue> Exported = Index < AuthoredElements->Num()
+				? ExportAssetDocumentEditorJsonAsAuthored(*Array->Inner, Helper.GetRawPtr(Index), (*AuthoredElements)[Index], false, Depth + 1)
+				: ExportAssetDocumentEditorJson(*Array->Inner, Helper.GetRawPtr(Index));
 			if (!Exported.IsValid())
 			{
 				return nullptr;
@@ -1982,9 +2770,13 @@ bool ImportAssetDocumentEditorInstancedObject(
 	Property.SetObjectPropertyValue(Out, Created);
 	if (bFromExisting)
 	{
+		// The fields a document writes, and the saved fields it has no form for (not editable, read-only, no codec):
+		// a replacement keeps those too. A field holding subobjects of the current object is not shared with the
+		// replacement; it starts from the class default.
 		for (TFieldIterator<FProperty> It(Class); It; ++It)
 		{
-			if (IsAssetDocumentEditorSubobjectField(**It, 0))
+			if (IsAssetDocumentEditorSubobjectField(**It, 0)
+				|| (!It->HasAnyPropertyFlags(CPF_Transient | CPF_Deprecated) && !DoesAssetDocumentEditorPropertyHoldInstancedObjects(**It, true, true)))
 			{
 				It->CopyCompleteValue_InContainer(Created, Existing);
 			}
@@ -2105,7 +2897,9 @@ bool ImportAssetDocumentEditorMap(
 	for (const auto& Entry : Json->AsObject()->Values)
 	{
 		const int32 Index = Helper.AddDefaultValue_Invalid_NeedsRehash();
-		if (!ImportAssetDocumentEditorJson(MakeShared<FJsonValueString>(FString(*Entry.Key)), *Map.KeyProp, Helper.GetKeyPtr(Index), Context))
+		if (IsAssetDocumentEditorStructMapKey(*Map.KeyProp)
+			? !ImportAssetDocumentEditorStructMapKey(Map, Current.IsValid() ? Current->GetMemory() : nullptr, FString(*Entry.Key), Helper.GetKeyPtr(Index))
+			: !ImportAssetDocumentEditorJson(MakeShared<FJsonValueString>(FString(*Entry.Key)), *Map.KeyProp, Helper.GetKeyPtr(Index), Context))
 		{
 			bImported = false;
 			break;
@@ -2155,7 +2949,9 @@ void MakeAssetDocumentEditorNewTextId(UPackage& Package, const FString& Proposed
 // An FText source string edited like the Details text box does
 // (STextPropertyEditableTextBox::OnTextCommitted): an unchanged string keeps the
 // text; a changed one keeps its namespace and key when it is the only text using
-// them (TextNamespaceUtil::GetTextIdForEdit), else gets a new key.
+// them (TextNamespaceUtil::GetTextIdForEdit), else gets a new key. The string a
+// String Table or culture-invariant text displays (what documents held before such
+// texts were read in their text form) also keeps that text.
 bool ImportAssetDocumentEditorText(
 	const FString& String,
 	FText& InOutText,
@@ -2166,8 +2962,7 @@ bool ImportAssetDocumentEditorText(
 		return DecodeAssetDocumentEditorText(String, InOutText);
 	}
 	const FText Current = InOutText;
-	if (!Current.IsEmpty() && !Current.IsCultureInvariant() && !Current.IsFromStringTable()
-		&& Current.ToString().Equals(String, ESearchCase::CaseSensitive))
+	if (!Current.IsEmpty() && Current.ToString().Equals(String, ESearchCase::CaseSensitive))
 	{
 		return true;
 	}
@@ -2205,6 +3000,44 @@ bool ImportAssetDocumentEditorText(
 	return true;
 }
 
+// An array whose elements are matched by identity (IsAssetDocumentEditorArrayMatchedByIdentity): each element is
+// imported over a copy of the current element it continues, or over the default element, never over the memory of
+// whichever element happened to stand at its index.
+bool ImportAssetDocumentEditorMatchedArray(
+	const TArray<TSharedPtr<FJsonValue>>& Elements,
+	FArrayProperty& Array,
+	void* Out,
+	FAssetDocumentEditorImportContext& Context)
+{
+	FAssetDocumentEditorScopedPropertyValue DefaultElement(*Array.Inner);
+	FAssetDocumentEditorScopedPropertyValue Staged(Array);
+	TArray<int32> Match;
+	int32 FailedIndex = INDEX_NONE;
+	EAssetDocumentEditorArrayMatchFailure Failure = EAssetDocumentEditorArrayMatchFailure::None;
+	if (!DefaultElement.IsValid() || !Staged.IsValid()
+		|| !MatchAssetDocumentEditorArrayElements(Array, Elements, Out, DefaultElement.GetMemory(), Context.BaseOwner, Match, FailedIndex, Failure))
+	{
+		return false;
+	}
+	FScriptArrayHelper Current(&Array, Out);
+	FScriptArrayHelper Result(&Array, Staged.GetMemory());
+	Result.AddValues(Elements.Num());
+	for (int32 Index = 0; Index < Elements.Num(); ++Index)
+	{
+		Array.Inner->CopySingleValue(Result.GetRawPtr(Index),
+			Match[Index] != INDEX_NONE ? Current.GetRawPtr(Match[Index]) : DefaultElement.GetMemory());
+	}
+	for (int32 Index = 0; Index < Elements.Num(); ++Index)
+	{
+		if (!ImportAssetDocumentEditorJson(Elements[Index], *Array.Inner, Result.GetRawPtr(Index), Context))
+		{
+			return false;
+		}
+	}
+	Array.CopySingleValue(Out, Staged.GetMemory());
+	return true;
+}
+
 bool ImportAssetDocumentEditorCustom(
 	const TSharedPtr<FJsonValue>& Json,
 	FProperty* Property,
@@ -2215,9 +3048,32 @@ bool ImportAssetDocumentEditorCustom(
 	{
 		return false;
 	}
+	if (!IsAssetDocumentEditorPropertyAdmitted(*Property, true, 1)
+		|| (CastField<FNumericProperty>(Property) != nullptr && Json->Type == EJson::Object)
+		|| IsAssetDocumentEditorFormerMarkerJson(*Property, Json))
+	{
+		// A marked value: the value check matched it to the current value, which the memory already holds.
+		return true;
+	}
 	bool bHandled = true;
 	bool bImported = false;
-	if (const FTextProperty* Text = CastField<FTextProperty>(Property))
+	if (const FOptionalProperty* Optional = CastField<FOptionalProperty>(Property))
+	{
+		if (Json->IsNull())
+		{
+			Optional->MarkUnset(Out);
+			bImported = true;
+		}
+		else
+		{
+			// A set optional is edited in place (a struct keeps the members the value omits); an unset one starts from
+			// the value type's default.
+			void* Inner = Optional->IsSet(Out)
+				? Optional->GetValuePointerForReplace(Out) : Optional->MarkSetAndGetInitializedValuePointerToReplace(Out);
+			bImported = ImportAssetDocumentEditorJson(Json, *Optional->GetValueProperty(), Inner, Context);
+		}
+	}
+	else if (const FTextProperty* Text = CastField<FTextProperty>(Property))
 	{
 		FText Decoded = Text->GetPropertyValue(Out);
 		FString String;
@@ -2255,6 +3111,11 @@ bool ImportAssetDocumentEditorCustom(
 	else if (const FMapProperty* Map = CastField<FMapProperty>(Property))
 	{
 		bImported = ImportAssetDocumentEditorMap(Json, *Map, Out, Context);
+	}
+	else if (FArrayProperty* Array = CastField<FArrayProperty>(Property); Array != nullptr && Json->Type == EJson::Array
+		&& IsAssetDocumentEditorArrayMatchedByIdentity(*Array, Json->AsArray()))
+	{
+		bImported = ImportAssetDocumentEditorMatchedArray(Json->AsArray(), *Array, Out, Context);
 	}
 	else
 	{
@@ -2306,12 +3167,18 @@ void ClearAssetDocumentEditorNullValues(const TSharedPtr<FJsonValue>& Json, FPro
 		{
 			static_cast<FInstancedStruct*>(Memory)->Reset();
 		}
+		else if (const FOptionalProperty* Optional = CastField<FOptionalProperty>(&Property))
+		{
+			Optional->MarkUnset(Memory);
+		}
 		return;
 	}
 	if (const FArrayProperty* Array = CastField<FArrayProperty>(&Property))
 	{
 		const TArray<TSharedPtr<FJsonValue>>* Elements = nullptr;
-		if (Json->TryGetArray(Elements))
+		// Elements matched by identity are cleared one by one as they are imported (ImportAssetDocumentEditorMatchedArray),
+		// not at their index here.
+		if (Json->TryGetArray(Elements) && Elements != nullptr && !IsAssetDocumentEditorArrayMatchedByIdentity(*Array, *Elements))
 		{
 			FScriptArrayHelper Helper(Array, Memory);
 			for (int32 Index = 0; Index < FMath::Min(Elements->Num(), Helper.Num()); ++Index)
@@ -2364,6 +3231,11 @@ const void* FindAssetDocumentEditorMapBaseValue(const FMapProperty& Map, const v
 	if (Base == nullptr || FScriptMapHelper(&Map, Base).Num() == 0)
 	{
 		return nullptr;
+	}
+	if (IsAssetDocumentEditorStructMapKey(*Map.KeyProp))
+	{
+		const int32 StructKeyIndex = FindAssetDocumentEditorStructMapKeyIndex(Map, Base, Key);
+		return StructKeyIndex != INDEX_NONE ? FScriptMapHelper(&Map, Base).GetValuePtr(StructKeyIndex) : nullptr;
 	}
 	FAssetDocumentEditorScopedPropertyValue KeyValue(*Map.KeyProp);
 	FAssetDocumentEditorImportContext Context;
@@ -3207,4 +4079,33 @@ void ReleaseAssetDocumentEditorReplacedInstancedObjects(
 				REN_DontCreateRedirectors | REN_DoNotDirty | REN_NonTransactional);
 		}
 	}
+}
+
+namespace UE::AssetDocument::EditorPropertyValueCodec
+{
+FString EncodeText(const FText& Text)
+{
+	return EncodeAssetDocumentEditorText(Text);
+}
+
+bool DecodeText(const FString& Value, FText& InOutText, UObject* Owner)
+{
+	FAssetDocumentEditorImportContext Context;
+	Context.bPartial = true;
+	Context.TextPackage = Owner != nullptr ? Owner->GetPackage() : nullptr;
+	FText Decoded = InOutText;
+	if (!ImportAssetDocumentEditorText(Value, Decoded, Context))
+	{
+		return false;
+	}
+	InOutText = Decoded;
+	return true;
+}
+
+bool IsSameText(const FString& Value, const FText& Text)
+{
+	return Value.Equals(EncodeAssetDocumentEditorText(Text), ESearchCase::CaseSensitive)
+		|| (!FTextStringHelper::IsComplexText(*Value) && !Text.IsEmpty()
+			&& Value.Equals(Text.ToString(), ESearchCase::CaseSensitive));
+}
 }

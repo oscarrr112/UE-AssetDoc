@@ -280,7 +280,7 @@
     },
     {
       "name": "extract_asset_document",
-      "description": "Extract an asset as its canonical AssetDocument (payload), the starting point for edits; Blueprint-family results carry compile. Engine and plugin assets extract read-only (read_only: true): for an editable copy set Target to a new /Game path (and replace the source's own path elsewhere), Action Create, and apply it, or use duplicate_asset (preferred for Blueprints).",
+      "description": "Extract an asset as its canonical AssetDocument (payload), the starting point for edits; Blueprint-family results carry compile, and assets with graphs carry layout (each node's drawn size, read only, never part of the document). Engine and plugin assets extract read-only (read_only: true): for an editable copy set Target to a new /Game path (and replace the source's own path elsewhere), Action Create, and apply it, or use duplicate_asset (preferred for Blueprints).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -295,6 +295,10 @@
           "include_all_writable": {
             "type": "boolean",
             "description": "As diff_only false."
+          },
+          "include_layout": {
+            "type": "boolean",
+            "description": "Default true: the result's layout gives every graph node's size as the editor draws it ({\"Graphs\": {\"UbergraphPages/EventGraph\": {\"<node Id>\": {\"Width\", \"Height\"}}}}), for placing nodes by hand; false leaves it out."
           }
         },
         "required": [
@@ -318,6 +322,10 @@
           "include_all_writable": {
             "argument": "include_all_writable",
             "default": false
+          },
+          "include_layout": {
+            "argument": "include_layout",
+            "default": true
           }
         },
         "response": "document"

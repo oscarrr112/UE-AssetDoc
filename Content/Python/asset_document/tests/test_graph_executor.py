@@ -13,7 +13,7 @@ from asset_document.graphs.extract import extract_graphs
 from asset_document.graphs.reconcile import PlanOp
 from asset_document.graphs.schemas import k2
 from asset_document.tests.graph_support import (
-    ACTOR_CLASS, G_EVENT, N_BEGIN, N_BRANCH, N_PRINT, RANDOM_BOOL, FakeGraphContext,
+    ACTOR_CLASS, G_EVENT, GHOST_COMMENT, N_BEGIN, N_BRANCH, N_OVERLAP, N_PRINT, N_TICK, RANDOM_BOOL, FakeGraphContext,
 )
 
 
@@ -58,10 +58,11 @@ class GraphExecutorTests(unittest.TestCase):
             {"Id": "Branch", "Action": "K2:Branch"},
             {"Id": "Print", "Action": "K2:PrintString", "PinOverrides": [{"Pin": "InString", "DefaultValue": "Hi"}]}],
             "Links": [{"From": "BeginPlay:Then", "To": "Branch:execute"}, {"From": "Branch:then", "To": "Print:execute"}]}]})
-        # The new nodes and the reused ghost BeginPlay are laid out once they exist (one move each).
-        self.assertEqual(mutations(context), ["graph.node.spawn.v1", "graph.node.spawn.v1", "graph.pin.connect.v1",
-                                              "graph.pin.connect.v1", "graph.pin.default.set.v1"]
-                         + ["graph.node.layout.set.v1"] * 3 + ["graph.finalize.v1"])
+        # The unlisted ghost Overlap and Tick are removed; the new nodes are laid out once they exist next to
+        # the reused ghost BeginPlay, which keeps its place.
+        self.assertEqual(mutations(context), ["graph.node.remove.v1"] * 2 + [
+            "graph.node.spawn.v1", "graph.node.spawn.v1", "graph.pin.connect.v1", "graph.pin.connect.v1",
+            "graph.pin.default.set.v1"] + ["graph.node.layout.set.v1"] * 2 + ["graph.finalize.v1"])
         bindings = report.node_bindings
         self.assertEqual(bindings[("UbergraphPages/EventGraph", "BeginPlay")], N_BEGIN)
         # Pin names are resolved against live pins at call time ("Then" -> "then").
@@ -72,10 +73,11 @@ class GraphExecutorTests(unittest.TestCase):
         self.assertEqual(snapshot_links(context, "A0000000000000000000000000000001"), [
             ("K2:Event:/Script/Engine.Actor:ReceiveBeginPlay", "then", "K2:IfThenElse", "execute"),
             ("K2:IfThenElse", "then", "K2:CallFunction:/Script/Engine.KismetSystemLibrary:PrintString", "execute")])
-        # Linking the reused ghost BeginPlay made it a real node; the other ghosts are untouched.
+        # Linking the reused ghost BeginPlay made it a real node.
         ghosts = {node["node_guid"]: node["extras"].get("ghost", False) for node in context.graphs[G_EVENT]["nodes"]}
-        self.assertEqual([ghosts[N_BEGIN], ghosts["B0000000000000000000000000000002"],
-                          ghosts["B0000000000000000000000000000003"]], [False, True, True])
+        self.assertEqual(ghosts[N_BEGIN], False)
+        self.assertNotIn(N_OVERLAP, ghosts)
+        self.assertNotIn(N_TICK, ghosts)
 
     def test_delete_branch_keeps_guids_of_kept_nodes(self):
         context = FakeGraphContext("graph.list.v1.k2_empty_actor.json", "graph.query.v1.k2_branch.json")
@@ -84,8 +86,9 @@ class GraphExecutorTests(unittest.TestCase):
             {"Id": "Print", "Action": "K2:PrintString",
              "PinOverrides": [{"Pin": "InString", "DefaultValue": "Hello from AssetDocument"}]}],
             "Links": [{"From": "BeginPlay:then", "To": "Print:execute"}]}]})
-        self.assertEqual(mutations(context), ["graph.node.remove.v1", "graph.pin.connect.v1", "graph.finalize.v1"])
-        self.assertEqual(context.calls_of("graph.node.remove.v1")[0]["node_guid"], N_BRANCH)
+        self.assertEqual(mutations(context), ["graph.node.remove.v1"] * 3 + ["graph.pin.connect.v1", "graph.finalize.v1"])
+        self.assertEqual([call["node_guid"] for call in context.calls_of("graph.node.remove.v1")],
+                         [N_OVERLAP, N_TICK, N_BRANCH])
         self.assertEqual(report.node_bindings[("UbergraphPages/EventGraph", "Print")], N_PRINT)
 
     def test_pin_renamed_by_reconstruct_is_resolved_after_requery(self):
@@ -120,9 +123,9 @@ class GraphExecutorTests(unittest.TestCase):
         execute(context, {"UbergraphPages": [{"Name": "EventGraph", "Nodes": [
             {"Id": "Select", "Action": "K2:Select", "PinTypes": {"Index": f"byte:{enum}"},
              "PinOverrides": [{"Pin": "NewEnumerator0", "DefaultValue": "a"}]}], "Links": []}]})
-        self.assertEqual(mutations(context), ["graph.node.spawn.v1", "graph.node.pin_type.set.v1",
-                                              "graph.pin.default.set.v1", "graph.node.layout.set.v1",
-                                              "graph.finalize.v1"])
+        # The three ghost events are unlisted, so removed; the Select stays where it was placed.
+        self.assertEqual(mutations(context), ["graph.node.remove.v1"] * 3 + [
+            "graph.node.spawn.v1", "graph.node.pin_type.set.v1", "graph.pin.default.set.v1", "graph.finalize.v1"])
         call = context.calls_of("graph.node.pin_type.set.v1")[0]
         self.assertEqual((call["pin_name"], call["type"]["category"], call["type"]["sub_category_object"]),
                          ("Index", "byte", enum))
@@ -140,7 +143,7 @@ class GraphExecutorTests(unittest.TestCase):
             {"Id": "Select", "Action": "K2:Select", "PinTypes": {"Index": "int"}}], "Links": []}]})
         self.assertEqual([call[0] for call in context.calls[before:] if call[0] not in ("graph.list.v1", "graph.query.v1")],
                          ["graph.node.remove.v1", "graph.node.spawn.v1", "graph.node.pin_type.set.v1",
-                          "graph.node.layout.set.v1", "graph.finalize.v1"])
+                          "graph.finalize.v1"])
 
     def test_connect_disallowed_is_mapped_to_the_authored_link(self):
         context = FakeGraphContext("graph.list.v1.k2_empty_actor.json", "graph.query.v1.k2_empty_actor.json")
@@ -335,11 +338,57 @@ class GraphExecutorTests(unittest.TestCase):
         context = FakeGraphContext("graph.list.v1.k2_empty_actor.json", "graph.query.v1.k2_empty_actor.json")
         report = execute(context, {"UbergraphPages": [{"Name": "EventGraph", "Nodes": [
             {"Id": "Tick", "Action": "K2:Tick"}]}]})
-        self.assertEqual(mutations(context), ["graph.node.spawn.v1", "graph.finalize.v1"])
-        self.assertEqual(report.node_bindings[("UbergraphPages/EventGraph", "Tick")], "B0000000000000000000000000000003")
+        # The listed real Tick converts the ghost Tick (same node); the unlisted ghost BeginPlay and Overlap go.
+        self.assertEqual(mutations(context), ["graph.node.remove.v1"] * 2 + ["graph.node.spawn.v1", "graph.finalize.v1"])
+        self.assertEqual(report.node_bindings[("UbergraphPages/EventGraph", "Tick")], N_TICK)
         body = k2.encode_body(extract_graphs(read_live(context), sections=k2.SECTION_BY_ROLE, adapter=k2.K2_ADAPTER))
         self.assertEqual([(node["Id"], node["Action"]) for node in body["UbergraphPages"][0]["Nodes"]],
                          [("Tick", "K2:Tick")])
+        context.calls.clear()
+        execute(context, body)
+        self.assertEqual(mutations(context), [])
+
+    def test_ghost_nodes_are_extracted_kept_removed_and_placed(self):
+        context = FakeGraphContext("graph.list.v1.k2_empty_actor.json", "graph.query.v1.k2_empty_actor.json")
+        body = k2.encode_body(extract_graphs(read_live(context), sections=k2.SECTION_BY_ROLE, adapter=k2.K2_ADAPTER))
+        nodes = body["UbergraphPages"][0]["Nodes"]
+        self.assertEqual([(node["Id"], node.get("Ghost")) for node in nodes],
+                         [("BeginPlay", True), ("ActorBeginOverlap", True), ("Tick", True)])
+        # The extracted document applies as is.
+        execute(context, body)
+        self.assertEqual(mutations(context), [])
+        # An omitted ghost is removed like any omitted node.
+        context.calls.clear()
+        overlap = nodes.pop(1)
+        execute(context, body)
+        self.assertEqual(mutations(context), ["graph.node.remove.v1", "graph.finalize.v1"])
+        self.assertEqual(context.calls_of("graph.node.remove.v1")[0]["node_guid"], N_OVERLAP)
+        # Listing it again (a new node now) places a ghost: spawned, then made the editor's placeholder.
+        context.calls.clear()
+        del overlap["NodeGuid"]
+        nodes.append(overlap)
+        report = execute(context, body)
+        self.assertEqual(mutations(context), ["graph.node.spawn.v1", "graph.node.layout.set.v1", "graph.finalize.v1"])
+        self.assertEqual(context.calls_of("graph.node.layout.set.v1")[0]["enabled_state"], "ghost")
+        placed = next(node for node in context.graphs[G_EVENT]["nodes"]
+                      if node["node_guid"] == report.node_bindings[("UbergraphPages/EventGraph", "ActorBeginOverlap")])
+        self.assertEqual((placed["extras"].get("ghost"), placed["comment"]), (True, GHOST_COMMENT))
+        context.calls.clear()
+        execute(context, body)
+        self.assertEqual(mutations(context), [])
+
+    def test_ghost_marked_node_linked_by_the_document_stays_a_ghost(self):
+        # Linking a ghost makes it real in the editor; a document that states both is applied as stated.
+        context = FakeGraphContext("graph.list.v1.k2_empty_actor.json", "graph.query.v1.k2_empty_actor.json")
+        body = {"UbergraphPages": [{"Name": "EventGraph", "Nodes": [
+            {"Id": "BeginPlay", "Action": "K2:BeginPlay", "Ghost": True},
+            {"Id": "Print", "Action": "K2:PrintString"}],
+            "Links": [{"From": "BeginPlay:then", "To": "Print:execute"}]}]}
+        execute(context, body)
+        layout = [call for call in context.calls_of("graph.node.layout.set.v1") if "enabled_state" in call]
+        self.assertEqual([(call["node_guid"], call["enabled_state"]) for call in layout], [(N_BEGIN, "ghost")])
+        begin = next(node for node in context.graphs[G_EVENT]["nodes"] if node["node_guid"] == N_BEGIN)
+        self.assertTrue(begin["extras"].get("ghost"))
         context.calls.clear()
         execute(context, body)
         self.assertEqual(mutations(context), [])
@@ -422,7 +471,8 @@ class GraphExecutorTests(unittest.TestCase):
         self.assertEqual(offsets, [None, 2, 4])
         # Re-queries after a mutation page as well, and extract -> apply stays a no-op.
         body = k2.encode_body(extract_graphs(paged, sections=k2.SECTION_BY_ROLE, adapter=k2.K2_ADAPTER))
-        body["UbergraphPages"][0]["Nodes"][2]["PinOverrides"][0]["DefaultValue"] = "Paged"
+        printer = next(node for node in body["UbergraphPages"][0]["Nodes"] if node.get("NodeGuid") == N_PRINT)
+        printer["PinOverrides"][0]["DefaultValue"] = "Paged"
         context.calls.clear()
         execute(context, body)
         self.assertEqual(mutations(context), ["graph.pin.default.set.v1", "graph.finalize.v1"])
@@ -447,7 +497,8 @@ class GraphExecutorTests(unittest.TestCase):
         with self.assertRaises(AssetDocumentContractError) as caught:
             executor.run(graphs, managed_roles=roles)
         self.assertEqual(caught.exception.diagnostic.code, "Graph.HandleUnavailable")
-        self.assertEqual(caught.exception.diagnostic.path, "/Body/UbergraphPages/0/Nodes/0")
+        # The first mutation is removing the unlisted ghost events.
+        self.assertEqual(caught.exception.diagnostic.path, "/Body/UbergraphPages/0/Nodes")
 
 
 if __name__ == "__main__":

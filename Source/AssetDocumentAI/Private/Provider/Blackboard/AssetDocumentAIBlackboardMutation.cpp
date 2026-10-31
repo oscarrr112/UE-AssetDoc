@@ -7,7 +7,11 @@
 #include "BehaviorTree/Blackboard/BlackboardKeyType_Class.h"
 #include "BehaviorTree/Blackboard/BlackboardKeyType_Enum.h"
 #include "BehaviorTree/Blackboard/BlackboardKeyType_Object.h"
+#include "AISystem.h"
+#include "BehaviorTree/BlackboardComponent.h"
 #include "Editor.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "IDetailCustomization.h"
 #include "Modules/ModuleManager.h"
@@ -320,6 +324,39 @@ FAssetDocumentPrimitiveOutcome Failure(
 {
 	return MakeAssetDocumentAIPrimitiveFailure(
 		EAssetDocumentPrimitiveOutcomeStatus::Failed, Code, Message, Diagnostics);
+}
+
+TOptional<FAssetDocumentPrimitiveOutcome> RefuseLiveBlackboardLayoutChange(UBlackboardData& Blackboard)
+{
+	if (GEditor != nullptr && (GEditor->PlayWorld != nullptr || GEditor->IsPlaySessionInProgress()))
+	{
+		return Failure(TEXT("Graph.PieActive"), *FString::Printf(
+			TEXT("Play-In-Editor is running: the key layout of Blackboard '%s' cannot change while a play session runs. "
+				"Nothing was changed; stop the play session and apply again."), *Blackboard.GetPathName()));
+	}
+	if (GEngine == nullptr) return {};
+	for (const FWorldContext& Context : GEngine->GetWorldContexts())
+	{
+		UWorld* World = Context.World();
+		UAISystem* AISystem = World != nullptr ? Cast<UAISystem>(World->GetAISystem()) : nullptr;
+		if (AISystem == nullptr) continue;
+		// Each component is registered under its own Blackboard and every parent, so the entries of this Blackboard
+		// cover the components of the Blackboards derived from it. They come first; the parents' entries follow.
+		for (UAISystem::FBlackboardDataToComponentsIterator Iter =
+			AISystem->CreateBlackboardDataToComponentsIterator(Blackboard); Iter && Iter.Key() == &Blackboard; ++Iter)
+		{
+			const UBlackboardComponent* Component = Iter.Value();
+			if (!IsValid(Component)) continue;
+			const UBlackboardData* Used = Component->GetBlackboardAsset();
+			return Failure(TEXT("AIProvider.Blackboard.LayoutInUse"), *FString::Printf(
+				TEXT("Blackboard component '%s' in world '%s' uses '%s' and keeps its key layout; the keys of '%s' "
+					"cannot be added, removed, reordered or retyped, and its parent cannot change, while it is live. "
+					"Nothing was changed; end the session or remove the component, then apply again."),
+				*Component->GetPathName(), *World->GetName(),
+				Used != nullptr ? *Used->GetPathName() : TEXT("(none)"), *Blackboard.GetPathName()));
+		}
+	}
+	return {};
 }
 
 template <typename TApply>
@@ -979,7 +1016,7 @@ TOptional<FAssetDocumentPrimitiveOutcome> PrepareParentSetV2Authority(
 	{
 		return MakeParentSetV2NoOpSuccess(Request);
 	}
-	return {};
+	return RefuseLiveBlackboardLayoutChange(*Context.TargetBlackboard);
 }
 
 TOptional<FAssetDocumentPrimitiveOutcome> CaptureParentSetV2OrderedPreimages(

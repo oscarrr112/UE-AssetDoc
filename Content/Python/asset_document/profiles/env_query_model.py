@@ -22,12 +22,17 @@ Document Body (profile.env_query.v1, docs/architecture/asset-document-eqs-design
   its comment node); the editor's Undo renames instances, not keyed graph nodes.  A keyless
   entry matches the first unclaimed live entry of the same class (in order); otherwise it is new.
 * ``Properties`` are the Details values, sparse over a new node of the class (``defaults``).
+* Unrepresented content reads as markers: a Details value the document has no form for (``{"Unsupported", "Text"}``),
+  a test whose class does not load (``{"Key", "Class", "Unsupported"}``, in place in ``Tests``) and an option whose
+  generator class does not load (``{"Key", "Generator": {"Class"}, "Position", "Unsupported"}``).  Apply keeps a
+  marker left as extracted, deletes an omitted marked option or test, and refuses an edited marker.
 """
 from __future__ import annotations
 
 import math
 from types import MappingProxyType
 
+from asset_document import markers
 from asset_document.diagnostics import AssetDocumentContractError, DiagnosticSeverity, RuntimeDiagnostic
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.dto import PrimitiveRequirement
@@ -132,7 +137,29 @@ def _properties(entry, path):
     return tidy(thaw(entry["Properties"]))
 
 
+def _check_key(entry, path, keys, what):
+    check_key(entry["Key"], f"{path}/Key", what)
+    if entry["Key"] in keys:
+        raise error(f"{path}/Key", f"'{entry['Key']}' is used twice; a key names one object.", f"{PREFIX}.DuplicateKey")
+    keys.add(entry["Key"])
+
+
+def _check_marked(entry, path, keys, allowed, what):
+    """A marked option or test (its class does not load): its identity fields as extracted, kept as written (apply
+    compares it with the query's)."""
+    _fields(entry, path, allowed + (markers.KEY,), what)
+    if type(entry.get("Key")) is not str:
+        raise error(f"{path}/Key", f"A marked {what} keeps its Key as extracted.", f"{PREFIX}.UnrepresentedValue")
+    _check_key(entry, path, keys, what)
+    marked = thaw(entry)
+    if "Position" in marked:
+        marked["Position"] = _pair(marked["Position"], f"{path}/Position", "Position")
+    return marked
+
+
 def _check_test(entry, path, keys):
+    if markers.is_marker(entry):
+        return _check_marked(entry, path, keys, ("Key", "Class"), "test")
     _fields(entry, path, TEST_FIELDS, "test")
     if type(entry.get("Class")) is not str or not entry["Class"]:
         raise error(f"{path}/Class", "Class is required: a test class (Distance, Dot, Trace, ... or a class path; "
@@ -158,6 +185,8 @@ def _check_test(entry, path, keys):
 
 
 def _check_option(entry, path, keys):
+    if markers.is_marker(entry):
+        return _check_marked(entry, path, keys, ("Key", "Generator", "Position", "Connected"), "option")
     _fields(entry, path, OPTION_FIELDS, "option")
     option = {}
     if "Key" in entry:
@@ -346,6 +375,8 @@ class LiveOption:
         self.tests = list(record.get("tests", []))
         self.error = record.get("error", "")
         self.item_type = record.get("item_type", "")
+        # The generator's class does not load (or the option has none): the option reads as a marked element.
+        self.missing = record.get("missing") is True
 
 
 class LiveTest:
@@ -360,6 +391,8 @@ class LiveTest:
         self.comment_visible = record.get("comment_visible") is True
         self.supported = record.get("supported") is not False
         self.weight = record.get("weight_pct", -1)
+        # The test's class does not load (a node without instance): the test reads as a marked element.
+        self.missing = record.get("missing") is True
 
 
 class Live:
@@ -377,6 +410,8 @@ class Live:
         self.tests = {}
         self.comments = {}
         self.defaults = {}
+        # (kind, label) -> Details properties of the class the document has no form for.
+        self.unrepresented = {}
         self.labels = {}
         self.comment_defaults = {}
         self.dependents = []
@@ -407,6 +442,7 @@ class Live:
                 properties = tidy(thaw(record.get("properties", {})))
                 label = class_label(record.get("class", ""), node)
                 self.defaults[(node, label)] = properties
+                self.unrepresented[(node, label)] = frozenset(record.get("unsupported", ()))
                 self.labels[(node, label)] = label
                 self.labels[(node, class_label(record.get("request", ""), node))] = label
             elif kind == "comment_default":
@@ -436,7 +472,27 @@ def runtime_sorted(live):
     return connected + others
 
 
+def missing_test_entry(test):
+    return markers.marker(f"The test class {test.label or '(unknown)'} does not load (deleted, or renamed without a "
+                          "redirector); AssetDoc keeps this test as it is.", Key=test.name,
+                          **({"Class": test.label} if test.label else {}))
+
+
+def missing_option_entry(option):
+    identity = {"Key": option.name}
+    if option.label:
+        identity["Generator"] = {"Class": option.label}
+    identity["Position"] = list(option.position)
+    if not option.connected:
+        identity["Connected"] = False
+    reason = (f"The generator class {option.label} does not load (deleted, or renamed without a redirector)"
+              if option.label else "The option has no generator")
+    return markers.marker(f"{reason}; AssetDoc keeps this option and its tests as they are.", **identity)
+
+
 def test_entry(test):
+    if test.missing:
+        return missing_test_entry(test)
     entry = {"Key": test.name, "Class": test.label}
     if test.properties:
         entry["Properties"] = test.properties
@@ -450,6 +506,8 @@ def test_entry(test):
 
 
 def option_entry(live, option):
+    if option.missing:
+        return missing_option_entry(option)
     generator = {"Class": option.label}
     if option.properties:
         generator["Properties"] = option.properties
@@ -475,15 +533,21 @@ def comment_entry(live, comment):
 
 
 def extract_body(live):
-    return {"Root": {"Position": list(live.root)},
+    """The extracted Body; each marker in it gives a read warning ``EnvQuery.Unrepresented``."""
+    body = {"Root": {"Position": list(live.root)},
             "Options": [option_entry(live, option) for option in runtime_sorted(live)],
             "Comments": {name: comment_entry(live, comment) for name, comment in live.comments.items()}}
+    markers.warn_all(body["Options"], PREFIX, "/Body/Options")
+    return body
 
 
 def with_defaults(body, defaults):
     """The Body with every Details value (new-node defaults filled in) of each generator and test."""
     options = []
     for option in body.get("Options", ()):
+        if markers.is_marker(option):
+            options.append(option)
+            continue
         option = dict(option)
         generator = dict(option["Generator"])
         full = {**defaults.get(("generator", generator["Class"]), {}), **generator.get("Properties", {})}
@@ -492,6 +556,9 @@ def with_defaults(body, defaults):
         option["Generator"] = generator
         tests = []
         for test in option.get("Tests", ()):
+            if markers.is_marker(test):
+                tests.append(test)
+                continue
             full = {**defaults.get(("test", test["Class"]), {}), **test.get("Properties", {})}
             test = dict(test)
             if full:
@@ -506,23 +573,30 @@ def classes_of(body):
     """(kind, class label) pairs a Body names."""
     out = []
     for option in body.get("Options", ()):
+        if markers.is_marker(option):
+            continue
         out.append(("generator", option["Generator"]["Class"]))
         for test in option.get("Tests", ()):
-            out.append(("test", test["Class"]))
+            if not markers.is_marker(test):
+                out.append(("test", test["Class"]))
     return out
 
 
 def classes_of_live(live):
-    return [("generator", option.label) for option in live.options] + [("test", test.label) for test in live.tests.values()]
+    return ([("generator", option.label) for option in live.options if not option.missing]
+            + [("test", test.label) for test in live.tests.values() if not test.missing])
 
 
 def class_paths(body):
     """(kind, class label) -> the document path of its first Class (unknown-class errors point there)."""
     out = {}
     for index, option in enumerate(body.get("Options", ())):
+        if markers.is_marker(option):
+            continue
         out.setdefault(("generator", option["Generator"]["Class"]), f"/Body/Options/{index}/Generator/Class")
         for position, test in enumerate(option.get("Tests", ())):
-            out.setdefault(("test", test["Class"]), f"/Body/Options/{index}/Tests/{position}/Class")
+            if not markers.is_marker(test):
+                out.setdefault(("test", test["Class"]), f"/Body/Options/{index}/Tests/{position}/Class")
     return out
 
 
@@ -541,12 +615,16 @@ def relabel(body, labels):
         return body
     options = []
     for option in body["Options"]:
+        if markers.is_marker(option):
+            options.append(option)
+            continue
         option = dict(option)
         generator = dict(option["Generator"])
         generator["Class"] = labels.get(("generator", generator["Class"]), generator["Class"])
         option["Generator"] = generator
         if "Tests" in option:
-            option["Tests"] = [{**test, "Class": labels.get(("test", test["Class"]), test["Class"])}
+            option["Tests"] = [test if markers.is_marker(test) else
+                               {**test, "Class": labels.get(("test", test["Class"]), test["Class"])}
                                for test in option["Tests"]]
         options.append(option)
     return {**body, "Options": options}
@@ -570,7 +648,7 @@ def match_options(options, live_options):
         if "Key" in option:
             continue
         for candidate in live_options:
-            if candidate.name not in claimed and candidate.label == option["Generator"]["Class"]:
+            if candidate.name not in claimed and not candidate.missing and candidate.label == option["Generator"]["Class"]:
                 out[index] = candidate.name
                 claimed.add(candidate.name)
                 break
@@ -597,7 +675,7 @@ def match_tests(options, matched, live):
                 continue
             for name in source.tests:
                 candidate = live.tests.get(name)
-                if candidate is not None and name not in claimed and candidate.label == test["Class"]:
+                if candidate is not None and name not in claimed and not candidate.missing and candidate.label == test["Class"]:
                     out[index][position] = name
                     claimed.add(name)
                     break
@@ -619,6 +697,8 @@ def properties_diff(changes, path, authored, live, defaults, exact):
     """Properties sparse over ``defaults`` (an omitted property is its default); a struct value is an edit of the current
     one (members it omits keep their value), so it compares with the live value in its shape."""
     for name in list(authored) + [name for name in live if name not in authored]:
+        if name not in authored and markers.is_marker(live.get(name)):
+            continue  # an omitted marked value is kept
         default = defaults.get(name, _MISSING) if defaults is not None else _MISSING
         left = authored.get(name, default)
         right = live.get(name, default)
@@ -638,23 +718,25 @@ class _ExtractedLive:
         self.tests = {}
         self.runtime_order = []
         for entry in body.get("Options", ()):
-            option = LiveOption({"name": entry.get("Key", ""), "class": entry["Generator"]["Class"],
-                                 "properties": entry["Generator"].get("Properties", {}),
+            option = LiveOption({"name": entry.get("Key", ""), "class": entry.get("Generator", {}).get("Class", ""),
+                                 "properties": entry.get("Generator", {}).get("Properties", {}),
                                  "position": entry.get("Position", [0, 0]),
                                  "connected": entry.get("Connected", True), "comment": entry.get("Comment", ""),
                                  "comment_visible": entry.get("CommentVisible", False),
-                                 "tests": [test.get("Key", "") for test in entry.get("Tests", ())]})
-            option.label = entry["Generator"]["Class"]
+                                 "tests": [test.get("Key", "") for test in entry.get("Tests", ())],
+                                 "missing": markers.is_marker(entry)})
+            option.label = entry.get("Generator", {}).get("Class", "")
             self.options.append(option)
             self.option_by_name[option.name] = option
             if option.connected:
                 self.runtime_order.append(option.name)
             for index, test_value in enumerate(entry.get("Tests", ())):
                 test = LiveTest({"name": test_value.get("Key", ""), "option": option.name, "index": index,
-                                 "class": test_value["Class"], "enabled": test_value.get("Enabled", True),
+                                 "class": test_value.get("Class", ""), "enabled": test_value.get("Enabled", True),
                                  "properties": test_value.get("Properties", {}), "comment": test_value.get("Comment", ""),
-                                 "comment_visible": test_value.get("CommentVisible", False)})
-                test.label = test_value["Class"]
+                                 "comment_visible": test_value.get("CommentVisible", False),
+                                 "missing": markers.is_marker(test_value)})
+                test.label = test_value.get("Class", "")
                 self.tests[test.name] = test
 
 
@@ -684,6 +766,10 @@ def body_diff(authored, extracted, exact, defaults=None):
                 changes.append(Difference(path, DiffKind.ADD, True, option, False, None))
                 continue
             live_entry = entries.get(name, {})
+            if markers.is_marker(option) or markers.is_marker(live_entry):
+                if option != live_entry:
+                    _difference(changes, path, option, live_entry)
+                continue
             label = option["Generator"]["Class"]
             if label != live_entry.get("Generator", {}).get("Class"):
                 _difference(changes, f"{path}/Generator/Class", label, live_entry.get("Generator", {}).get("Class"))
@@ -707,6 +793,10 @@ def body_diff(authored, extracted, exact, defaults=None):
                     continue
                 wanted.append(test_name)
                 live_test = live_tests.get(test_name, {})
+                if markers.is_marker(test) or markers.is_marker(live_test):
+                    if test != live_test:
+                        _difference(changes, test_path, test, live_test)
+                    continue
                 if test["Class"] != live_test.get("Class"):
                     _difference(changes, f"{test_path}/Class", test["Class"], live_test.get("Class"))
                     continue

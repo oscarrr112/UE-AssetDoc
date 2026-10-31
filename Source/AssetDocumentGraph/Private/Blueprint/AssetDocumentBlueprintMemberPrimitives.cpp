@@ -14,10 +14,15 @@
 //   blueprint.member.parent.set.v1   {parent_class}
 //   blueprint.member.interface.add.v1 / .remove.v1 {interface}
 //   blueprint.member.variable.set.v1 {name, type, category?, tooltip?, instance_editable?,
-//                                     blueprint_read_only?, expose_on_spawn?, private?, default?}
+//                                     blueprint_read_only?, expose_on_spawn?, private?, default?,
+//                                     replication?: "none"|"replicated"|"rep_notify", rep_notify_func?,
+//                                     replication_condition?, config?, transient?, save_game?, advanced_display?,
+//                                     expose_to_cinematics?, deprecated?, deprecation_message?, metadata?}
 //   blueprint.member.variable.remove.v1 {name}
 //   blueprint.member.component.add.v1    {name, class, attach_to?, attach_socket?}
 //   blueprint.member.component.attach.v1 {name, attach_to?, attach_socket?}
+//   blueprint.member.component.variable.set.v1 {name, category?, tooltip?}: an own component's variable
+//                                     Category and Tooltip (the Components panel's Details > Variable)
 //   blueprint.member.component.remove.v1 {name, scope?: "owned"|"inherited"}
 //   blueprint.member.property.set.v1 {target: "blueprint"|"class_defaults"|"component",
 //                                     component?: {name, scope}, property, value? | reset: true}
@@ -27,6 +32,7 @@
 //                                     AssetDocumentBlueprintTimelinePrimitives.cpp (query: "dispatchers", "timelines";
 //                                     "variables" lists no dispatcher)
 
+#include "AssetDocumentExactBlueprintClasses.h"
 #include "AssetDocumentGraphPrimitives.h"
 #include "AssetDocumentGraphEditorConfirmations.h"
 #include "AssetDocumentGraphPropertyCodec.h"
@@ -49,6 +55,7 @@
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/PackageName.h"
 #include "Misc/StringOutputDevice.h"
+#include "UObject/CoreNetTypes.h"
 #include "UObject/EnumProperty.h"
 #include "UObject/StructOnScope.h"
 #include "UObject/UnrealType.h"
@@ -960,6 +967,21 @@ bool ResolveComponentTarget(FCall& Call, UBlueprint& Blueprint, const FValue& Ad
 	{
 		return false;
 	}
+	if (Scope == TEXT("default"))
+	{
+		// The DefaultSceneRoot the editor keeps while no other scene component is the root.
+		USimpleConstructionScript* SCS = GetSCS(Call, Blueprint);
+		USCS_Node* Node = SCS ? SCS->GetDefaultSceneRootNode() : nullptr;
+		if (Node == nullptr || Node->ComponentTemplate == nullptr || Node->GetVariableName() != FName(*Name)
+			|| !SCS->GetRootNodes().Contains(Node))
+		{
+			return Reader.Fail(TEXT("BlueprintMember.ComponentNotFound"), FString::Printf(
+				TEXT("No default scene root '%s' (the editor removes it once another scene component is the root)."), *Name), TEXT("name"));
+		}
+		OutTarget = Node->ComponentTemplate;
+		OutBaseline = Node->ComponentClass ? Node->ComponentClass->GetDefaultObject() : nullptr;
+		return true;
+	}
 	if (Scope == TEXT("owned"))
 	{
 		USimpleConstructionScript* SCS = GetSCS(Call, Blueprint);
@@ -1007,14 +1029,58 @@ bool ResolveComponentTarget(FCall& Call, UBlueprint& Blueprint, const FValue& Ad
 		OutBaseline = Baseline;
 		return true;
 	}
-	return Reader.Fail(TEXT("Graph.InvalidArgument"), TEXT("scope is owned, inherited or native."), TEXT("scope"));
+	return Reader.Fail(TEXT("Graph.InvalidArgument"), TEXT("scope is owned, inherited, native or default."), TEXT("scope"));
 }
 
 // ---- query ------------------------------------------------------------------------------
 
+// Variable metadata the variable row states in fields of its own; the rest is its "metadata" map (Slider and Value
+// Range, Units, Bitmask, Multi Line, ...).
+bool IsVariableRowMetadata(const FName& Key)
+{
+	return Key == FBlueprintMetadata::MD_Tooltip || Key == FBlueprintMetadata::MD_ExposeOnSpawn
+		|| Key == FBlueprintMetadata::MD_Private || Key == FBlueprintMetadata::MD_DeprecationMessage;
+}
+
+// ELifetimeCondition by its name without "COND_" ("OwnerOnly").
+FString ReplicationConditionName(ELifetimeCondition Condition)
+{
+	FString Name = StaticEnum<ELifetimeCondition>()->GetNameStringByValue(static_cast<int64>(Condition));
+	Name.RemoveFromStart(TEXT("COND_"));
+	return Name;
+}
+
+void AddVariableDetails(FObjectBuilder& Builder, const FBPVariableDescription& Variable)
+{
+	const uint64 Flags = Variable.PropertyFlags;
+	// The Details panel's Replication combo (FBlueprintVarActionDetails::OnChangeReplication).
+	const TCHAR* Replication = (Flags & CPF_Net) == 0 ? TEXT("none") : Variable.RepNotifyFunc.IsNone() ? TEXT("replicated") : TEXT("rep_notify");
+	Builder.AddString(TEXT("replication"), Replication)
+		.AddString(TEXT("rep_notify_func"), Variable.RepNotifyFunc.IsNone() ? FString() : Variable.RepNotifyFunc.ToString())
+		.AddString(TEXT("replication_condition"), ReplicationConditionName(Variable.ReplicationCondition))
+		.AddBool(TEXT("config"), (Flags & CPF_Config) != 0)
+		.AddBool(TEXT("transient"), (Flags & CPF_Transient) != 0)
+		.AddBool(TEXT("save_game"), (Flags & CPF_SaveGame) != 0)
+		.AddBool(TEXT("advanced_display"), (Flags & CPF_AdvancedDisplay) != 0)
+		.AddBool(TEXT("expose_to_cinematics"), (Flags & CPF_Interp) != 0)
+		.AddBool(TEXT("deprecated"), (Flags & CPF_Deprecated) != 0)
+		.AddString(TEXT("deprecation_message"), Variable.HasMetaData(FBlueprintMetadata::MD_DeprecationMessage)
+			? Variable.GetMetaData(FBlueprintMetadata::MD_DeprecationMessage) : FString());
+	FObjectBuilder Metadata;
+	for (const FBPVariableMetaDataEntry& Entry : Variable.MetaDataArray)
+	{
+		if (!IsVariableRowMetadata(Entry.DataKey))
+		{
+			Metadata.AddString(Entry.DataKey.ToString(), Entry.DataValue);
+		}
+	}
+	Builder.Add(TEXT("metadata"), Metadata.Build());
+}
+
 FValue EncodeVariable(UBlueprint& Blueprint, const FBPVariableDescription& Variable)
 {
 	FObjectBuilder Builder;
+	AddVariableDetails(Builder, Variable);
 	Builder.AddString(TEXT("name"), Variable.VarName.ToString())
 		.AddString(TEXT("guid"), Variable.VarGuid.ToString(EGuidFormats::Digits))
 		.Add(TEXT("type"), MakePinTypeValue(Variable.VarType))
@@ -1145,6 +1211,73 @@ bool AddQuerySections(FCall& Call, FObjectBuilder& Result, TArray<FQueryItem>& I
 		Result.Add(TEXT("next_offset"), Next < Items.Num() ? MakeInt(Next) : MakeNull());
 	}
 	return true;
+}
+
+// The most nodes one component, class default or Class Settings value may take in the member query: an entry over it
+// could never fit a page. The limit is fixed (not what is left of a page), so a marker reads the same while the
+// rest of the Blueprint changes.
+constexpr int32 MemberEntryNodeBudget = 3000;
+
+FValue MakeTooLargeMarker(int32 Nodes)
+{
+	return FObjectBuilder().AddString(TEXT("Unsupported"), FString::Printf(
+		TEXT("This value is too large to read in one document page (%d nodes, limit %d); AssetDoc keeps it as it is."),
+		Nodes, MemberEntryNodeBudget)).Build();
+}
+
+// Entries over MemberEntryNodeBudget read with markers in place of their largest values: a class default or Class
+// Settings value is itself marked; a component keeps its name, class and attachment and has its largest property
+// values marked, one at a time, until it fits. Apply never writes a marked value, so the stored one is kept.
+void MarkOversizedEntries(TArray<FQueryItem>& Items)
+{
+	for (FQueryItem& Item : Items)
+	{
+		int32 Cost = CountValueNodes(Item.Value) + 1;
+		if (Cost <= MemberEntryNodeBudget)
+		{
+			continue;
+		}
+		const bool bComponent = FCString::Strcmp(Item.Section, TEXT("components")) == 0;
+		if (!bComponent)
+		{
+			if (FCString::Strcmp(Item.Section, TEXT("class_defaults")) == 0 || FCString::Strcmp(Item.Section, TEXT("properties")) == 0)
+			{
+				Item.Value = MakeTooLargeMarker(Cost - 1);
+			}
+			continue;  // a variable, dispatcher or timeline over the limit still fails the paged read
+		}
+		const int32 PropertiesIndex = Item.Value.Kind == EAssetDocumentRuntimeValueKind::Object
+			? Item.Value.ObjectKeys.IndexOfByKey(FString(TEXT("properties"))) : INDEX_NONE;
+		if (PropertiesIndex == INDEX_NONE || Item.Value.Elements[PropertiesIndex].Kind != EAssetDocumentRuntimeValueKind::Object)
+		{
+			continue;
+		}
+		FValue& Properties = Item.Value.Elements[PropertiesIndex];
+		TSet<int32> Marked;
+		while (Cost > MemberEntryNodeBudget)
+		{
+			int32 Largest = INDEX_NONE;
+			int32 LargestNodes = 0;
+			for (int32 Index = 0; Index < Properties.Elements.Num(); ++Index)
+			{
+				const int32 Nodes = Marked.Contains(Index) ? 0 : CountValueNodes(Properties.Elements[Index]);
+				if (Nodes > LargestNodes)
+				{
+					Largest = Index;
+					LargestNodes = Nodes;
+				}
+			}
+			FValue Marker = MakeTooLargeMarker(LargestNodes);
+			const int32 MarkerNodes = CountValueNodes(Marker);
+			if (Largest == INDEX_NONE || LargestNodes <= MarkerNodes)
+			{
+				break;
+			}
+			Cost += MarkerNodes - LargestNodes;
+			Properties.Elements[Largest] = MoveTemp(Marker);
+			Marked.Add(Largest);
+		}
+	}
 }
 
 void AddArrayItems(TArray<FQueryItem>& Items, const TCHAR* Section, FValue Array)
@@ -1410,6 +1543,45 @@ bool QueryPickChecks(FCall& Call, UBlueprint& Blueprint, FObjectBuilder& Result)
 namespace
 {
 
+bool HoldsGraphs(const FProperty& Property)
+{
+	const FProperty* Held = &Property;
+	if (const FArrayProperty* Array = CastField<FArrayProperty>(Held)) Held = Array->Inner;
+	else if (const FSetProperty* Set = CastField<FSetProperty>(Held)) Held = Set->ElementProp;
+	else if (const FMapProperty* Map = CastField<FMapProperty>(Held)) Held = Map->ValueProp;
+	const FObjectPropertyBase* Object = CastField<FObjectPropertyBase>(Held);
+	return Object != nullptr && Object->PropertyClass != nullptr && Object->PropertyClass->IsChildOf(UEdGraph::StaticClass());
+}
+
+// The saved properties the asset's class declares below the Blueprint class its profile reads that the document has no
+// form for (Class Settings lists the editable ones). The profile keeps them as they are; one that holds graphs is
+// flagged, since the graph edits do not know them.
+FValue QueryUnrepresented(const UBlueprint& Blueprint)
+{
+	TArray<FValue> Rows;
+	const UClass* Profile = FindAssetDocumentBlueprintProfileClass(Blueprint.GetClass());
+	if (Profile == nullptr || Profile == Blueprint.GetClass())
+	{
+		return MakeArray(MoveTemp(Rows));
+	}
+	for (TFieldIterator<FProperty> It(Blueprint.GetClass()); It; ++It)
+	{
+		const FProperty& Property = **It;
+		const UClass* Owner = Property.GetOwnerClass();
+		if (Owner == nullptr || Profile->IsChildOf(Owner) || IsEditableProperty(Property)
+			|| Property.HasAnyPropertyFlags(CPF_Transient | CPF_Deprecated | CPF_SkipSerialization))
+		{
+			continue;
+		}
+		Rows.Add(FObjectBuilder()
+			.AddString(TEXT("name"), Property.GetName())
+			.AddString(TEXT("owner_class"), Owner->GetPathName())
+			.AddBool(TEXT("holds_graphs"), HoldsGraphs(Property))
+			.Build());
+	}
+	return MakeArray(MoveTemp(Rows));
+}
+
 bool MemberHandleQuery(FCall& Call, FObjectBuilder& Result)
 {
 	UBlueprint* Blueprint = GetBlueprint(Call);
@@ -1502,7 +1674,9 @@ bool MemberHandleQuery(FCall& Call, FObjectBuilder& Result)
 		}
 	}
 	FValue AliasesValue = AliasesBuilder.Build();
-	const int32 HeaderNodes = CountValueNodes(InterfacesValue) + CountValueNodes(SettingsValue) + CountValueNodes(AliasesValue) + 14;
+	FValue UnrepresentedValue = QueryUnrepresented(*Blueprint);
+	const int32 HeaderNodes = CountValueNodes(InterfacesValue) + CountValueNodes(SettingsValue) + CountValueNodes(AliasesValue)
+		+ CountValueNodes(UnrepresentedValue) + 15;
 	Result.AddString(TEXT("parent_class"), ObjectPathOrEmpty(Blueprint->ParentClass))
 		.AddString(TEXT("generated_class"), ObjectPathOrEmpty(Blueprint->GeneratedClass))
 		.AddString(TEXT("status"), Status)
@@ -1513,6 +1687,10 @@ bool MemberHandleQuery(FCall& Call, FObjectBuilder& Result)
 	if (Settings.IsValid())
 	{
 		Result.Add(TEXT("settings"), MoveTemp(SettingsValue));
+	}
+	if (!UnrepresentedValue.Elements.IsEmpty())
+	{
+		Result.Add(TEXT("unrepresented"), MoveTemp(UnrepresentedValue));
 	}
 	TArray<FQueryItem> Items;
 	TArray<FValue> Variables;
@@ -1536,8 +1714,24 @@ bool MemberHandleQuery(FCall& Call, FObjectBuilder& Result)
 	{
 		for (USCS_Node* Node : SCS->GetAllNodes())
 		{
-			if (Node == nullptr || Node == SCS->GetDefaultSceneRootNode() || Node->ComponentTemplate == nullptr)
+			if (Node == nullptr || Node->ComponentTemplate == nullptr)
 			{
+				continue;
+			}
+			FValue Properties = EncodeChangedProperties(*Node->ComponentTemplate,
+				Node->ComponentClass ? Node->ComponentClass->GetDefaultObject() : nullptr, Any);
+			if (Node == SCS->GetDefaultSceneRootNode())
+			{
+				// Listed only when the user changed its values (Details of DefaultSceneRoot: Mobility, ...).
+				if (!Properties.ObjectKeys.IsEmpty() && SCS->GetRootNodes().Contains(Node))
+				{
+					Components.Add(FObjectBuilder()
+						.AddString(TEXT("name"), Node->GetVariableName().ToString())
+						.AddString(TEXT("scope"), TEXT("default"))
+						.AddString(TEXT("class"), ObjectPathOrEmpty(Node->ComponentClass))
+						.Add(TEXT("properties"), MoveTemp(Properties))
+						.Build());
+				}
 				continue;
 			}
 			Components.Add(FObjectBuilder()
@@ -1546,8 +1740,10 @@ bool MemberHandleQuery(FCall& Call, FObjectBuilder& Result)
 				.AddString(TEXT("class"), ObjectPathOrEmpty(Node->ComponentClass))
 				.AddString(TEXT("attach_to"), AttachName(*Blueprint, *SCS, *Node))
 				.AddString(TEXT("attach_socket"), Node->AttachToName.IsNone() ? FString() : Node->AttachToName.ToString())
-				.Add(TEXT("properties"), EncodeChangedProperties(*Node->ComponentTemplate,
-					Node->ComponentClass ? Node->ComponentClass->GetDefaultObject() : nullptr, Any))
+				.AddString(TEXT("category"), Node->CategoryName.ToString())
+				.AddString(TEXT("tooltip"), Node->MetaDataArray.ContainsByPredicate([](const FBPVariableMetaDataEntry& Entry)
+					{ return Entry.DataKey == FBlueprintMetadata::MD_Tooltip; }) ? Node->GetMetaData(FBlueprintMetadata::MD_Tooltip) : FString())
+				.Add(TEXT("properties"), MoveTemp(Properties))
 				.Build());
 		}
 	}
@@ -1613,6 +1809,7 @@ bool MemberHandleQuery(FCall& Call, FObjectBuilder& Result)
 		: MakeEmptyObject());
 	// Class Settings baseline: the asset class's defaults (UBlueprint, UAnimBlueprint...).
 	AddObjectItems(Items, TEXT("properties"), EncodeChangedProperties(*Blueprint, Blueprint->GetClass()->GetDefaultObject(), Any));
+	MarkOversizedEntries(Items);
 	static const TCHAR* const ArraySections[] = {TEXT("variables"), TEXT("dispatchers"), TEXT("timelines"), TEXT("components")};
 	static const TCHAR* const ObjectSections[] = {TEXT("class_defaults"), TEXT("properties")};
 	return AddQuerySections(Call, Result, Items, ArraySections, UE_ARRAY_COUNT(ArraySections), ObjectSections,
@@ -1743,6 +1940,178 @@ void SetMetaFlag(UBlueprint& Blueprint, FName Name, const FName& Key, bool bValu
 	}
 }
 
+// The variable's Details panel beyond the My Blueprint flags (FBlueprintVarActionDetails): Replication, Replication
+// Condition, Config Variable, Transient, SaveGame, Advanced Display, Expose to Cinematics, Deprecated and its
+// message, and the metadata the panel writes as entries (Slider / Value Range, Units, Bitmask, Multi Line, ...).
+bool SetVariableDetails(FCall& Call, UBlueprint& Blueprint, FName Name)
+{
+	FReader& Args = Call.Args;
+	auto Description = [&Blueprint, Name]() -> FBPVariableDescription&
+	{
+		return Blueprint.NewVariables[FBlueprintEditorUtils::FindNewVariableIndex(&Blueprint, Name)];
+	};
+	if (Args.Has(TEXT("replication")) || Args.Has(TEXT("rep_notify_func")))
+	{
+		FString Replication = TEXT("rep_notify");
+		FString Function;
+		if ((Args.Has(TEXT("replication")) && !Args.String(TEXT("replication"), Replication))
+			|| !Args.String(TEXT("rep_notify_func"), Function, false))
+		{
+			return false;
+		}
+		if (Replication != TEXT("none") && Replication != TEXT("replicated") && Replication != TEXT("rep_notify"))
+		{
+			return Args.Fail(TEXT("BlueprintMember.InvalidValue"), TEXT("replication is none, replicated or rep_notify."), TEXT("replication"));
+		}
+		if (Replication != TEXT("rep_notify") && !Function.IsEmpty())
+		{
+			return Args.Fail(TEXT("BlueprintMember.InvalidValue"), TEXT("rep_notify_func needs replication rep_notify."), TEXT("rep_notify_func"));
+		}
+		if (Replication == TEXT("rep_notify") && Function.IsEmpty())
+		{
+			Function = FString::Printf(TEXT("OnRep_%s"), *Name.ToString());
+		}
+		// FBlueprintVarActionDetails::OnChangeReplication / ReplicationOnRepFuncChanged. The notify function is a
+		// function graph of the document's; it is not created here.
+		FBlueprintEditorUtils::SetBlueprintVariableRepNotifyFunc(&Blueprint, Name, Function.IsEmpty() ? NAME_None : FName(*Function));
+		FBPVariableDescription& Variable = Description();
+		if (Replication == TEXT("none"))
+		{
+			Variable.PropertyFlags &= ~(CPF_Net | CPF_RepNotify);
+			Variable.ReplicationCondition = COND_None;
+		}
+		else if (Replication == TEXT("replicated"))
+		{
+			Variable.PropertyFlags = (Variable.PropertyFlags | CPF_Net) & ~CPF_RepNotify;
+		}
+		else
+		{
+			Variable.PropertyFlags |= CPF_Net | CPF_RepNotify;
+		}
+	}
+	if (Args.Has(TEXT("replication_condition")))
+	{
+		FString Condition;
+		if (!Args.String(TEXT("replication_condition"), Condition))
+		{
+			return false;
+		}
+		const UEnum* Enum = StaticEnum<ELifetimeCondition>();
+		int64 Value = Enum->GetValueByNameString(Condition.StartsWith(TEXT("COND_")) ? Condition : TEXT("COND_") + Condition);
+		if (Value == INDEX_NONE || Value >= static_cast<int64>(COND_Max))
+		{
+			return Args.Fail(TEXT("BlueprintMember.InvalidValue"), FString::Printf(
+				TEXT("Unknown replication_condition '%s' (None, InitialOnly, OwnerOnly, SkipOwner, SimulatedOnly, AutonomousOnly, ...)."),
+				*Condition), TEXT("replication_condition"));
+		}
+		if (Value != COND_None && (Description().PropertyFlags & CPF_Net) == 0)
+		{
+			return Args.Fail(TEXT("BlueprintMember.InvalidValue"), TEXT("A replication condition needs a replicated variable."),
+				TEXT("replication_condition"));
+		}
+		// FBlueprintVarActionDetails::OnChangeReplicationCondition.
+		Description().ReplicationCondition = static_cast<ELifetimeCondition>(Value);
+	}
+	bool bValue = false;
+	if (Args.Has(TEXT("config")))
+	{
+		if (!Args.Bool(TEXT("config"), bValue))
+		{
+			return false;
+		}
+		// FBlueprintVarActionDetails::OnSetConfigVariableState.
+		FBPVariableDescription& Variable = Description();
+		Variable.PropertyFlags = bValue ? (Variable.PropertyFlags | CPF_Config) : (Variable.PropertyFlags & ~CPF_Config);
+	}
+	struct FFlagSetter
+	{
+		const TCHAR* Key;
+		void (*Set)(UBlueprint*, const FName&, const bool);
+	};
+	const FFlagSetter Setters[] = {
+		{TEXT("transient"), &FBlueprintEditorUtils::SetVariableTransientFlag},
+		{TEXT("save_game"), &FBlueprintEditorUtils::SetVariableSaveGameFlag},
+		{TEXT("advanced_display"), &FBlueprintEditorUtils::SetVariableAdvancedDisplayFlag},
+		{TEXT("expose_to_cinematics"), &FBlueprintEditorUtils::SetInterpFlag},
+		{TEXT("deprecated"), &FBlueprintEditorUtils::SetVariableDeprecatedFlag},
+	};
+	for (const FFlagSetter& Setter : Setters)
+	{
+		if (Args.Has(Setter.Key))
+		{
+			if (!Args.Bool(Setter.Key, bValue))
+			{
+				return false;
+			}
+			Setter.Set(&Blueprint, Name, bValue);
+		}
+	}
+	if (Args.Has(TEXT("deprecation_message")))
+	{
+		FString Message;
+		if (!Args.String(TEXT("deprecation_message"), Message))
+		{
+			return false;
+		}
+		if (Message.IsEmpty())
+		{
+			FBlueprintEditorUtils::RemoveBlueprintVariableMetaData(&Blueprint, Name, nullptr, FBlueprintMetadata::MD_DeprecationMessage);
+		}
+		else
+		{
+			FBlueprintEditorUtils::SetBlueprintVariableMetaData(&Blueprint, Name, nullptr, FBlueprintMetadata::MD_DeprecationMessage, Message);
+		}
+	}
+	if (Args.Has(TEXT("metadata")))
+	{
+		// The complete set of the other metadata entries: unlisted ones are removed.
+		const FValue* Metadata = nullptr;
+		if (!Args.Object(TEXT("metadata"), Metadata))
+		{
+			return false;
+		}
+		TMap<FName, FString> Wanted;
+		for (int32 Index = 0; Index < Metadata->ObjectKeys.Num() && Index < Metadata->Elements.Num(); ++Index)
+		{
+			const FString& FieldKey = Metadata->ObjectKeys[Index];
+			const FValue& FieldValue = Metadata->Elements[Index];
+			if (FieldValue.Kind != EAssetDocumentRuntimeValueKind::String)
+			{
+				return Args.Fail(TEXT("BlueprintMember.InvalidValue"), FString::Printf(TEXT("metadata value '%s' must be a string."), *FieldKey),
+					TEXT("metadata"));
+			}
+			const FName Key(*FieldKey);
+			if (IsVariableRowMetadata(Key))
+			{
+				return Args.Fail(TEXT("BlueprintMember.InvalidValue"), FString::Printf(
+					TEXT("metadata '%s' has a field of its own on the variable."), *FieldKey), TEXT("metadata"));
+			}
+			Wanted.Add(Key, FieldValue.StringValue);
+		}
+		TArray<FName> Stale;
+		for (const FBPVariableMetaDataEntry& Entry : Description().MetaDataArray)
+		{
+			if (!IsVariableRowMetadata(Entry.DataKey) && !Wanted.Contains(Entry.DataKey))
+			{
+				Stale.Add(Entry.DataKey);
+			}
+		}
+		for (const FName& Key : Stale)
+		{
+			FBlueprintEditorUtils::RemoveBlueprintVariableMetaData(&Blueprint, Name, nullptr, Key);
+		}
+		for (const TPair<FName, FString>& Entry : Wanted)
+		{
+			const FBPVariableDescription& Variable = Description();
+			if (!Variable.HasMetaData(Entry.Key) || Variable.GetMetaData(Entry.Key) != Entry.Value)
+			{
+				FBlueprintEditorUtils::SetBlueprintVariableMetaData(&Blueprint, Name, nullptr, Entry.Key, Entry.Value);
+			}
+		}
+	}
+	return true;
+}
+
 bool HandleVariableSet(FCall& Call, FObjectBuilder& Result)
 {
 	UBlueprint* Blueprint = GetBlueprint(Call);
@@ -1750,7 +2119,10 @@ bool HandleVariableSet(FCall& Call, FObjectBuilder& Result)
 	const FValue* TypeValue = nullptr;
 	if (Blueprint == nullptr
 		|| !Call.Args.OnlyFields({TEXT("name"), TEXT("type"), TEXT("category"), TEXT("tooltip"), TEXT("instance_editable"),
-			TEXT("blueprint_read_only"), TEXT("expose_on_spawn"), TEXT("private"), TEXT("default")})
+			TEXT("blueprint_read_only"), TEXT("expose_on_spawn"), TEXT("private"), TEXT("default"), TEXT("replication"),
+			TEXT("rep_notify_func"), TEXT("replication_condition"), TEXT("config"), TEXT("transient"), TEXT("save_game"),
+			TEXT("advanced_display"), TEXT("expose_to_cinematics"), TEXT("deprecated"), TEXT("deprecation_message"),
+			TEXT("metadata")})
 		|| !ReadName(Call, TEXT("name"), Name) || !Call.Args.Object(TEXT("type"), TypeValue)
 		|| RefuseForBlueprintType(Call, *Blueprint, TEXT("member variables")))
 	{
@@ -1838,6 +2210,10 @@ bool HandleVariableSet(FCall& Call, FObjectBuilder& Result)
 	if (Call.Args.Has(TEXT("private")))
 	{
 		SetMetaFlag(*Blueprint, Name, FBlueprintMetadata::MD_Private, bPrivate);
+	}
+	if (!SetVariableDetails(Call, *Blueprint, Name))
+	{
+		return false;
 	}
 	NotifyStructural(*Blueprint);
 	const FValue* Default = Call.Args.Find(TEXT("default"));
@@ -1934,6 +2310,51 @@ bool HandleComponentAdd(FCall& Call, FObjectBuilder& Result)
 	if (!AttachNode(Call, *Blueprint, *SCS, *Node, AttachTo) || !SetAttachSocket(Call, *Blueprint, *SCS, *Node, Socket))
 	{
 		return false;
+	}
+	NotifyStructural(*Blueprint);
+	return true;
+}
+
+// The Components panel's Details > Variable of an own component: Category (FBlueprintEditorUtils::
+// SetBlueprintVariableCategory, which stores it on the SCS node) and Tooltip (the SCS node's "tooltip" metadata).
+bool HandleComponentVariableSet(FCall& Call, FObjectBuilder& Result)
+{
+	UBlueprint* Blueprint = GetBlueprint(Call);
+	FName Name;
+	if (Blueprint == nullptr || !Call.Args.OnlyFields({TEXT("name"), TEXT("category"), TEXT("tooltip")})
+		|| !ReadName(Call, TEXT("name"), Name))
+	{
+		return false;
+	}
+	USimpleConstructionScript* SCS = GetSCS(Call, *Blueprint);
+	USCS_Node* Node = SCS != nullptr ? SCS->FindSCSNode(Name) : nullptr;
+	if (Node == nullptr || Node == SCS->GetDefaultSceneRootNode())
+	{
+		return Call.Args.Fail(TEXT("BlueprintMember.ComponentNotFound"), FString::Printf(TEXT("No own component '%s'."), *Name.ToString()), TEXT("name"));
+	}
+	FString Category, Tooltip;
+	if (!Call.Args.String(TEXT("category"), Category, false) || !Call.Args.String(TEXT("tooltip"), Tooltip, false))
+	{
+		return false;
+	}
+	Node->Modify();
+	if (Call.Args.Has(TEXT("category")))
+	{
+		const FText Text = Category.IsEmpty() ? UEdGraphSchema_K2::VR_DefaultCategory : FText::FromString(Category);
+		FBlueprintEditorUtils::SetBlueprintVariableCategory(Blueprint, Name, nullptr, Text, /*bDontRecompile=*/true);
+		// A component the class does not hold yet (added in this apply) keeps it on its node alone.
+		Node->CategoryName = Text;
+	}
+	if (Call.Args.Has(TEXT("tooltip")))
+	{
+		if (Tooltip.IsEmpty())
+		{
+			FBlueprintEditorUtils::RemoveBlueprintVariableMetaData(Blueprint, Name, nullptr, FBlueprintMetadata::MD_Tooltip);
+		}
+		else
+		{
+			FBlueprintEditorUtils::SetBlueprintVariableMetaData(Blueprint, Name, nullptr, FBlueprintMetadata::MD_Tooltip, Tooltip);
+		}
 	}
 	NotifyStructural(*Blueprint);
 	return true;
@@ -2136,6 +2557,7 @@ TArray<FAssetDocumentPrimitiveDescriptor> BuildMemberDescriptors()
 		MakeMemberDescriptor(TEXT("blueprint.member.variable.remove.v1"), true, TEXT("FBlueprintEditorUtils::RemoveMemberVariable")),
 		MakeMemberDescriptor(TEXT("blueprint.member.component.add.v1"), true, TEXT("USimpleConstructionScript::CreateNode;USCS_Node::AddChildNode")),
 		MakeMemberDescriptor(TEXT("blueprint.member.component.attach.v1"), true, TEXT("USCS_Node::AddChildNode;USCS_Node::SetParent")),
+		MakeMemberDescriptor(TEXT("blueprint.member.component.variable.set.v1"), true, TEXT("FBlueprintEditorUtils::SetBlueprintVariableCategory;FBlueprintEditorUtils::SetBlueprintVariableMetaData")),
 		MakeMemberDescriptor(TEXT("blueprint.member.component.remove.v1"), true, TEXT("USimpleConstructionScript::RemoveNodeAndPromoteChildren;UInheritableComponentHandler::RemoveOverridenComponentTemplate")),
 		MakeMemberDescriptor(TEXT("blueprint.member.property.set.v1"), true, TEXT("UObject::PreEditChange;UObject::PostEditChangeProperty;UInheritableComponentHandler::CreateOverridenComponentTemplate")),
 		MakeMemberDescriptor(TEXT("blueprint.member.setting.set.v1"), true, TEXT("IAssetDocumentBlueprintSettingsAdapter::SetSetting")),
@@ -2151,6 +2573,7 @@ const FBinding BaseMemberBindings[] = {
 	{TEXT("blueprint.member.variable.remove.v1"), &HandleVariableRemove},
 	{TEXT("blueprint.member.component.add.v1"), &HandleComponentAdd},
 	{TEXT("blueprint.member.component.attach.v1"), &HandleComponentAttach},
+	{TEXT("blueprint.member.component.variable.set.v1"), &HandleComponentVariableSet},
 	{TEXT("blueprint.member.component.remove.v1"), &HandleComponentRemove},
 	{TEXT("blueprint.member.property.set.v1"), &MemberHandlePropertySet},
 	{TEXT("blueprint.member.setting.set.v1"), &HandleSettingSet},

@@ -4,6 +4,7 @@
 #include "AssetDocumentPythonNativeModule.h"
 
 #include "AssetDocumentPythonDtoCodec.h"
+#include "Runtime/AssetDocumentTextDisplays.h"
 
 THIRD_PARTY_INCLUDES_START
 #include "Python.h"
@@ -355,9 +356,38 @@ PyObject* RequestContextInvoke(PyObject* Self, PyObject* Args)
 		return RaiseStableError(TEXT("AD.RUNTIME.PRIMITIVE_NOT_FOUND"),
 			TEXT("The exact primitive identity is not in the frozen catalog."));
 	}
+	UE::AssetDocument::TextDisplays::Reset();
 	const FAssetDocumentPrimitiveOutcome Outcome = InvokeNativeWithoutGIL(*State->Context, Invocation);
 	return AssetDocumentPythonEncodePrimitiveOutcome(
 		Outcome, *Descriptor, ContextObject->BindingId, Diagnostic);
+}
+
+// The display strings of the texts the last primitive call read in a localization form ({form: display}).
+PyObject* RequestContextTakeTextDisplays(PyObject* Self, PyObject* Args)
+{
+	(void)Self;
+	(void)Args;
+	PyObject* Result = PyDict_New();
+	if (Result == nullptr)
+	{
+		return nullptr;
+	}
+	for (const TPair<FString, FString>& Entry : UE::AssetDocument::TextDisplays::Take())
+	{
+		const FTCHARToUTF8 Form(*Entry.Key);
+		const FTCHARToUTF8 Display(*Entry.Value);
+		PyObject* Key = PyUnicode_FromStringAndSize(Form.Get(), Form.Length());
+		PyObject* Value = PyUnicode_FromStringAndSize(Display.Get(), Display.Length());
+		const bool bAdded = Key != nullptr && Value != nullptr && PyDict_SetItem(Result, Key, Value) == 0;
+		Py_XDECREF(Key);
+		Py_XDECREF(Value);
+		if (!bAdded)
+		{
+			Py_DECREF(Result);
+			return nullptr;
+		}
+	}
+	return Result;
 }
 
 PyObject* RequestContextInspectCatalog(PyObject* Self, PyObject* Args)
@@ -427,6 +457,7 @@ PyMethodDef RequestContextMethods[] = {
 	{"handoff", RequestContextHandoff, METH_VARARGS, nullptr},
 	{"invoke", RequestContextInvoke, METH_VARARGS, nullptr},
 	{"inspect_catalog", RequestContextInspectCatalog, METH_NOARGS, nullptr},
+	{"take_text_displays", RequestContextTakeTextDisplays, METH_NOARGS, nullptr},
 	{"__reduce__", RejectReduce, METH_NOARGS, nullptr},
 	{"__reduce_ex__", RejectReduce, METH_VARARGS, nullptr},
 	{nullptr, nullptr, 0, nullptr},

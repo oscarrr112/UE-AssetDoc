@@ -16,15 +16,28 @@ Body region::
                            {"Name": "Angle", "Keys": [{"Frame": 0, "Value": -5}]}]},
              {"Widget": "Title", "Target": "Slot", "Property": "LayoutData.Offsets", "Type": "Margin",
               "Channels": [{"Name": "Left", "Keys": [{"Frame": 0, "Value": 10}]}]},
-             {"Widget": "Ok", "Property": "Visibility", "Type": "Enum", "Keys": [{"Frame": 15, "Value": "Visible"}]}]}]
+             {"Widget": "Ok", "Property": "Visibility", "Type": "Enum", "Keys": [{"Frame": 15, "Value": "Visible"}]},
+             {"Target": "Root", "Property": "RenderOpacity", "Type": "Float", "Keys": [{"Frame": 0, "Value": 1.0}]},
+             {"Widget": "Glow", "Property": "Brush", "Type": "Material", "Parameters": {"Pulse": "Scalar", "Tint": "Color"},
+              "Channels": [{"Name": "Pulse", "Keys": [...]}, {"Name": "TintR", "Keys": [...]}]}]}]
 
 Frames are display frames of FrameRate (the Sequencer's frame numbers; fractions allowed).
 Animations are matched by Name, tracks by (Widget, Target, Property, Type).  A listed animation
 is the whole animation (unlisted tracks are removed); an omitted FrameRate / PlaybackRange keeps
 the current value (a new animation gets 30 fps and frames 0..30).  Key Interp defaults to Linear
 (Cubic, Constant); a Cubic key may carry Tangent {Mode: SmartAuto|User|Break, Arrive, Leave}.
+``Target: "Root"`` (no Widget) animates the user widget itself.  A ``Material`` track keys the
+material parameters of a widget's brush (``Property`` is the brush's property path); its
+``Parameters`` are the complete {name: Scalar|Bool|Vector2D|Vector|Color} set and its channels are
+named as the Sequencer names them (``Tint`` gives ``TintR`` ... ``TintA``, ``Offset`` gives
+``Offset.X`` ...).  ``"Deactivated": true`` is a track deactivated in the Sequencer.  ``Section`` is the track section's
+Details: {StartFrame?, EndFrame? (a missing bound is infinite), Active?, WhenFinished?:
+KeepState|RestoreState|ProjectDefault, PreRoll?, PostRoll?}; a stated Section is complete (missing
+settings are a new section's), an omitted one is kept and grows to cover the track's keys.
 Tracks the profile cannot represent are extracted as {"Widget", "Property", "Type",
-"Unsupported": reason} and must be listed unchanged.
+"Unsupported": reason, "Sections": [...]}: the sections and their keys are read-only.  They must be
+listed; a listed track keeps its content (``Sections``, when listed, must be unchanged).  A track
+listed as ``Unsupported`` that the profile now represents is kept as it is.
 """
 from __future__ import annotations
 
@@ -34,7 +47,39 @@ from asset_document.diagnostics import contract_error
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.profiles import ublueprint_members as members
 
-TRACK_TYPES = ("Float", "Double", "Bool", "Byte", "Enum", "Integer", "Color", "Transform", "Margin")
+TRACK_TYPES = ("Float", "Double", "Bool", "Byte", "Enum", "Integer", "Color", "Transform", "Margin", "Material")
+TARGETS = ("Widget", "Slot", "Root")
+PARAMETER_KINDS = ("Scalar", "Bool", "Vector2D", "Vector", "Color")
+COMPLETION_MODES = ("KeepState", "RestoreState", "ProjectDefault")
+SECTION_DEFAULTS = {"Active": True, "WhenFinished": "ProjectDefault", "PreRoll": 0, "PostRoll": 0}
+
+
+def _canonical_section(value, path) -> dict:
+    if type(value) is not dict or set(value) - {"StartFrame", "EndFrame", *SECTION_DEFAULTS}:
+        raise _error(path, "Section is {StartFrame?, EndFrame?, Active?, WhenFinished?, PreRoll?, PostRoll?}.",
+                     "Widget.InvalidTrack")
+    out = {}
+    for key in ("StartFrame", "EndFrame", "PreRoll", "PostRoll"):
+        if key in value:
+            out[key] = _number(value[key], f"{path}/{key}", key)
+    if "StartFrame" in out and "EndFrame" in out and out["EndFrame"] < out["StartFrame"]:
+        raise _error(f"{path}/EndFrame", "EndFrame must not be before StartFrame.", "Widget.InvalidTrack")
+    if any(out.get(key, 0) < 0 for key in ("PreRoll", "PostRoll")):
+        raise _error(path, "PreRoll and PostRoll are not negative.", "Widget.InvalidTrack")
+    if "Active" in value:
+        if type(value["Active"]) is not bool:
+            raise _error(f"{path}/Active", "Active is true or false.", "Widget.InvalidTrack")
+        out["Active"] = value["Active"]
+    if "WhenFinished" in value:
+        if value["WhenFinished"] not in COMPLETION_MODES:
+            raise _error(f"{path}/WhenFinished", f"WhenFinished is one of {', '.join(COMPLETION_MODES)}.",
+                         "Widget.InvalidTrack")
+        out["WhenFinished"] = value["WhenFinished"]
+    return {key: item for key, item in out.items() if SECTION_DEFAULTS.get(key, None) != item}
+
+
+def _section_state(section: dict | None) -> dict:
+    return {**SECTION_DEFAULTS, **(section or {})}
 CHANNEL_ALIASES = {"Rotation": "Angle"}
 DEFAULT_RATE = {"Numerator": 30, "Denominator": 1}
 DEFAULT_RANGE = {"StartFrame": 0, "EndFrame": 30}
@@ -112,22 +157,90 @@ def track_identity(track: dict) -> tuple:
     return (track.get("Widget", ""), track.get("Target", "Widget"), track.get("Property", ""), track.get("Type", ""))
 
 
+# Rows an earlier extract wrote as Unsupported under another identity: a track on the user widget itself was
+# listed under the root binding's name with this reason, and a material parameter track by its class path with no
+# Property.
+_OLD_ROOT_REASON = "the track animates the user widget itself"
+_OLD_MATERIAL_TYPE = "/Script/UMG.MovieSceneWidgetMaterialTrack"
+
+
+def _old_row_alias(track: dict, live_tracks: list) -> dict | None:
+    """The live track an Unsupported row of an earlier extract names, or None."""
+    if track.get("Target", "Widget") != "Widget":
+        return None
+    widget, material = track.get("Widget", ""), track.get("Type") == _OLD_MATERIAL_TYPE and not track.get("Property")
+    if material:
+        for owner in (lambda row: row.get("Target", "Widget") == "Widget" and row.get("Widget", "") == widget,
+                      lambda row: row.get("Target") == "Root"):
+            found = [row for row in live_tracks if row.get("Type") == "Material" and owner(row)]
+            if len(found) == 1:
+                return found[0]
+            if found:
+                return None
+        return None
+    if track.get("Unsupported") == _OLD_ROOT_REASON:
+        found = [row for row in live_tracks if row.get("Target") == "Root"
+                 and row.get("Property", "") == track.get("Property", "") and row.get("Type") == track.get("Type")]
+        return found[0] if len(found) == 1 else None
+    return None
+
+
+def _document_tracks(desired: list, live_tracks: list) -> list:
+    """The document's tracks with an earlier extract's Unsupported rows read under the identity the live track has
+    now (kept as listed)."""
+    live_ids = {track_identity(row) for row in live_tracks}
+    out = []
+    for track in desired:
+        alias = _old_row_alias(track, live_tracks) if "Unsupported" in track and track_identity(track) not in live_ids \
+            else None
+        if alias is not None:
+            track = {**{key: value for key, value in track.items() if key not in ("Widget", "Target", "Property",
+                                                                                     "Type", "Sections")},
+                     **{key: alias[key] for key in ("Widget", "Target", "Property", "Type") if key in alias}}
+        out.append(track)
+    return out
+
+
+def _sections_from_live(rows: list) -> list:
+    out = []
+    for row in rows:
+        item = {}
+        if "start" in row:
+            item["StartFrame"] = row["start"]
+        if "end" in row:
+            item["EndFrame"] = row["end"]
+        channels = []
+        for channel in row.get("channels", []):
+            entry = {"Name": channel["name"], "Kind": channel.get("kind", ""),
+                     "Keys": [_key_from_live(key) if "value" in key else {"Frame": key["frame"]}
+                              for key in channel.get("keys", [])]}
+            if "default" in channel:
+                entry["Default"] = channel["default"]
+            channels.append(entry)
+        item["Channels"] = channels
+        out.append(item)
+    return out
+
+
 def _canonical_track(value, path) -> dict:
-    allowed = {"Widget", "Target", "Property", "Type", "Keys", "Channels", "Unsupported"}
+    allowed = {"Widget", "Target", "Property", "Type", "Keys", "Channels", "Unsupported", "Sections", "Deactivated",
+               "Parameters", "Section"}
     if type(value) is not dict or set(value) - allowed:
         raise _error(path, "A track is {Widget, Target?, Property, Type, Keys | Channels}.", "Widget.InvalidTrack")
     if "Unsupported" in value:
-        return {key: value[key] for key in ("Widget", "Target", "Property", "Type", "Unsupported") if key in value}
-    widget, prop, kind = value.get("Widget"), value.get("Property"), value.get("Type")
-    if type(widget) is not str or not widget or type(prop) is not str or not prop or type(kind) is not str:
-        raise _error(path, "A track needs Widget, Property and Type.", "Widget.InvalidTrack")
+        return {key: value[key] for key in ("Widget", "Target", "Property", "Type", "Unsupported", "Sections", "Deactivated")
+                if key in value}
+    widget, prop, kind = value.get("Widget", ""), value.get("Property"), value.get("Type")
+    target = value.get("Target", "Widget")
+    if target not in TARGETS:
+        raise _error(f"{path}/Target", "Target is Widget (default), Slot or Root.", "Widget.InvalidTrack")
+    if type(widget) is not str or (target == "Root") == bool(widget) or type(prop) is not str or not prop \
+            or type(kind) is not str:
+        raise _error(path, "A track needs Widget (none for Target Root), Property and Type.", "Widget.InvalidTrack")
     canonical_kind = next((item for item in TRACK_TYPES if item.casefold() == kind.casefold()), kind)
     if canonical_kind not in TRACK_TYPES and not kind.startswith("/Script/"):
         raise _error(f"{path}/Type", f"Type is one of {', '.join(TRACK_TYPES)} or a property track class path.",
                      "Widget.InvalidTrack")
-    target = value.get("Target", "Widget")
-    if target not in ("Widget", "Slot"):
-        raise _error(f"{path}/Target", "Target is Widget (default) or Slot.", "Widget.InvalidTrack")
     if "Keys" in value and "Channels" in value:
         raise _error(path, "Give Keys (single-channel track) or Channels, not both.", "Widget.InvalidTrack")
     channels = value.get("Channels", [{"Name": "Value", "Keys": value.get("Keys", [])}])
@@ -139,8 +252,30 @@ def _canonical_track(value, path) -> dict:
     if len(set(names)) != len(names):
         raise _error(f"{path}/Channels", "A channel is listed twice.", "Widget.InvalidTrack")
     out = {"Widget": widget, "Property": prop, "Type": canonical_kind, "Channels": sorted(rows, key=lambda r: r["Name"])}
-    if target == "Slot":
-        out["Target"] = "Slot"
+    if target != "Widget":
+        out["Target"] = target
+    if target == "Root":
+        del out["Widget"]
+    deactivated = value.get("Deactivated", False)
+    if type(deactivated) is not bool:
+        raise _error(f"{path}/Deactivated", "Deactivated is true or false.", "Widget.InvalidTrack")
+    if deactivated:
+        out["Deactivated"] = True
+    parameters = value.get("Parameters")
+    if canonical_kind == "Material":
+        if target == "Slot":
+            raise _error(f"{path}/Target", "A Material track animates a brush of the widget, not of its slot.",
+                         "Widget.InvalidTrack")
+        parameters = {} if parameters is None else parameters
+        if type(parameters) is not dict or any(type(name) is not str or not name or kind not in PARAMETER_KINDS
+                                               for name, kind in parameters.items()):
+            raise _error(f"{path}/Parameters", "Parameters is {\"Name\": Scalar|Bool|Vector2D|Vector|Color}.",
+                         "Widget.InvalidTrack")
+        out["Parameters"] = dict(sorted(parameters.items()))
+    elif parameters is not None:
+        raise _error(f"{path}/Parameters", "Only a Material track has Parameters.", "Widget.InvalidTrack")
+    if "Section" in value:
+        out["Section"] = _canonical_section(value["Section"], f"{path}/Section")
     return out
 
 
@@ -209,16 +344,29 @@ def track_from_live(row: dict) -> dict:
     out = {"Widget": row.get("widget", ""), "Property": row.get("property", ""), "Type": row["type"]}
     if row.get("target") == "slot":
         out["Target"] = "Slot"
+    elif row.get("target") == "root":
+        out["Target"] = "Root"
+        del out["Widget"]
+    if row.get("deactivated"):
+        out["Deactivated"] = True
     if not row.get("supported", True):
         out["Unsupported"] = row.get("reason", "unsupported track")
+        if row.get("sections"):
+            out["Sections"] = _sections_from_live(row["sections"])
         return out
+    if "parameters" in row:
+        out["Parameters"] = {item["name"]: item["kind"] for item in row["parameters"]}
+    if row.get("section"):
+        names = {"start": "StartFrame", "end": "EndFrame", "active": "Active", "when_finished": "WhenFinished",
+                 "pre_roll": "PreRoll", "post_roll": "PostRoll"}
+        out["Section"] = {names[key]: value for key, value in row["section"].items() if key in names}
     channels = []
     for channel in row.get("channels", []):
         item = {"Name": channel["name"], "Keys": [_key_from_live(key) for key in channel.get("keys", [])]}
         if "default" in channel:
             item["Default"] = channel["default"]
         channels.append(item)
-    if len(channels) == 1 and channels[0]["Name"] == "Value" and "Default" not in channels[0]:
+    if len(channels) == 1 and channels[0]["Name"] == "Value" and "Default" not in channels[0] and "Parameters" not in out:
         out["Keys"] = channels[0]["Keys"]  # the single-channel shorthand
     else:
         out["Channels"] = sorted(channels, key=lambda item: item["Name"])
@@ -289,9 +437,25 @@ def header_values(desired: dict, live: dict | None) -> dict | None:
 
 
 def _track_address(animation: str, track: dict) -> dict:
-    return {"animation": animation, "widget": track["Widget"],
-            "target": "slot" if track.get("Target") == "Slot" else "widget",
+    return {"animation": animation, "widget": track.get("Widget", ""),
+            "target": track.get("Target", "Widget").lower(),
             "property": track["Property"], "type": track["Type"]}
+
+
+def _section_equal(want: dict, have: dict) -> bool:
+    if "Section" not in want:
+        return True  # an omitted Section is kept
+    a, b = _section_state(want["Section"]), _section_state(have.get("Section"))
+    if set(a) != set(b):
+        return False
+    return all(a[key] == b[key] if type(a[key]) in (bool, str) else _close(a[key], b[key]) for key in a)
+
+
+def _content_equal(want: dict, have: dict) -> bool:
+    return (want.get("Deactivated", False) == have.get("Deactivated", False)
+            and _section_equal(want, have)
+            and want.get("Parameters") == have.get("Parameters")
+            and channels_equal(want["Channels"], have.get("Channels", [])))
 
 
 def _wire_channel(row: dict) -> dict:
@@ -315,8 +479,12 @@ def plan_tracks(desired: dict, live: dict | None, path: str) -> list:
     """Track set/remove calls for one animation (live is the canonical live animation or None)."""
     name = desired["Name"]
     live_tracks = [] if live is None else live["Tracks"]
+    desired = {**desired, "Tracks": _document_tracks(desired["Tracks"], live_tracks)}
     unsupported_live = sorted(track_identity(t) for t in live_tracks if "Unsupported" in t)
-    unsupported_want = sorted(track_identity(t) for t in desired["Tracks"] if "Unsupported" in t)
+    # A track listed as Unsupported is kept as it is, also once the profile represents it.
+    kept = {track_identity(t) for t in desired["Tracks"] if "Unsupported" in t}
+    unsupported_want = sorted(i for i in kept if i in unsupported_live or i not in
+                              {track_identity(t) for t in live_tracks})
     if unsupported_live != unsupported_want:
         missing = [i for i in unsupported_live if i not in unsupported_want] or unsupported_want
         reasons = {track_identity(t): t["Unsupported"] for t in live_tracks if "Unsupported" in t}
@@ -325,21 +493,36 @@ def plan_tracks(desired: dict, live: dict | None, path: str) -> list:
                      + "; ".join(f"{w or '?'}.{p or '?'} ({k}): {reasons.get((w, t, p, k), 'not on the asset')}"
                                  for w, t, p, k in missing),
                      "Widget.UnsupportedTrack")
+    by_identity = {track_identity(t): t for t in live_tracks}
+    for position, track in enumerate(desired["Tracks"]):
+        current = by_identity.get(track_identity(track))
+        if "Unsupported" in track and "Sections" in track and current is not None and "Unsupported" in current \
+                and track["Sections"] != current.get("Sections"):
+            raise _error(f"{path}/Tracks/{position}/Sections",
+                         f"{name}: the keys of a track this profile cannot edit are read-only; edit them in the "
+                         f"Sequencer ({current['Unsupported']}).", "Widget.UnsupportedTrack")
     have = {track_identity(t): t for t in live_tracks if "Unsupported" not in t}
     want = {track_identity(t): t for t in desired["Tracks"] if "Unsupported" not in t}
     ops = []
     for identity, track in sorted(have.items()):
-        if identity not in want:
+        if identity not in want and identity not in kept:
             ops.append(("umg.anim.track.remove.v1", _track_address(name, track), f"{path}/Tracks"))
     for position, track in enumerate(desired["Tracks"]):
         if "Unsupported" in track:
             continue
         current = have.get(track_identity(track))
-        if current is not None and channels_equal(track["Channels"], current["Channels"]):
+        if current is not None and _content_equal(track, current):
             continue
-        ops.append(("umg.anim.track.set.v1",
-                    {**_track_address(name, track), "channels": [_wire_channel(row) for row in track["Channels"]]},
-                    f"{path}/Tracks/{position}"))
+        values = {**_track_address(name, track), "channels": [_wire_channel(row) for row in track["Channels"]]}
+        if track.get("Deactivated", False) or (current or {}).get("Deactivated", False):
+            values["deactivated"] = track.get("Deactivated", False)
+        if "Parameters" in track:
+            values["parameters"] = [{"name": key, "kind": kind} for key, kind in track["Parameters"].items()]
+        if "Section" in track:
+            names = {"StartFrame": "start", "EndFrame": "end", "Active": "active", "WhenFinished": "when_finished",
+                     "PreRoll": "pre_roll", "PostRoll": "post_roll"}
+            values["section"] = {names[key]: value for key, value in track["Section"].items()}
+        ops.append(("umg.anim.track.set.v1", values, f"{path}/Tracks/{position}"))
     return ops
 
 
@@ -349,10 +532,11 @@ def animation_mismatch(desired: dict, live: dict | None) -> bool:
     if header_values(desired, live) is not None:
         return True
     have = {track_identity(t): t for t in live["Tracks"]}
-    want = {track_identity(t): t for t in desired["Tracks"]}
+    want = {track_identity(t): t for t in _document_tracks(desired["Tracks"], live["Tracks"])}
     if set(have) != set(want):
         return True
-    return any("Unsupported" not in t and not channels_equal(t["Channels"], have[i].get("Channels", []))
+    return any(("Unsupported" not in t and ("Unsupported" in have[i] or not _content_equal(t, have[i])))
+               or ("Unsupported" in t and "Sections" in t and "Unsupported" in have[i] and t["Sections"] != have[i].get("Sections"))
                for i, t in want.items())
 
 

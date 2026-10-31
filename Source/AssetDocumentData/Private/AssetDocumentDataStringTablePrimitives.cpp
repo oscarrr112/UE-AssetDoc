@@ -143,12 +143,14 @@ bool HandleStringTableEdit(FCall& Call, FObjectBuilder& Result)
 		{
 			return false;
 		}
-		if (!IsValidIdentity(Key, Reason))
+		FString Existing;
+		const bool bExists = Asset->GetStringTable()->GetSourceString(FTextKey(Key), Existing);
+		// The editor's rules judge new input only: a key the table already holds (Import from CSV accepts any key)
+		// can be edited and removed as it is.
+		if (!bExists && !IsValidIdentity(Key, Reason))
 		{
 			return Op.Fail(TEXT("StringTable.InvalidKey"), FString::Printf(TEXT("'%s' is not a valid key: %s"), *Key, *Reason), TEXT("key"));
 		}
-		FString Existing;
-		const bool bExists = Asset->GetStringTable()->GetSourceString(FTextKey(Key), Existing);
 		if (Kind == TEXT("set"))
 		{
 			FString Source;
@@ -156,7 +158,7 @@ bool HandleStringTableEdit(FCall& Call, FObjectBuilder& Result)
 			{
 				return false;
 			}
-			if (Source.IsEmpty())
+			if (Source.IsEmpty() && !(bExists && Existing.IsEmpty()))
 			{
 				return Op.Fail(TEXT("StringTable.EmptySourceString"), TEXT("The String Table editor does not add entries with an empty source string."), TEXT("source"));
 			}
@@ -198,11 +200,12 @@ bool HandleStringTableEdit(FCall& Call, FObjectBuilder& Result)
 			{
 				return false;
 			}
-			if (!IsValidRowName(Id, Reason))
+			const FString Current = Asset->GetStringTable()->GetMetaData(FTextKey(Key), FName(*Id));
+			// A metadata id the entry already has (an imported CSV column) is kept as it is.
+			if (bSet && Current.IsEmpty() && !IsValidRowName(Id, Reason))
 			{
 				return Op.Fail(TEXT("StringTable.InvalidMetaDataId"), FString::Printf(TEXT("'%s' is not a valid metadata id: %s"), *Id, *Reason), TEXT("id"));
 			}
-			const FString Current = Asset->GetStringTable()->GetMetaData(FTextKey(Key), FName(*Id));
 			if (bSet ? Current.Equals(Value, ESearchCase::CaseSensitive) : Current.IsEmpty())
 			{
 				continue;

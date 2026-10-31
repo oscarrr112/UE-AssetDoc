@@ -26,7 +26,9 @@ from asset_document.meta import (
 # calls, so an in-call import would load a second copy of the primitive catalog.
 from asset_document.profiles.generic import GenericProfileCandidate, omit_inspected_properties
 from asset_document.regions.primitive_catalog import GenericPrimitiveContext, NamedOpaqueHandleArgument, OpaqueHandleProxy, PrimitiveOutcome, PrimitiveOutcomeStatus
+from asset_document import markers
 from asset_document.read_only_extract import admits_read_only
+from asset_document.tolerance import authored_rule, is_reading_live, settled
 
 
 BLACKBOARD_DATA_CLASS = "/Script/AIModule.BlackboardData"
@@ -215,22 +217,82 @@ def _value_properties(properties: dict, names: tuple[str, ...], class_path: str,
     return properties
 
 
+_OBJECT_KEY_TYPES = ("/Script/AIModule.BlackboardKeyType_Object", "/Script/AIModule.BlackboardKeyType_Class")
+_ENUM_KEY_TYPE = "/Script/AIModule.BlackboardKeyType_Enum"
+_STOCK_KEY_TYPES = frozenset((*_VALUE_KEY_PROPERTIES, *_DIRECT_VALUE_COMPONENTS, *_OBJECT_KEY_TYPES, _ENUM_KEY_TYPE,
+                              "/Script/AIModule.BlackboardKeyType_Struct"))
+
+
+def _is_reference_value(value: object) -> bool:
+    return type(value) is dict and set(value) == {"Kind", "Path"} and all(type(item) is str for item in value.values())
+
+
+def _object_properties(properties: dict, class_path: str, path: str) -> None:
+    """Object/Class keys as stored: a null BaseClass is read with a warning (new input needs one); a default that
+    does not satisfy BaseClass is reported by the readback."""
+    _property_shape(properties, ("BaseClass", "DefaultValue"), path)
+    if properties["BaseClass"] is None:
+        authored_rule(f"{path}/BaseClass", "BlackboardData.MissingBaseClass", "BaseClass is not set; the key accepts no value until it is.")
+    else:
+        properties["BaseClass"] = _require_reference(properties["BaseClass"], "ClassRef", f"{path}/BaseClass", "BlackboardData.InvalidEntryField")
+    if properties["DefaultValue"] is not None:
+        properties["DefaultValue"] = _require_reference(properties["DefaultValue"], "AssetRef" if class_path.endswith("_Object") else "ClassRef", f"{path}/DefaultValue", "BlackboardData.InvalidEntryField")
+
+
+def _enum_properties(properties: dict, path: str) -> None:
+    """Enum keys as stored: a null EnumType, a default that is no enumerator (its raw integer value) and an EnumName
+    other than the one EnumType implies are read with warnings and refused as new input."""
+    _property_shape(properties, ("EnumType", "EnumName", "DefaultValue"), path)
+    enum_type = properties["EnumType"]
+    if enum_type is None:
+        authored_rule(f"{path}/EnumType", "BlackboardData.MissingEnumType", "EnumType is not set; the key has no enumerators.")
+    else:
+        enum_type = properties["EnumType"] = _require_reference(enum_type, "AssetRef", f"{path}/EnumType", "BlackboardData.InvalidEntryField")
+    default = properties["DefaultValue"]
+    _expect(type(default) is str or type(default) is int, f"{path}/DefaultValue", "BlackboardData.InvalidEntryField", "Enum DefaultValue must be an enumerator name (or the raw integer an extract reads)")
+    if type(default) is int:
+        authored_rule(f"{path}/DefaultValue", "BlackboardData.InvalidEnumDefault",
+                      f"DefaultValue {default} is not an enumerator of EnumType; it is the stored raw value. Name an enumerator.")
+    _expect(type(properties["EnumName"]) is str, f"{path}/EnumName", "BlackboardData.InvalidEntryField", "EnumName must be an exact string")
+    if enum_type is not None:
+        expected_name = "" if enum_type["Path"].startswith("/Game/") else enum_type["Path"]
+        if properties["EnumName"] != expected_name:
+            authored_rule(f"{path}/EnumName", "BlackboardData.InvalidEntryField",
+                          f"EnumName must match EnumType authority ({expected_name!r}); the stored name is {properties['EnumName']!r}")
+
+
+def _unrepresented_properties(properties: dict, class_path: str, path: str) -> None:
+    """Values the readback cannot give a document form are markers: a read warning for each, kept while unchanged.
+    A project key type's non-scalar property (array, map, struct, gameplay tag ...) is read in the shared value
+    codec's form; Blackboard writes scalar key-type properties only, so it is kept while unchanged."""
+    for name, value in properties.items():
+        where = f"{path}/{name}"
+        if markers.holds_marker(value):
+            if is_reading_live():
+                markers.warn_all(value, "BlackboardData", where)
+            else:
+                authored_rule(where, "BlackboardData.UnrepresentedValue",
+                              "This value holds a marker; a marker cannot be written. Leave it as extracted to keep the stored value.")
+        elif class_path not in _STOCK_KEY_TYPES and type(value) in (dict, list) and not _is_reference_value(value) \
+                and not is_reading_live():
+            # Read faithfully, so the asset's own value is no warning; only new or changed input is judged.
+            authored_rule(where, "BlackboardData.KeyTypePropertyReadOnly",
+                          f"{name} is read in its document form but Blackboard writes scalar key-type properties only; "
+                          "leave it as extracted.")
+
+
 def _specialized_properties(properties: dict, key_class: dict, path: str) -> dict:
     class_path = key_class["Path"]
     if class_path in _VALUE_KEY_PROPERTIES:
         return _value_properties(properties, _VALUE_KEY_PROPERTIES[class_path], class_path, path)
     if class_path in _DIRECT_VALUE_COMPONENTS:
         return _direct_value_properties(properties, _DIRECT_VALUE_COMPONENTS[class_path], path)
-    if class_path in ("/Script/AIModule.BlackboardKeyType_Object", "/Script/AIModule.BlackboardKeyType_Class"):
-        _property_shape(properties, ("BaseClass", "DefaultValue"), path)
-        properties["BaseClass"] = _require_reference(properties["BaseClass"], "ClassRef", f"{path}/BaseClass", "BlackboardData.InvalidEntryField")
-        if properties["DefaultValue"] is not None: properties["DefaultValue"] = _require_reference(properties["DefaultValue"], "AssetRef" if class_path.endswith("_Object") else "ClassRef", f"{path}/DefaultValue", "BlackboardData.InvalidEntryField")
-    elif class_path == "/Script/AIModule.BlackboardKeyType_Enum":
-        _property_shape(properties, ("EnumType", "EnumName", "DefaultValue"), path)
-        properties["EnumType"] = _require_reference(properties["EnumType"], "AssetRef", f"{path}/EnumType", "BlackboardData.InvalidEntryField")
-        _expect(type(properties["DefaultValue"]) is str, f"{path}/DefaultValue", "BlackboardData.InvalidEntryField", "Enum DefaultValue must be an exact string")
-        expected_name = "" if properties["EnumType"]["Path"].startswith("/Game/") else properties["EnumType"]["Path"]
-        _expect(all((type(properties["EnumName"]) is str, properties["EnumName"] == expected_name)), f"{path}/EnumName", "BlackboardData.InvalidEntryField", "EnumName must match EnumType authority")
+    if class_path in _OBJECT_KEY_TYPES:
+        _object_properties(properties, class_path, path)
+    elif class_path == _ENUM_KEY_TYPE:
+        _enum_properties(properties, path)
+    else:
+        _unrepresented_properties(properties, class_path, path)
     return properties
 
 
@@ -276,7 +338,9 @@ def _current_entry(value: object, index: int) -> dict:
     if type(value) is not dict or set(value) != set(_ENTRY_FIELDS):
         raise _invalid_snapshot(path, "entry readback must be exact BlackboardEntryV2")
     try:
-        canonical = _canonical_entry(value, index)
+        # The entry's authored rules are judged once, by the document the snapshot becomes (at its own index).
+        with settled():
+            canonical = _canonical_entry(value, index)
     except AssetDocumentContractError:
         raise _invalid_snapshot(path, "entry readback is not canonical") from None
     return canonical
@@ -304,14 +368,25 @@ def _snapshot_names(value: object) -> list[str]:
     return names
 
 
-def _snapshot_entries(values: object, names: list[str]) -> list[dict]:
+def _entry_warnings(result: dict, index: int) -> tuple[dict, ...]:
+    """The read warnings an entry readback reports (optional), each {"code", "message", "path"} with the path
+    relative to the entry."""
+    warnings = result.get("warnings", [])
+    valid = type(warnings) is list and all(
+        type(item) is dict and set(item) == {"code", "message", "path"} and all(type(field) is str for field in item.values())
+        and item["path"].startswith("/") for item in warnings)
+    _expect(valid, f"/Current/Entries/{index}/warnings", "BlackboardData.InvalidCurrentSnapshot", "entry read warnings have the wrong shape")
+    return tuple(warnings)
+
+
+def _snapshot_entries(values: object, names: list[str]) -> list[tuple[dict, tuple[dict, ...]]]:
     _expect(all((type(values) is list, len(values) == len(names) if type(values) is list else False)), "/Current/Entries", "BlackboardData.InvalidCurrentSnapshot", "one entry result is required per ordered name")
-    entries: list[dict] = []
+    entries: list[tuple[dict, tuple[dict, ...]]] = []
     for index, result in enumerate(values):
-        _expect(all((type(result) is dict, set(result) == {"entry"} if type(result) is dict else False)), f"/Current/Entries/{index}", "BlackboardData.InvalidCurrentSnapshot", "entry result has the wrong shape")
+        _expect(all((type(result) is dict, "entry" in result and set(result) <= {"entry", "warnings"} if type(result) is dict else False)), f"/Current/Entries/{index}", "BlackboardData.InvalidCurrentSnapshot", "entry result has the wrong shape")
         canonical = _current_entry(result["entry"], index)
         _expect(canonical["Name"] == names[index], f"/Current/Entries/{index}/Name", "BlackboardData.InvalidCurrentSnapshot", "entry order does not match local names")
-        entries.append(canonical)
+        entries.append((canonical, _entry_warnings(result, index)))
     return entries
 
 
@@ -342,9 +417,11 @@ def parse_blackboard_snapshot(
     entries = _snapshot_entries(entry_results, names)
     authored_entries: list[dict] = []
     authored_names: list[str] = []
-    for entry in entries:
+    for entry, warnings in entries:
         if _is_engine_derived_self_actor(entry):
             continue
+        for warning in warnings:
+            authored_rule(f"/Body/Keys/{len(authored_entries)}{warning['path']}", warning["code"], warning["message"])
         authored_entries.append(entry)
         authored_names.append(entry["Name"])
     return BlackboardSnapshot(
@@ -574,13 +651,26 @@ def _recorded_snapshots(context: GenericPrimitiveContext, records: dict, order: 
 
 
 def _chain_names(records: dict, route: list[str]) -> set[str]:
-    inherited: set[str] = set()
+    """The names the boards on ``route`` declare. A name declared again further up the chain is a shadow the engine
+    keeps (the nearer key wins); it is reported, not refused, when the asset is read."""
+    owners: dict[str, str] = {}
     for board_path in route:
         names = records[board_path][3]
         for name in names:
-            _expect(name.casefold() not in inherited, "/Current/InheritedNames", "BlackboardData.InheritedShadow", "Parent chain contains a shadowed Name")
-            inherited.add(name.casefold())
-    return inherited
+            owner = owners.get(name.casefold())
+            if owner is None:
+                owners[name.casefold()] = board_path
+                continue
+            if owner == route[0] and name != _SELF_ACTOR_NAME:
+                listed = [local for local in records[owner][3] if local != _SELF_ACTOR_NAME]
+                index = next(i for i, local in enumerate(listed) if local.casefold() == name.casefold())
+                where = f"/Body/Keys/{index}/Name"
+            else:
+                where = "/Body/Parent"
+            authored_rule(where, "BlackboardData.InheritedShadow",
+                          f"Key '{name}' of {owner} shadows the key of the same name inherited from {board_path}; "
+                          "the nearer key is used.")
+    return set(owners)
 
 
 def _preflight_observation(context: GenericPrimitiveContext, target: str, desired_parent: str | None, desired_entries: list[dict]) -> BlackboardSnapshot:
@@ -589,17 +679,18 @@ def _preflight_observation(context: GenericPrimitiveContext, target: str, desire
     desired_route = [] if desired_parent is None else _record_chain(context, desired_parent, records, target)
     _chain_names(records, current_route)
     inherited = _chain_names(records, desired_route)
-    _reject_inherited_shadow(desired_entries, inherited)
-    join = next((path for path in desired_route if path in current_route), None)
-    prefix = len(current_route) if join is None else current_route.index(join)
-    order = current_route[:prefix] + desired_route[:len(desired_route) if join is None else desired_route.index(join)] + current_route[prefix:]
-    snapshots = _recorded_snapshots(context, records, order)
-    return snapshots[target]
+    _reject_inherited_shadow(desired_entries, inherited, records[target][3] if desired_parent == records[target][2] else ())
+    # Ancestors contribute key names only: their entries are not read, so a key an ancestor's reader cannot read
+    # does not stop its descendants.
+    return _recorded_snapshots(context, records, [target])[target]
 
 
-def _reject_inherited_shadow(entries: list[dict], inherited_names: set[str]) -> None:
+def _reject_inherited_shadow(entries: list[dict], inherited_names: set[str], current_names=()) -> None:
+    """Refuses a local key named like an inherited one, except a key the target already has under the same Parent
+    (a shadow the asset already holds)."""
+    kept = {name.casefold() for name in current_names}
     for index, item in enumerate(entries):
-        if item["Name"].casefold() in inherited_names:
+        if item["Name"].casefold() in inherited_names and item["Name"].casefold() not in kept:
             raise contract_error(f"/Body/Keys/{index}/Name", "BlackboardData.InheritedShadow", "local key shadows Parent")
 
 
@@ -755,18 +846,20 @@ class BlackboardDataProfileCandidate:
             records: dict = {}
             desired_parent_path = None if desired_parent is None else desired_parent["Path"]
             desired_route = [] if desired_parent_path is None else _record_chain(context, desired_parent_path, records, target)
-            _reject_inherited_shadow(canonical["Body"]["Keys"], _chain_names(records, desired_route))
+            kept = [item["Name"] for item in current.entries] if desired_parent_path == current.parent_path_or_null else ()
+            _reject_inherited_shadow(canonical["Body"]["Keys"], _chain_names(records, desired_route), kept)
             return current
         return _preflight_observation(context, target, None if desired_parent is None else desired_parent["Path"], canonical["Body"]["Keys"])
 
     def observe_current_snapshot(
         self, *, target: str, context: GenericPrimitiveContext
     ) -> BlackboardSnapshot:
+        # Preflight reads the asset as it is to settle authored-rule findings before anything changes.
         _expect(
-            context.phase is RuntimePhase.VERIFY,
+            context.phase in (RuntimePhase.VERIFY, RuntimePhase.PREFLIGHT),
             "/Phase",
             "BlackboardData.InvalidReadOnlyPhase",
-            "read-only Blackboard observation requires VERIFY phase",
+            "read-only Blackboard observation requires VERIFY or PREFLIGHT phase",
         )
         return _preflight_observation(
             context, _target_object_path(_require_target(target)), None, []

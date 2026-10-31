@@ -3,7 +3,7 @@
 上位规则：[设计规则](asset-document-design-rules.md) §3（回滚 = 功能等价）、§5（支持矩阵、能力不倒退）。
 图原子操作契约：[graph primitives v1](asset-document-graph-primitives.md)。
 
-`/Script/Engine.Blueprint`（精确类；Widget/Anim Blueprint 不在本矩阵内）由 Python Profile
+`/Script/Engine.Blueprint`（以及没有自己 Profile 的 Blueprint 子类，见下表；Widget/Anim Blueprint 不在本矩阵内）由 Python Profile
 `profile.ublueprint.v2`（`Content/Python/asset_document/profiles/ublueprint_runtime.py`）承担读 / 新建 / 修改。
 旧 C++ `FUBlueprintAssetDocumentProfile` 代码保留但不再注册（同一类型只有一个可写 runtime）。
 
@@ -15,27 +15,40 @@
 | 编辑操作（人在编辑器中常做） | Body 位置 | 旧 C++ | Python | 说明 |
 |---|---|---|---|---|
 | 新建 Blueprint（指定父类） | `ParentClass` + `Action:Create/CreateOrUpdate` | ✅ | ✅ | 一次 ApplyFile 新建并填充全部 Body；与 Content Browser 相同走 `UBlueprintFactory`（lifecycle `blueprint_exact.v1` / `blueprint_factory.v1`） |
+| Blueprint 子类（Editor Utility Blueprint、Gameplay Ability Blueprint 等没有自己 Profile 的类） | 整个文档；`Class` 保持资产自身的类 | ➖ | ✅ 读与修改；➖ 新建 | 原生路由按最近的、有 Profile 的 Blueprint 祖先类派发（`FindAssetDocumentBlueprintProfileClass`，请求的 `RequestedProfileClassPath`）。新建 → `UBlueprint.SubclassCreateUnsupported`（在编辑器里建好，再 Extract / Update）。Level Script Blueprint 与没有 Profile 的 RigVM Blueprint → `ClassResolve.ProfileRequired`。UE 测试 `UEAssetDoc.Tolerant.BlueprintSubclass.EditorUtilityBlueprint` |
 | 新建宏库 / Blueprint 接口 / 函数库 | `BlueprintType`: `"MacroLibrary"` \| `"Interface"` \| `"FunctionLibrary"`（缺省 `"Normal"`） | ➖ | ✅ | 与 Content Browser 相同用各自的 factory（`UBlueprintMacroFactory` / `UBlueprintInterfaceFactory` / `UBlueprintFunctionLibraryFactory`，lifecycle 可选 handle `factory_class`），新资产没有事件图 / 构造脚本。宏库父类按 Blueprint Class 的类选择器选（不能是 LevelScriptActor / AnimInstance / Interface 子类）；接口父类只能是 `/Script/CoreUObject.Interface`、函数库只能是 `/Script/Engine.BlueprintFunctionLibrary`（Create 省略 `ParentClass` 时即取此值）。各类型只有编辑器提供的区域：宏库只有 `MacroGraphs`，接口只有 `FunctionGraphs`（签名）与 `ClassDefaults`，函数库只有 `FunctionGraphs`；其它区域非空 → `UBlueprint.BlueprintTypeRegionUnsupported`（成员原语对变量 / 接口同样拒绝：`BlueprintMember.BlueprintTypeUnsupported`；图原语按 `NewDocument_IsVisibleForType` 拒绝宏库的函数图、非 Normal 类型的宏图）。类型创建后不可改：Update 写了不同类型 → `UBlueprint.BlueprintTypeImmutable`；省略 = 保留。Extract 对 Normal / const（父类为 const 类）省略该 key |
 | 改父类（Reparent） | `ParentClass` | ✅ | ✅ | `ParentClass` 可写类路径字符串，兼容旧 `{"Kind":"ClassRef","Class":...}` |
 | 实现 / 移除接口 | `ImplementedInterfaces` | ✅ | ✅ | 元素可写类路径字符串，兼容旧 `{"Interface":{ClassRef}}` |
 | 变量：增删、改类型、默认值、Category、Tooltip | `Variables` | ✅（仅标量 / object / class） | ✅ | 类型复用图 pin 类型写法（`float`、`object:/Script/Engine.Actor`、`array:int`、完整对象）；兼容旧 `{"PinCategory",...}` |
 | 变量：容器（Array/Set/Map）、struct、enum、soft 引用 | `Variables[].Type` | ➖ | ✅ | |
 | 变量：Instance Editable / Read Only / Expose on Spawn / Private | `Variables[]` 布尔字段 | ➖ | ✅ | |
+| 变量 Details 其余设置：Replication（None / Replicated / RepNotify + 函数）、Replication Condition、Config、Transient、SaveGame、Advanced Display、Expose to Cinematics、Deprecated + 消息、其它元数据（Slider / Value Range、Units、Bitmask、Multi line…） | `Variables[]` 的 `Replication` / `RepNotifyFunc` / `ReplicationCondition` / `Config` / `Transient` / `SaveGame` / `AdvancedDisplay` / `ExposeToCinematics` / `Deprecated` / `DeprecationMessage` / `Metadata` | ➖ | ✅ | 省略 = 保留现值（旧文档不含这些键）；`Metadata` 给出即完整（未列出的元数据项删除）。按 `FBlueprintVarActionDetails` 的 setter（`SetBlueprintVariableRepNotifyFunc`、`SetVariableSaveGameFlag`…）；RepNotify 不新建 OnRep 函数（由 `FunctionGraphs` 列出）。UE 测试 `UEAssetDoc.Fidelity.Blueprint.VariableDetails` |
 | 仅大小写的改名（变量、组件、事件分发器、Timeline、函数/宏/事件图、函数与分发器参数、自定义事件） | 同一条目，名字只差大小写 | ➖ | ✅ | 按名字识别，FName 不区分大小写；差异按精确字符串检测。成员是同一个对象（GUID、签名图、SCS 节点、Timeline 模板、节点引用保留），Extract 显示新大小写，再次 Apply 为 no-op。原语 `blueprint.member.rename.v1`（`RenameMemberVariable` / `RenameComponentMemberVariable` / `RenameTimeline`），图用 `graph.rename.v1`，参数用 `SetUserPins` 的原地改名。其它名字的改名仍是删除 + 新增（变量改名并保留引用不支持，需在编辑器里做后重新 Extract） |
 | 事件图：任意可从菜单放置的节点（Branch、数学运算、宏、Cast…） | `UbergraphPages` | 部分（5 种 Tier-1 节点类） | ✅ | 节点按 action key 放置（`K2:Branch`、`K2:PromotableOperator:Multiply`…） |
+| 节点身份：文档不写 `NodeGuid` 时 | 节点 `Id` + `Action` | ➖ | ✅ | 匹配顺序：`NodeGuid` → 隐式角色 → 上次 Apply 记录的 `Id`（`graph.finalize.v1` 的 `node_meta`，且 action 相同、唯一）→ 两侧都唯一的语义键。两个同 action 的节点（两个 Print String）在 Apply 记录过 Id 之后去掉 `NodeGuid` 仍各自对应，重放为 no-op，禁用状态等文档不携带的状态保留；未记录 Id（编辑器放置后从未 Apply）或改了 Id 时只能删除 + 新建，计划中每对同 action 的删除 + 新建报警告 `Graph.NodeRecreated`（新节点路径）。UE 测试 `UEAssetDoc.Codec.Blueprint.NodeDocIdIdentity`，Python `test_graph_node_identity.RecordedIdTests` |
 | 自定义事件（含参数） | `UbergraphPages[].Nodes` | ➖ | ✅ | `K2:CustomEvent` + `Name` |
 | 函数：新建、参数 / 返回值、Pure/Const/Access/Category | `FunctionGraphs[].Signature` | 图体部分支持，签名 ➖ | ✅ | |
+| 函数 Details 其余标志：Exec、Thread Safe、Unsafe During Actor Construction、Deprecated + 消息、Compact Node Title、Instance Color | `Signature` 的 `Exec` / `ThreadSafe` / `UnsafeDuringActorConstruction` / `Deprecated` / `DeprecationMessage` / `CompactNodeTitle` / `InstanceColor` | ➖ | ✅ | 省略 = 保留现值（旧文档不含这些键）；写 `false` / `""` 清除。按 `FBlueprintGraphActionDetails` 的各 setter 写入入口节点元数据 / `FUNC_Exec`。UE 测试 `UEAssetDoc.Fidelity.Blueprint.GraphDetails` |
 | 宏图 | `MacroGraphs` | 部分 | ✅ | |
+| 宏 Details：Description、Category、Keywords、Compact Node Title、Instance Color | `MacroGraphs[].Signature` 的 `Tooltip` / `Category` / `Keywords` / `CompactNodeTitle` / `InstanceColor` | ➖ | ✅ | 入口 tunnel 的元数据（`FBlueprintEditorUtils::GetGraphFunctionMetaData`）；省略 = 保留；宏图写函数专有标志（`Pure` 等）→ `Graph.InvalidSignature` |
 | Select 节点的 Index 类型（pin 上的类型选择器：bool / byte / 枚举 / int / int64） | 节点 `PinTypes: {"Index": "byte:/Game/E_Mode.E_Mode"}` | ➖ | ✅ | `graph.node.pin_type.set.v1`（`SGraphPinIndex::OnTypeChanged`），在 spawn 之后、默认值与连线之前设置，枚举的选项 pin（`NewEnumerator0`…）随之出现；Extract 写出已选定（非 wildcard）的类型；live Select 已是另一类型时重建节点（编辑器不能改已选定的类型） |
 | 组件：新增 / 删除 / 挂接（OwnedSCS） | `Components` | ✅ | ✅ | `{"Name","Class","AttachTo","Properties"}`；兼容旧 `Key/Scope/Root`（多个 Root、Root+AttachTo、Inherited/Native 带 AttachTo 均拒绝：`UBlueprint.InvalidAttach`） |
 | 组件属性覆盖（自有模板） | `Components[].Properties` | ✅ | ✅ | |
 | 父 Blueprint 组件覆盖（Inherited） | `Components[]` + `Scope:"Inherited"` | ✅ | ✅ | |
 | 原生组件覆盖（Native，如 CharacterMovement） | `Components[]` + `Scope:"Native"` | ✅ | ✅ | |
+| 组件变量的 Category / Tooltip（Components 面板 Details > Variable） | 自有组件行的 `Category` / `Tooltip` | ➖ | ✅ | `blueprint.member.component.variable.set.v1`（`SetBlueprintVariableCategory` / `SetBlueprintVariableMetaData`，存于 SCS 节点）；省略 = 保留。UE 测试 `UEAssetDoc.Fidelity.Blueprint.ComponentDetails` |
+| DefaultSceneRoot 的属性（Mobility 等） | `Components[]` + `Scope:"Default"` | ➖ | ✅ | 值不同于类默认时才提取；列出时 `Properties` 为完整状态，未列出 = 保留；没有其它根组件时编辑器才保留它 |
 | Class Defaults（CDO 属性） | `ClassDefaults` | ✅（无 struct/容器） | ✅ | 值为 typed JSON（struct → 对象，容器 → 数组） |
 | Class Settings（Description / Category / Namespace…） | `Properties` | ✅ | ✅ | UBlueprint 可编辑反射属性 |
 | 事件分发器：增删、签名（Inputs）、Category、Tooltip | `EventDispatchers` | ➖ | ✅ | `[{"Name","Inputs":[{"Name","Type"}],"Category","Tooltip"}]`；成员变量（`PC_MCDelegate`）与签名图同建同删（`FBlueprintEditor::OnAddNewDelegate` / `SMyBlueprint::OnDeleteDelegate`）；无复制设置（编辑器对分发器禁用）；不同名字的改名 = 删除 + 新增，仅大小写不同是同一分发器的改名（见 §1 大小写改名）；与变量同名 → `UBlueprint.DuplicateName` |
 | 分发器节点：Call / Bind / Unbind / Unbind all / Assign / 分发器事件 | `UbergraphPages[].Nodes` | ➖ | ✅ | `K2:CallDelegate:OnDied`、`K2:AddDelegate:…`、`K2:RemoveDelegate:…`、`K2:ClearDelegate:…`、`K2:AssignDelegate:…`（编辑器随之放置的 `<名>_Event` 自定义事件由文档中连到其 `Delegate` pin 的节点接管，文档未列出则删除）、`K2:CustomEvent:OnDied`（拖放 “Event” = 带分发器签名、名为 `OnDied_Event` 的自定义事件）；extract 统一写成 `K2:CustomEvent` + `Name` + `Inputs` |
 | 自定义事件参数 | `UbergraphPages[].Nodes[].Inputs` | ➖ | ✅ | 仅 `K2:CustomEvent`；`[{"Name","Type"}]`，无默认值；只在文档写出时比较 |
+| 纯 Cast（右键 Convert to pure cast） | `Nodes[].Properties.Pure`（Cast 默认 `false`） | ➖ | ✅ | K2 适配器的 `Pure` 节点设置扩展到 `UK2Node_DynamicCast`（`SetPurity`，同 `TogglePurity`）；只在为纯 Cast 时写出；省略 = 保留。UE 测试 `UEAssetDoc.Fidelity.Blueprint.PureCast` |
+| 节点 Details 面板设置（Switch on String 的 `PinNames`/大小写、Input Key 修饰键、Math Expression 表达式、Make/Break Struct 引脚显隐） | `Nodes[].Properties.<属性名>`；Make/Break Struct：`Properties.HiddenFields` | ✅ | ✅ | K2 适配器报告 UK2Node 子类上声明的可编辑属性中与类默认值不同者（排除 EditConst、FKey 类型与 `ShowPinForProperties`），设置走反射路径（`PostEditChangeProperty` 重建节点）；`HiddenFields` 列出 Details 中取消勾选的成员引脚。省略 = 保留（旧文档兼容）。Get Class Defaults 的引脚显隐尚未表示。UE 测试 `UEAssetDoc.Fidelity.Blueprint.NodeDetails` |
+| Add Component 节点的组件模板属性（Static Mesh、材质、碰撞） | `Nodes[].TemplateProperties` | ✅ | ✅ | K2 适配器在节点描述中报告模板中与组件类默认值不同的可编辑属性（`template_changed`），稀疏写出；设置走 `template` 属性容器。省略 = 保留。UE 测试 `UEAssetDoc.Fidelity.Blueprint.AddComponentTemplate` |
+| 节点启用状态（右键 Enable / Disable / Development Only） | `Nodes[].Enabled`：`Disabled` / `DevelopmentOnly` / `Enabled` | ➖ | ✅ | `graph.node.layout.set.v1` 的 `enabled_state`（`UEdGraphNode::SetEnabledState`，结构性修改，同 `FBlueprintEditor::OnSetEnabledStateForSelectedNodes`）；只写出用户设置的非 Enabled 状态（新蓝图的占位事件不写出）；省略 = 保留。UE 测试 `UEAssetDoc.Fidelity.Blueprint.NodeEnabledState` |
+| 新 Actor 蓝图的占位事件（灰色 BeginPlay / ActorBeginOverlap / Tick，ghost 节点） | `Nodes[].Ghost: true` + `Position` | ✅ | ✅ | 提取写出 `"Ghost": true`（Id 排在真实节点之后）；列出的图省略即删除（同编辑器 Delete，占位事件不参与编译）；列出的真实同名事件复用占位节点转为真实节点；新节点带 `Ghost` 时放置后由 `graph.node.layout.set.v1` 的 `enabled_state: "ghost"` 设为占位（`MakeAutomaticallyPlacedGhostNode`）。旧文档同样按省略删除。UE 测试 `UEAssetDoc.Blueprint.Authoring.GhostEvents` |
+| 自定义事件 Details：Replicates / Reliable / Call In Editor / Deprecated 与消息 | `Nodes[].Properties`：`Replication`（None / Multicast / Server / Client）、`Reliable`、`CallInEditor`、`Deprecated`、`DeprecationMessage` | ➖ | ✅ | K2 适配器的节点设置（`SetNodeSetting`，同 `FBlueprintGraphActionDetails` 的写法）；只写出非默认值，省略 = 保留；覆盖父类事件的复制设置取父类的、不可改。UE 测试 `UEAssetDoc.Fidelity.Blueprint.CustomEventSettings` |
 | Timeline：增删、Length / Use Last Keyframe / AutoPlay / Loop / Replicated / Ignore Time Dilation / Tick Group | `Timelines` | ➖（非空拒绝） | ✅ | 模板（`UTimelineTemplate`）与 `K2Node_Timeline` 同建同删；新节点按文档 `UbergraphPages` 中同名 `K2:Timeline` 节点放置，否则放在第一个事件图右侧；两区都给出时名字必须一致（`UBlueprint.TimelineNodeMismatch`）；`K2:Timeline` 节点必须写 `Name` |
 | Timeline 轨道：Float / Vector / LinearColor / Event，关键帧，外部曲线资产，显示顺序 | `Timelines[].Tracks` | ➖ | ✅ | `Keys` 为数组（Float/Event）或按通道 `{X,Y,Z}` / `{R,G,B,A}`；或 `Curve` 指向外部曲线（内外切换同 `STimelineEdTrack`）；关键帧字段同 CurveFloat；Cubic + Auto/SmartAuto 的切线由曲线编辑器推导，不提取不比较；Constant 邻接的切线清零与 `FRichCurve::AutoSetTangents` 一致 |
 | 函数局部变量：增删、类型、默认值、Category、Tooltip、顺序 | `FunctionGraphs[].LocalVariables` | ➖ | ✅ | `[{"Name","Type","Default","Category","Tooltip"}]`；省略 = 保留，`[]` = 清空；按 `FBlueprintEditorUtils` 局部变量 API 编辑，其 Get / Set 节点为 `K2:Get:<名>` / `K2:Set:<名>`；map 写作 `{"Category": <键类型>, "Container": "map", "ValueType": <值类型>}`（同成员变量） |
@@ -53,7 +66,7 @@
 | 省略 `EventDispatchers` / `Timelines` | — | 保留现状（`[]` 删除全部） |
 | 省略 `FunctionGraphs` / `MacroGraphs` | 保留现状 | 保留现状 |
 | 给出某个 key | 该区域的完整期望状态 | 同左（未列出的变量 / 组件 / 图被删除，`ClassDefaults` 未列出的属性恢复为父类值） |
-| `Variables[]` 某行省略 Category / Tooltip / 布尔标志 | 恢复默认 | 恢复默认（与 extract 只输出非默认值一致）；省略 `DefaultValue` 保留现值 |
+| `Variables[]` 某行省略 Category / Tooltip / 布尔标志 | 恢复默认 | 恢复默认（与 extract 只输出非默认值一致）；省略 `DefaultValue` 与 Details 其余设置（`Replication`、`SaveGame`、`Metadata`…）保留现值 |
 | `EventDispatchers[]` / `Timelines[]` 某行省略字段 | — | 恢复默认（行 = 完整的分发器 / Timeline；省略 `Tracks` = 无轨道，省略 `Inputs` = 无参数） |
 | 文档顶层 `Properties`（Class Settings） | 合并 | 合并：只写列出的属性 |
 | `Inherited` / `Native` 组件行省略 | 覆盖被清除 | 覆盖被清除（Inherited 删除 ICH 记录，Native 属性恢复父类值） |

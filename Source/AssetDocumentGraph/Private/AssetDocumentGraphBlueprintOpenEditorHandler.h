@@ -6,6 +6,7 @@
 #include "CoreMinimal.h"
 
 class IAssetDocumentOpenEditorHandler;
+class UBlueprint;
 
 namespace UE::AssetDocument::Graph
 {
@@ -17,4 +18,8 @@ namespace UE::AssetDocument::Graph
 // handler closes the tabs of graphs that are no longer the Blueprint's and refreshes the editor as its Undo does
 // (RefreshEditors: My Blueprint, Components tree, details, preview).
 TSharedRef<IAssetDocumentOpenEditorHandler> MakeBlueprintOpenEditorHandler();
+
+// Clears the node selection of every graph tab of the Blueprint editor open on Blueprint, as a click on empty graph
+// space does. Nothing when no Blueprint editor is open on it.
+void ClearOpenEditorGraphSelection(const UBlueprint& Blueprint);
 } // namespace UE::AssetDocument::Graph

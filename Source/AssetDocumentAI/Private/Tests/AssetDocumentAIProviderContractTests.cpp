@@ -310,7 +310,8 @@ void AssertParentSetV2Descriptor(
 			TEXT("AIProvider.Blackboard.ParentWriteRejected"),
 			TEXT("AIProvider.Blackboard.DerivedRefreshFailed"),
 			TEXT("AIProvider.Blackboard.ParentReadbackUnavailable"),
-			TEXT("AIProvider.Blackboard.ParentChangedSetMismatch")});
+			TEXT("AIProvider.Blackboard.ParentChangedSetMismatch"),
+			TEXT("Graph.PieActive"), TEXT("AIProvider.Blackboard.LayoutInUse")});
 	Test.TestEqual(TEXT("parent set v2 uses the exact public authority"),
 		Descriptor.Admission.ExportedAuthoritativeApi, ExactApi);
 	Test.TestEqual(TEXT("parent set v2 uses exact identity contract"),
@@ -373,7 +374,8 @@ void AssertUpdateExistingV2Descriptor(
 			TEXT("AIProvider.Blackboard.KeyClassMismatch"),
 			TEXT("AIProvider.Blackboard.EntryMetadataForwardWriteUnavailable"),
 			TEXT("AIProvider.Blackboard.DerivedRefreshFailed"),
-			TEXT("AIProvider.Blackboard.EntryChangedSetMismatch")});
+			TEXT("AIProvider.Blackboard.EntryChangedSetMismatch"),
+			TEXT("Graph.PieActive"), TEXT("AIProvider.Blackboard.LayoutInUse")});
 	Test.TestEqual(TEXT("update-existing v2 uses the exact identity contract"),
 		Descriptor.Admission.IdentityLifetimeContractId,
 		FString(TEXT("ai.blackboard.entry.update_existing.v2.identity.ha-request-transaction-revision.v2")));
@@ -431,7 +433,8 @@ void AssertEntryAddV2Descriptor(
 			TEXT("AIProvider.Blackboard.KeyInherited"),
 			TEXT("AIProvider.Blackboard.EntryMaterializationUnavailable"),
 			TEXT("AIProvider.Blackboard.DerivedRefreshFailed"),
-			TEXT("AIProvider.Blackboard.EntryChangedSetMismatch")});
+			TEXT("AIProvider.Blackboard.EntryChangedSetMismatch"),
+			TEXT("Graph.PieActive"), TEXT("AIProvider.Blackboard.LayoutInUse")});
 	Test.TestEqual(TEXT("entry add v2 is admitted only through the staging bridge"),
 		Descriptor.Admission.Disposition, EAssetDocumentPrimitiveDisposition::AdmittedBridge);
 	Test.TestEqual(TEXT("entry add v2 bridge authority path is exact"),
@@ -501,7 +504,8 @@ void AssertEntryReplaceClassV2Descriptor(
 			TEXT("AIProvider.Blackboard.KeyClassReplacementUnavailable"),
 			TEXT("AIProvider.Blackboard.EntryMaterializationUnavailable"),
 			TEXT("AIProvider.Blackboard.DerivedRefreshFailed"),
-			TEXT("AIProvider.Blackboard.EntryChangedSetMismatch")});
+			TEXT("AIProvider.Blackboard.EntryChangedSetMismatch"),
+			TEXT("Graph.PieActive"), TEXT("AIProvider.Blackboard.LayoutInUse")});
 	Test.TestEqual(TEXT("replace-class v2 is admitted only through the staging bridge"),
 		Descriptor.Admission.Disposition, EAssetDocumentPrimitiveDisposition::AdmittedBridge);
 	Test.TestEqual(TEXT("replace-class v2 bridge authority path is exact"),
@@ -569,7 +573,8 @@ void AssertEntryRemoveV2Descriptor(
 			TEXT("AIProvider.Blackboard.KeyInherited"),
 			TEXT("AIProvider.Blackboard.OrderedKeysLifecycleUnavailable"),
 			TEXT("AIProvider.Blackboard.DerivedRefreshFailed"),
-			TEXT("AIProvider.Blackboard.EntryChangedSetMismatch")});
+			TEXT("AIProvider.Blackboard.EntryChangedSetMismatch"),
+			TEXT("Graph.PieActive"), TEXT("AIProvider.Blackboard.LayoutInUse")});
 	Test.TestEqual(TEXT("entry remove v2 is admitted only through the publication bridge"),
 		Descriptor.Admission.Disposition, EAssetDocumentPrimitiveDisposition::AdmittedBridge);
 	Test.TestEqual(TEXT("entry remove v2 bridge authority path is exact"),
@@ -636,7 +641,8 @@ void AssertLocalKeysReorderV2Descriptor(
 			TEXT("AIProvider.Blackboard.OrderedKeysPermutationInvalid"),
 			TEXT("AIProvider.Blackboard.OrderedKeysLifecycleUnavailable"),
 			TEXT("AIProvider.Blackboard.DerivedRefreshFailed"),
-			TEXT("AIProvider.Blackboard.EntryChangedSetMismatch")});
+			TEXT("AIProvider.Blackboard.EntryChangedSetMismatch"),
+			TEXT("Graph.PieActive"), TEXT("AIProvider.Blackboard.LayoutInUse")});
 	Test.TestEqual(TEXT("local-keys reorder v2 is admitted through the publication bridge"),
 		Descriptor.Admission.Disposition, EAssetDocumentPrimitiveDisposition::AdmittedBridge);
 	Test.TestEqual(TEXT("local-keys reorder v2 bridge authority path is exact"),

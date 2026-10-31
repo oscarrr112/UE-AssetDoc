@@ -14,13 +14,16 @@ from __future__ import annotations
 import re
 
 from asset_document.canonical.document_codec import DocumentCodec
+from asset_document import class_routing
 from asset_document.diagnostics import (
-    AssetDocumentContractError, contract_error, contract_errors, primitive_error, with_diagnostics,
+    AssetDocumentContractError, DiagnosticSeverity, contract_error, contract_errors, primitive_error, with_diagnostics,
 )
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.dto import PrimitiveRequirement
 from asset_document.graphs.executor import LINK_CHECK, GraphExecutor, graph_requirements
+from asset_document.graphs import layout_check
 from asset_document.graphs.extract import extract_graphs
+from asset_document.markers import is_marker
 from asset_document.graphs.live import LiveAsset
 from asset_document.graphs.reconcile import PlanOp, pending_relayout
 from asset_document.graphs.schemas.k2 import K2_ADAPTER, SECTIONS, SECTION_BY_ROLE, decode_body, encode_graph
@@ -73,7 +76,7 @@ LIFECYCLE = ("editor.blueprint.scratch.clone.v1", "editor.blueprint.scratch.crea
              "editor.blueprint.asset.create.v1", "editor.asset.rollback_created.v1")
 MEMBER_PRIMITIVES = tuple(f"blueprint.member.{name}.v1" for name in (
     "query", "parent.set", "interface.add", "interface.remove", "variable.set", "variable.remove",
-    "component.add", "component.attach", "component.remove", "property.set",
+    "component.add", "component.attach", "component.variable.set", "component.remove", "property.set",
     *dispatchers.PRIMITIVES, *timelines.PRIMITIVES, *renames.PRIMITIVES))
 REQUIREMENTS = (tuple(PrimitiveRequirement(item, 1, ROUTE) for item in (CLASS_RESOLVE, RESOLVE, *LIFECYCLE))
                 + graph_requirements(ROUTE)
@@ -202,8 +205,8 @@ def _validate_header(document) -> None:
     if type(document.get("SchemaVersion")) is not int or document["SchemaVersion"] != 1:
         raise _error("/SchemaVersion", "SchemaVersion must be 1.", "Meta.InvalidSchemaVersion")
     _require_target(document.get("Target"))
-    if document.get("Class") != UBLUEPRINT_CLASS:
-        raise _error("/Class", "Class must be /Script/Engine.Blueprint.", "UBlueprint.ClassMismatch")
+    if not class_routing.accepts(UBLUEPRINT_CLASS, document.get("Class")):
+        raise _error("/Class", f"Class must be {class_routing.document_class(UBLUEPRINT_CLASS)}.", "UBlueprint.ClassMismatch")
     if document.get("Action") not in {item.value for item in DocumentAction}:
         raise _error("/Action", "Action is Create, Update or CreateOrUpdate.", "UBlueprint.InvalidAction")
     for key in ("Definitions", "Properties"):
@@ -287,6 +290,7 @@ def apply(document, read, mutable, context) -> tuple:
     target = document["Target"]
     blueprint = _Members(context, read, mutable)
     first = blueprint.query()
+    members.refuse_unrepresented_graphs(first)
     check_blueprint_type(body, first)
     # Each stage plans from a fresh query: a reparent changes inherited members, removals promote children.
     blueprint.run(members.plan_header(document.get("Properties", {}), body, first))
@@ -298,7 +302,7 @@ def apply(document, read, mutable, context) -> tuple:
                   + members.plan_interfaces(body, query) + members.plan_variables(body, query)
                   + dispatchers.plan_sets(body, query) + members.plan_component_structure(body, query))
     query = blueprint.query()
-    blueprint.run(members.plan_component_attach(body, query)
+    blueprint.run(members.plan_component_attach(body, query) + members.plan_component_variables(body, query)
                   + timelines.plan_sets(body, query, timelines.timeline_nodes(graphs)))
     # Component values before the graphs: the compile that finalizes them validates the components
     # (a Mover component's starting mode must name one of its instanced movement modes).
@@ -342,19 +346,50 @@ def _link_check_invoke(read, context, requirements=None):
     return invoke
 
 
-def validate_links(document, read, context, *, skip=None, requirements=None) -> None:
+def validate_links(document, read, context, *, skip=None, requirements=None) -> list:
     """Validate's graph check of the K2 graph sections (ublueprint_link_check), read on ``read``: the existing target
     or a trial Blueprint of the same class (trial_parent_context). Shared by the Widget and Anim Blueprint Profiles
     (only their K2 sections are checked); ``skip(key)``: keys left to Apply; ``requirements``: the calling Profile's
-    requirement table (it declares graph.link.check.v1)."""
+    requirement table (it declares graph.link.check.v1). Raises the errors found, returns the warnings."""
     target = document["Target"]
     body = document["Body"]
     graphs, _ = decode_body({section: body[section] for section in GRAPH_SECTIONS if section in body},
                             self_class=self_class(target))
     if not graphs:
-        return
-    link_check.check_links(_link_check_invoke(read, context, requirements), graphs, self_class=self_class(target),
-                           target=target, skip=skip)
+        return []
+    return link_check.check_links(_link_check_invoke(read, context, requirements), graphs,
+                                  self_class=self_class(target), target=target, skip=skip)
+
+
+def layout_warnings(document, read, context, executor, *, requirements=None) -> tuple:
+    """Validate's layout warnings (graphs.layout_check) of the K2 graph sections, read on ``read`` (the existing
+    target or the trial Blueprint of a new one) through ``executor``: placed nodes that would overlap other
+    nodes, comment boxes that cross, nodes half out of their comment box. Shared by the Widget and Anim Blueprint
+    Profiles (``requirements``: the calling Profile's table). Only an early check: a read that fails gives none."""
+    target = document["Target"]
+    body = document["Body"]
+    graphs, roles = decode_body({section: body[section] for section in GRAPH_SECTIONS if section in body},
+                                self_class=self_class(target))
+    if not any(node.position is not None or node.size is not None
+               for root in graphs for graph in root.walk() for node in graph.nodes):
+        return ()
+    invoke = _link_check_invoke(read, context, requirements)
+
+    def templates(keys: list) -> dict:
+        sizes = {}
+        for start in range(0, len(keys), link_check.CHUNK):
+            result = invoke(LINK_CHECK, {"measure": keys[start:start + link_check.CHUNK]}) or {}
+            for row in result.get("sizes") or ():
+                if (type(row) is dict and type(row.get("key")) is str and type(row.get("width")) is int
+                        and type(row.get("height")) is int):
+                    sizes[row["key"]] = (row["width"], row["height"], row.get("box") is True)
+        return sizes
+    try:
+        return layout_check.check(graphs, executor.read_live(), managed_roles=roles,
+                                  measure_graphs=executor.measure_graphs, measure_templates=templates,
+                                  adapter=K2_ADAPTER, self_class=self_class(target))
+    except AssetDocumentContractError:
+        return ()
 
 
 def _pointer(key: str) -> str:
@@ -369,7 +404,7 @@ def pick_check_items(document: dict) -> list:
     items = []
 
     def add(at, value, **address):
-        if type(value) in (dict, list, str):
+        if type(value) in (dict, list, str) and not is_marker(value):  # a marker is never written
             items.append({"at": at, "value": value, **address})
     for index, row in enumerate(body.get("Variables") or ()):
         if type(row) is dict and type(row.get("Name")) is str and row.get("DefaultValue") is not None and "Type" in row:
@@ -455,7 +490,8 @@ def _with_graph_findings(failure, graphs, read, context, target):
     except Exception:  # noqa: BLE001 - the Apply failure is what matters
         return failure
     seen = {(item.path, item.code) for item in failure.diagnostics}
-    extra = tuple(item for item in found if (item.path, item.code) not in seen)
+    extra = tuple(item for item in found if (item.path, item.code) not in seen
+                  and item.severity is DiagnosticSeverity.ERROR)
     return AssetDocumentContractError(failure.diagnostic, failure.additional + extra) if extra else failure
 
 
@@ -555,7 +591,9 @@ def _extract_with_query(target, read, context, include_defaults: bool = False,
         body[section] = [encode_graph(graph) for graph in graphs if graph.id.startswith(section + "/")]
     if include_defaults:
         query = {**query, PIN_ENUM_NAMES: pin_enum_names(live)}
-    return {"SchemaVersion": 1, "Target": target, "Class": UBLUEPRINT_CLASS,
+    members.warn_markers(body, query.get("properties", {}))
+    members.warn_unrepresented(query)
+    return {"SchemaVersion": 1, "Target": target, "Class": class_routing.document_class(UBLUEPRINT_CLASS),
             "Action": DocumentAction.CREATE_OR_UPDATE.value, "Definitions": {},
             "Properties": dict(query.get("properties", {})), "Body": body}, query
 
@@ -622,7 +660,7 @@ class UBlueprintRuntimeProfile:
         return {"Class": UBLUEPRINT_CLASS, "BodySections": list(BODY_KEYS)}
 
     def create_template(self, target: str) -> dict:
-        return {"SchemaVersion": 1, "Target": _require_target(target), "Class": UBLUEPRINT_CLASS,
+        return {"SchemaVersion": 1, "Target": _require_target(target), "Class": class_routing.document_class(UBLUEPRINT_CLASS),
                 "Action": DocumentAction.CREATE_OR_UPDATE.value, "Definitions": {}, "Properties": {},
                 "Body": {"ParentClass": "/Script/Engine.Actor", "ImplementedInterfaces": [], "Variables": [],
                          "Components": [], "ClassDefaults": {}, "EventDispatchers": [], "Timelines": [],
@@ -637,6 +675,11 @@ class UBlueprintRuntimeProfile:
 
     def create_target_context(self, document, context):
         document = canonicalize(document)
+        routed = class_routing.routed_class(UBLUEPRINT_CLASS)
+        if routed is not None:
+            raise _error("/Class", f"AssetDoc reads and edits existing {routed} assets with this profile but does not "
+                         "create them: make the asset in the editor, then extract it and apply with Action Update.",
+                         "UBlueprint.SubclassCreateUnsupported")
         parent = document["Body"].get("ParentClass")
         if parent is None:
             parent = TYPE_PARENTS.get(document["Body"].get(TYPE_KEY))
@@ -660,18 +703,21 @@ class UBlueprintRuntimeProfile:
 
     def validate_checks(self, document, read_asset_handle, context):
         """Validate's graph check (ublueprint_link_check.check_graphs): node keys, pin names and links, read on the
-        existing target, or on a transient Blueprint of the parent class for a new one (validate_trial_context)."""
+        existing target, or on a transient Blueprint of the parent class for a new one (validate_trial_context).
+        Returns its warnings, then the layout warnings (``layout_warnings``)."""
         document = canonicalize(document)
-        found = []
+        found, warnings = [], []
         skip = listed_component_events(document["Body"])
         for check in (lambda: validate_links(document, read_asset_handle, context, skip=skip),
                       lambda: check_picks(document, read_asset_handle, context)):
             try:
-                check()
+                warnings.extend(check() or ())
             except AssetDocumentContractError as failure:
                 found.extend((failure.diagnostic,) + failure.additional)
         if found:
             raise contract_errors(found)
+        return with_diagnostics((), tuple(warnings) + tuple(layout_warnings(
+            document, read_asset_handle, context, _graph_executor(context, read_asset_handle, None, document["Target"]))))
 
     def validate_trial_context(self, document, context):
         """The create context of a new Blueprint's trial target (AssetDocumentBlueprintTrialTarget.cpp): its parent
@@ -689,7 +735,7 @@ class UBlueprintRuntimeProfile:
         return extract(_require_target(target), asset_handle, context, include_defaults)
 
     def inspect(self, *, mode, exact_class_path, exact_asset_object_path, editor_asset_handle, context):
-        if mode != "live_asset" or exact_class_path != UBLUEPRINT_CLASS or editor_asset_handle is None:
+        if mode != "live_asset" or not class_routing.accepts(UBLUEPRINT_CLASS, exact_class_path) or editor_asset_handle is None:
             raise _error("/Inspect", "UBlueprint inspection reads a live Blueprint asset.", "UBlueprint.InspectNotAdmitted")
         return self.canonicalize(self.extract(target=exact_asset_object_path.rsplit(".", 1)[0],
                                               asset_handle=editor_asset_handle, context=context))

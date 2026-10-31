@@ -11,7 +11,8 @@ from asset_document.graphs.live import LiveAsset, decode_live_asset
 from asset_document.graphs.reconcile import reconcile
 from asset_document.graphs.schemas import k2
 from asset_document.tests.graph_support import (
-    ACTOR_CLASS, G_EVENT, N_BEGIN, N_BRANCH, N_ENTRY, N_PRINT, PRINT, fixture, live_asset,
+    ACTOR_CLASS, G_EVENT, N_BEGIN, N_BRANCH, N_ENTRY, N_OVERLAP, N_PRINT, N_TICK, OVERLAP_EVENT, PRINT, fixture,
+    ghost_removals, live_asset,
 )
 
 
@@ -66,8 +67,9 @@ class ReconcileGoldenTests(unittest.TestCase):
     def test_empty_blueprint_to_begin_play_branch_print(self):
         plan = plan_for(begin_branch_print_body())
         # Unplaced nodes are laid out once they exist (graph.layout.auto, with the editor's node sizes),
-        # together with the reused ghost BeginPlay whose place the editor picked.
-        self.assertEqual(plan.briefs(), [
+        # together with the reused ghost BeginPlay whose place the editor picked. The ghost Overlap and
+        # Tick events the document does not list are removed.
+        self.assertEqual(plan.briefs(), ghost_removals() + [
             ("graph.node.spawn", EVENT, {"node": "Branch", "action_key": "K2:IfThenElse"}),
             ("graph.node.spawn", EVENT, {"node": "Print", "action_key": PRINT}),
             ("graph.pin.connect", EVENT, connect("BeginPlay", "then", "Branch", "execute")),
@@ -77,11 +79,10 @@ class ReconcileGoldenTests(unittest.TestCase):
             ("graph.layout.auto", EVENT, {"nodes": ["BeginPlay", "Branch", "Print"]}),
             ("graph.finalize", "", {}),
         ])
-        # The ghost BeginPlay of a new Blueprint is reused (linking it makes it real); ghost
-        # Tick/Overlap are neither removed nor recreated.
+        # The ghost BeginPlay of a new Blueprint is reused (linking it makes it real).
         self.assertEqual(dict(plan.node_bindings), {(EVENT, "BeginPlay"): N_BEGIN})
         self.assertEqual([op.path for op in plan.ops], [
-            "/Body/UbergraphPages/0/Nodes/1", "/Body/UbergraphPages/0/Nodes/2", "/Body/UbergraphPages/0/Links/0",
+            "/Body/UbergraphPages/0/Nodes", "/Body/UbergraphPages/0/Nodes", "/Body/UbergraphPages/0/Nodes/1", "/Body/UbergraphPages/0/Nodes/2", "/Body/UbergraphPages/0/Links/0",
             "/Body/UbergraphPages/0/Links/1", "/Body/UbergraphPages/0/Nodes/2/PinOverrides/0", "/Body/UbergraphPages/0",
             "/Body"])
 
@@ -96,7 +97,7 @@ class ReconcileGoldenTests(unittest.TestCase):
                 plan = plan_for({"UbergraphPages": [{"Name": "EventGraph", "Nodes": [begin, printer],
                                                      "Links": [{"From": "BeginPlay:then", "To": "Print:execute"}]}]},
                                 "graph.query.v1.k2_branch.json")
-                self.assertEqual(plan.briefs(), [
+                self.assertEqual(plan.briefs(), ghost_removals() + [
                     ("graph.node.remove", EVENT, {"node_guid": N_BRANCH, "action_key": "K2:IfThenElse"}),
                     ("graph.pin.connect", EVENT, connect("BeginPlay", "then", "Print", "execute")),
                     ("graph.finalize", "", {}),
@@ -107,7 +108,7 @@ class ReconcileGoldenTests(unittest.TestCase):
         body = begin_branch_print_body("Hello from AssetDocument")
         body["UbergraphPages"][0]["Links"][1] = {"From": "Branch:else", "To": "Print:execute"}
         plan = plan_for(body, "graph.query.v1.k2_branch.json")
-        self.assertEqual(plan.briefs(), [
+        self.assertEqual(plan.briefs(), ghost_removals() + [
             ("graph.pin.break", EVENT, {"from": {"node": "Branch", "pin": "then", "direction": "output"},
                                         "to": {"node": "Print", "pin": "execute", "direction": "input"}}),
             ("graph.pin.connect", EVENT, connect("Branch", "else", "Print", "execute")),
@@ -119,7 +120,7 @@ class ReconcileGoldenTests(unittest.TestCase):
         body["UbergraphPages"][0]["Nodes"][2] = {"Id": "Print", "Action": "K2:PrintString"}
         body["UbergraphPages"][0]["Nodes"][1]["Position"] = {"X": 320, "Y": 64}
         plan = plan_for(body, "graph.query.v1.k2_branch.json")
-        self.assertEqual(plan.briefs(), [
+        self.assertEqual(plan.briefs(), ghost_removals() + [
             ("graph.pin.default.set", EVENT, {"pin": {"node": "Print", "pin": "InString", "direction": "input"},
                                               "kind": "reset"}),
             ("graph.node.layout.set", EVENT, {"node": "Branch", "position": {"x": 320, "y": 64}}),
@@ -307,15 +308,37 @@ class ReconcileGoldenTests(unittest.TestCase):
         body = begin_branch_print_body("Hello from AssetDocument")
         body["UbergraphPages"][0]["Links"] = [{"From": "Branch:Execute", "To": "BeginPlay:Then"},
                                               {"From": "Branch:then", "To": "Print:execute"}]
-        self.assertEqual(plan_for(body, "graph.query.v1.k2_branch.json").briefs(), [])
+        self.assertEqual(plan_for(body, "graph.query.v1.k2_branch.json").briefs(),
+                         ghost_removals() + [("graph.finalize", "", {})])
 
     def test_guid_with_changed_action_replaces_the_node(self):
         body = begin_branch_print_body("Hello from AssetDocument")
         body["UbergraphPages"][0]["Nodes"][1] = {"Id": "Branch", "Action": "K2:Sequence", "NodeGuid": N_BRANCH}
         body["UbergraphPages"][0]["Links"][1] = {"From": "Branch:then_0", "To": "Print:execute"}
         plan = plan_for(body, "graph.query.v1.k2_branch.json")
-        self.assertEqual([op.op for op in plan.ops][:2], ["graph.node.remove", "graph.node.spawn"])
-        self.assertEqual(plan.ops[1].args["action_key"], "K2:ExecutionSequence")
+        self.assertEqual(plan.briefs()[:2], ghost_removals())
+        self.assertEqual([op.op for op in plan.ops][2:4], ["graph.node.remove", "graph.node.spawn"])
+        self.assertEqual(plan.ops[3].args["action_key"], "K2:ExecutionSequence")
+
+    def test_guid_with_the_factory_class_key_keeps_the_async_task_node(self):
+        async_key = "K2:AsyncAction:/Script/Engine.AsyncActionHandleSaveGame:AsyncLoadGameFromSlot"
+
+        def async_print(value):
+            node = next(node for graph in value["graphs"] for node in graph["nodes"] if node["node_guid"] == N_PRINT)
+            node["action_key"] = async_key
+        for action, kept in (("K2:AsyncAction:/Script/Engine.AsyncActionHandleSaveGame", True), (async_key, True),
+                             ("K2:AsyncAction:/Script/Engine.AsyncActionHandleOther", False)):
+            with self.subTest(action=action):
+                body = begin_branch_print_body("Hello from AssetDocument")
+                body["UbergraphPages"][0]["Nodes"][2].update(Action=action, NodeGuid=N_PRINT)
+                plan = plan_for(body, "graph.query.v1.k2_branch.json", edit=async_print)
+                self.assertEqual(plan.briefs()[:2], ghost_removals())
+                ops = [op.op for op in plan.ops][2:]
+                if kept:
+                    self.assertNotIn("graph.node.remove", ops)
+                    self.assertNotIn("graph.node.spawn", ops)
+                else:
+                    self.assertEqual(ops[:2], ["graph.node.remove", "graph.node.spawn"])
 
     def test_exec_links_connect_before_data_links_and_defaults_follow_links(self):
         body = {"UbergraphPages": [{"Name": "EventGraph", "Nodes": [
@@ -325,7 +348,8 @@ class ReconcileGoldenTests(unittest.TestCase):
             "Links": [{"From": "Rand:ReturnValue", "To": "Branch:Condition"},
                       {"From": "BeginPlay:then", "To": "Branch:execute"}]}]}
         ops = [op.op + ":" + op.path.rsplit("/", 2)[-2] + "/" + op.path.rsplit("/", 1)[-1] for op in plan_for(body).ops]
-        self.assertEqual(ops, ["graph.node.spawn:Nodes/0", "graph.node.spawn:Nodes/2", "graph.pin.connect:Links/1",
+        self.assertEqual(ops, ["graph.node.remove:0/Nodes"] * 2 + [
+                               "graph.node.spawn:Nodes/0", "graph.node.spawn:Nodes/2", "graph.pin.connect:Links/1",
                                "graph.pin.connect:Links/0", "graph.pin.default.set:PinOverrides/0",
                                "graph.layout.auto:UbergraphPages/0", "graph.finalize:/Body"])
 
@@ -335,12 +359,13 @@ class ReconcileGoldenTests(unittest.TestCase):
             {"Id": "Owner", "Action": "K2:CustomEvent", "Name": "OnPing", "Comment": "entry point",
              "Properties": {"bCallInEditor": True}}]}]}
         plan = plan_for(body)
-        self.assertEqual([(op.op, op.args.get("node")) for op in plan.ops], [
+        # The three ghost events of the new Blueprint are unlisted, so removed first.
+        self.assertEqual([(op.op, op.args.get("node")) for op in plan.ops], [("graph.node.remove", None)] * 3 + [
             ("graph.node.spawn", "Owner"), ("graph.node.spawn", "Child"),
             ("graph.node.property.set", "Owner"), ("graph.node.rename", "Owner"),
             ("graph.node.layout.set", "Owner"), ("graph.layout.auto", None), ("graph.finalize", None)])
-        self.assertEqual(plan.ops[1].args["parent"], "Owner")
-        self.assertEqual(plan.ops[2].path, "/Body/UbergraphPages/0/Nodes/1/Properties/bCallInEditor")
+        self.assertEqual(plan.ops[4].args["parent"], "Owner")
+        self.assertEqual(plan.ops[5].path, "/Body/UbergraphPages/0/Nodes/1/Properties/bCallInEditor")
 
     def test_a_called_custom_event_is_made_before_the_nodes_of_every_graph(self):
         # PathFollowingMannyPawn: an event graph calls "MovePawn", a custom event of a later page; the
@@ -375,17 +400,20 @@ class ReconcileGoldenTests(unittest.TestCase):
     def test_empty_ubergraph_pages_clears_the_kept_event_graph(self):
         # The EventGraph cannot be deleted, so "UbergraphPages": [] removes every node in it
         # (what a user deleting all its nodes does); an absent section still leaves it alone.
+        kept = f"ubergraph:{G_EVENT}"
         self.assertEqual(plan_for({"UbergraphPages": []}, "graph.query.v1.k2_branch.json").briefs(), [
-            ("graph.node.remove", "ubergraph:A0000000000000000000000000000001",
+            ("graph.node.remove", kept,
              {"node_guid": N_BEGIN, "action_key": "K2:Event:/Script/Engine.Actor:ReceiveBeginPlay"}),
-            ("graph.node.remove", "ubergraph:A0000000000000000000000000000001",
-             {"node_guid": N_BRANCH, "action_key": "K2:IfThenElse"}),
-            ("graph.node.remove", "ubergraph:A0000000000000000000000000000001",
+            *ghost_removals(kept),
+            ("graph.node.remove", kept, {"node_guid": N_BRANCH, "action_key": "K2:IfThenElse"}),
+            ("graph.node.remove", kept,
              {"node_guid": N_PRINT, "action_key": "K2:CallFunction:/Script/Engine.KismetSystemLibrary:PrintString"}),
             ("graph.finalize", "", {}),
         ])
         self.assertEqual(plan_for({}, "graph.query.v1.k2_branch.json").briefs(), [])
-        self.assertEqual(plan_for({"UbergraphPages": []}).briefs(), [])
+        # A new Blueprint's ghost events are nodes too.
+        self.assertEqual([op.args["node_guid"] for op in plan_for({"UbergraphPages": []}).ops[:-1]],
+                         [N_BEGIN, N_OVERLAP, N_TICK])
 
     def test_user_pin_defaults_compare_against_autogenerated_live_defaults(self):
         # Live NewHealth carries the editor's autogenerated "0.0": omitting Default matches it.
@@ -419,6 +447,27 @@ class ReconcileGoldenTests(unittest.TestCase):
                                                              "graph.node.user_pins.set", "graph.function.flags.set"])
         self.assertEqual(created.ops[3].args, {"flags": {"call_in_editor": True}})
 
+    def test_details_flags_are_kept_when_omitted_and_set_when_stated(self):
+        # Thread Safe, Exec, Deprecated, Compact Node Title and Instance Color: an omitted one keeps the live value.
+        live = edit_entry(thread_safe=True, compact_node_title="+", instance_color={"R": 1.0, "G": 0.0, "B": 0.0, "A": 1.0})
+        self.assertEqual(plan_for(add_health(), *SIGNATURE, edit=live).briefs(), [])
+        plan = plan_for(add_health(ThreadSafe=False, Exec=True, Deprecated=True, DeprecationMessage="Use Heal",
+                                   InstanceColor={"R": 0, "G": 1, "B": 0}), *SIGNATURE, edit=live)
+        self.assertEqual(plan.briefs()[0], ("graph.function.flags.set", FUNC, {"flags": {
+            "thread_safe": False, "exec": True, "deprecated": True, "deprecation_message": "Use Heal",
+            "instance_color": {"R": 0.0, "G": 1.0, "B": 0.0, "A": 1.0}}}))
+        with self.assertRaises(AssetDocumentContractError) as caught:
+            plan_for(add_health(InstanceColor="red"), *SIGNATURE)
+        self.assertEqual(caught.exception.diagnostic.path, "/Body/FunctionGraphs/0/Signature/InstanceColor")
+
+    def test_macro_graph_states_its_details_metadata(self):
+        body = {"MacroGraphs": [{"Name": "ForEachWithDelay", "Signature": {
+            "Category": "Flow", "Tooltip": "Loops with a delay", "Keywords": "loop", "CompactNodeTitle": "EACH"}}]}
+        plan = plan_for(body, *SIGNATURE)
+        flags = [op.args for op in plan.ops if op.op == "graph.function.flags.set"]
+        self.assertEqual(flags, [{"flags": {"category": "Flow", "tooltip": "Loops with a delay", "keywords": "loop",
+                                            "compact_node_title": "EACH"}}])
+
     def test_signature_flag_diagnostics(self):
         cases = (
             (add_health(Bogus=1), ("Graph.UnknownField", "/Body/FunctionGraphs/0/Signature/Bogus")),
@@ -437,11 +486,46 @@ class ReconcileGoldenTests(unittest.TestCase):
         body = begin_branch_print_body()
         body["UbergraphPages"][0]["Nodes"].append({"Id": "Tick", "Action": "K2:Tick"})
         plan = plan_for(body)
-        tick = live_node("graph.query.v1.k2_empty_actor.json", "B0000000000000000000000000000003")
+        tick = live_node("graph.query.v1.k2_empty_actor.json", N_TICK)
         self.assertTrue(tick["extras"]["ghost"])
-        self.assertEqual(plan.briefs()[0], ("graph.node.spawn", EVENT, {"node": "Tick", "action_key": TICK}))
+        # A listed real event takes the ghost's place: spawning it converts the ghost (same node).
+        self.assertEqual(plan.briefs()[:2], [
+            ("graph.node.remove", EVENT, {"node_guid": N_OVERLAP, "action_key": OVERLAP_EVENT}),
+            ("graph.node.spawn", EVENT, {"node": "Tick", "action_key": TICK})])
         self.assertEqual(plan.node_bindings[(EVENT, "Tick")], tick["node_guid"])
         self.assertEqual([op.args.get("node") for op in plan.ops if op.op == "graph.node.spawn"], ["Tick", "Branch", "Print"])
+
+    def test_ghost_marker_keeps_places_and_validates(self):
+        ghosts = [{"Id": "ActorBeginOverlap", "Action": "K2:ActorBeginOverlap", "Ghost": True},
+                  {"Id": "Tick", "Action": "K2:Tick", "Ghost": True}]
+        # Listed ghosts match the live ghosts (no conversion, no removal).
+        body = begin_branch_print_body()
+        body["UbergraphPages"][0]["Nodes"].extend(deepcopy(ghosts))
+        plan = plan_for(body)
+        self.assertNotIn("graph.node.remove", [op.op for op in plan.ops])
+        self.assertEqual([op.args["node"] for op in plan.ops if op.op == "graph.node.spawn"], ["Branch", "Print"])
+        self.assertEqual((plan.node_bindings[(EVENT, "ActorBeginOverlap")], plan.node_bindings[(EVENT, "Tick")]),
+                         (N_OVERLAP, N_TICK))
+        # A Ghost-marked node matched to a real node is made a ghost again.
+        body = begin_branch_print_body("Hello from AssetDocument")
+        body["UbergraphPages"][0]["Nodes"][1]["Ghost"] = True
+        body["UbergraphPages"][0]["Nodes"].extend(deepcopy(ghosts))
+        self.assertEqual(plan_for(body, "graph.query.v1.k2_branch.json").briefs(), [
+            ("graph.node.layout.set", EVENT, {"node": "Branch", "enabled_state": "ghost"}),
+            ("graph.finalize", "", {})])
+        # "Ghost": false is a real node; another value, or a stated Enabled next to it, is refused.
+        body = begin_branch_print_body("Hello from AssetDocument")
+        body["UbergraphPages"][0]["Nodes"].extend(deepcopy(ghosts))
+        body["UbergraphPages"][0]["Nodes"][1]["Ghost"] = False
+        self.assertEqual(plan_for(body, "graph.query.v1.k2_branch.json").briefs(), [])
+        for value, expected in (({"Ghost": "yes"}, ("Graph.InvalidType", "/Body/UbergraphPages/0/Nodes/3/Ghost")),
+                                ({"Enabled": "Disabled"}, ("Graph.ConflictingSetting", "/Body/UbergraphPages/0/Nodes/3/Enabled"))):
+            body = begin_branch_print_body()
+            body["UbergraphPages"][0]["Nodes"].extend(deepcopy(ghosts))
+            body["UbergraphPages"][0]["Nodes"][3].update(value)
+            with self.subTest(value=value), self.assertRaises(AssetDocumentContractError) as caught:
+                plan_for(body)
+            self.assertEqual((caught.exception.diagnostic.code, caught.exception.diagnostic.path), expected)
 
     def test_graph_without_rename_capability_is_not_renamed(self):
         # A case-only change is a rename too (the editor renames "EventGraph" to "eventgraph"): refused, not ignored.

@@ -23,6 +23,7 @@
 #include "Selection.h"
 #include "Serialization/ArchiveReplaceObjectRef.h"
 #include "UObject/Linker.h"
+#include "UObject/MetaData.h"
 #include "UObject/ObjectRedirector.h"
 #include "UObject/Package.h"
 #include "UObject/UObjectHash.h"
@@ -293,6 +294,47 @@ UObject* DuplicateWithFixups(UObject& Source, const FString& Target)
 	return Copy;
 }
 
+// The AssetDocument metadata of the source's subobjects (the document Id and authored Action of each graph node)
+// set on the copy's subobjects of the same path inside the asset. The duplicate copies the objects, not the package
+// metadata about them, and a document names the copy's nodes by those Ids. Values the copy already holds are kept.
+int32 CopyDocumentMetadataToDuplicate(UObject& Source, UObject& Copy)
+{
+	int32 Copied = 0;
+#if WITH_METADATA
+	UPackage* SourcePackage = Source.GetPackage();
+	UPackage* CopyPackage = Copy.GetPackage();
+	if (SourcePackage == nullptr || CopyPackage == nullptr || SourcePackage == CopyPackage)
+	{
+		return 0;
+	}
+	TMap<FString, UObject*> CopyObjects;
+	ForEachObjectWithOuter(&Copy, [&CopyObjects, &Copy](UObject* Object)
+	{
+		CopyObjects.Add(Object->GetPathName(&Copy), Object);
+	}, true);
+	FMetaData& SourceMetaData = SourcePackage->GetMetaData();
+	FMetaData& CopyMetaData = CopyPackage->GetMetaData();
+	for (const TPair<FSoftObjectPath, TMap<FName, FString>>& Entry : SourceMetaData.ObjectMetaDataMap)
+	{
+		const UObject* Object = Entry.Key.ResolveObject();
+		UObject* const* Target = Object != nullptr && Object->IsIn(&Source) ? CopyObjects.Find(Object->GetPathName(&Source)) : nullptr;
+		if (Target == nullptr)
+		{
+			continue;
+		}
+		for (const TPair<FName, FString>& Value : Entry.Value)
+		{
+			if (Value.Key.ToString().StartsWith(TEXT("AssetDocument.")) && CopyMetaData.FindValue(*Target, Value.Key) == nullptr)
+			{
+				CopyMetaData.SetValue(*Target, Value.Key, *Value.Value);
+				++Copied;
+			}
+		}
+	}
+#endif
+	return Copied;
+}
+
 // Every package of a duplicated map (the map and its external actor / object packages).
 TArray<UPackage*> DuplicatedMapPackages(const UObject& Copy)
 {
@@ -380,6 +422,7 @@ FAssetDocumentResult DuplicateAsset(const FAssetDocumentDuplicateRequest& Reques
 			TEXT("Duplicating '%s' copied %d of its %d external actor / object packages (%d loaded), so the copy would lose "
 				"actors; it was discarded (see the editor log)."), *Source->GetPathName(), Copied, SourceExternal.Num(), SourceLoaded));
 	}
+	CopyDocumentMetadataToDuplicate(*Source, *Copy);
 	if (!UEditorLoadingAndSavingUtils::SavePackages(Packages, false) || !FPackageName::DoesPackageExist(Target))
 	{
 		Discard();

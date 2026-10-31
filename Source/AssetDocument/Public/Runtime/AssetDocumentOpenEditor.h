@@ -117,6 +117,12 @@ ASSETDOCUMENT_API bool CloseEditorDiscardingPendingEdits(const UObject& Asset, F
 // nothing marked it dirty since). Tracked from the first handler registration on.
 ASSETDOCUMENT_API bool HasOnlyOpenTimeChanges(const UPackage& Package);
 
+// What first made the dirty package dirty since it was last clean: "<object path> (<class>), transactional or not,
+// inside or outside an editor transaction". The object is not known when the package was marked dirty directly or by an
+// object already modified earlier in the same editor frame (the engine reports an object's modification once per frame).
+// Empty when the package became dirty before the tracking started. For the refusals of dirty targets.
+ASSETDOCUMENT_API FString DescribeFirstUnsavedChange(const UPackage& Package);
+
 // Called by the apply once the document passed validation, the no-op check and preflight, right before it changes the
 // asset: the innermost FScopedApply closes a CloseApplyReopen editor now (CloseBeforeChange). Nothing without one.
 ASSETDOCUMENT_API void BeforeChange();

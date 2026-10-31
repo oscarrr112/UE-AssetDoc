@@ -4,6 +4,7 @@
 // Behaviour test of the raw-edit file AnimBlueprint/AssetDocumentAnimGraphNodeBindingRawEdits:
 // pin property bindings of an anim graph node are written the way the details-panel
 // binding widget writes them (exposed pin, no links, compiled binding) and read back.
+// The numbered pin node is a test type of AssetDocumentTests (AssetDocumentAnimBlueprintNumberedPinTestTypes.h).
 
 #include "AnimBlueprint/AssetDocumentAnimBlueprintAdapters.h"
 #include "AnimBlueprint/AssetDocumentAnimGraphNodeBindingRawEdits.h"
@@ -11,6 +12,7 @@
 #include "Animation/AnimBlueprint.h"
 #include "Animation/AnimBlueprintGeneratedClass.h"
 #include "Animation/AnimInstance.h"
+#include "AnimGraphNode_BlendListByInt.h"
 #include "AnimGraphNode_TwoWayBlend.h"
 #include "AnimationGraphSchema.h"
 #include "BlueprintNodeSpawner.h"
@@ -31,6 +33,7 @@ namespace AssetDocumentAnimGraphNodeBindingRawEditTests
 using namespace UE::AssetDocument::AnimBlueprint;
 
 const TCHAR* Skeleton = TEXT("/Engine/Tutorial/SubEditors/TutorialAssets/Character/TutorialTPP_Skeleton.TutorialTPP_Skeleton");
+const TCHAR* const NumberedPinNodeClass = TEXT("/Script/AssetDocumentTests.AnimGraphNode_AssetDocumentNumberedPin");
 
 FValue Binding(const TCHAR* Pin, const TCHAR* Path, bool bOnlyUpdateWhenActive = false)
 {
@@ -43,6 +46,24 @@ FValue Binding(const TCHAR* Pin, const TCHAR* Path, bool bOnlyUpdateWhenActive =
 	FValue Out = MakeObjectValue();
 	SetField(Out, Pin, MoveTemp(Entry));
 	return Out;
+}
+
+FValue BindingAt(const TCHAR* Pin, const TCHAR* Path, const TCHAR* ContextId)
+{
+	FValue Entry = MakeObjectValue();
+	SetField(Entry, TEXT("Path"), MakeStringValue(Path));
+	SetField(Entry, TEXT("ContextId"), MakeStringValue(ContextId));
+	FValue Out = MakeObjectValue();
+	SetField(Out, Pin, MoveTemp(Entry));
+	return Out;
+}
+
+FString ContextOf(const UAnimGraphNode_Base& Node, const TCHAR* Pin)
+{
+	const FValue Bindings = UE::AssetDocument::AnimBlueprint::BindingRawEdits::QueryNodeBindings(Node);
+	const FValue* Entry = FindValueField(Bindings, Pin);
+	const FValue* Context = Entry != nullptr ? FindValueField(*Entry, TEXT("ContextId")) : nullptr;
+	return Context != nullptr ? Context->StringValue : FString();
 }
 
 bool Compiles(UBlueprint& Blueprint)
@@ -145,10 +166,83 @@ bool FAssetDocumentAnimGraphNodeBindingRawEditTest::RunTest(const FString&)
 	TestTrue(TEXT("back to the property binding succeeds"), SetNodeBindings(*Node, Binding(TEXT("Alpha"), TEXT("Speed")), Error));
 	TestTrue(TEXT("property-bound Animation Blueprint compiles"), Compiles(*Blueprint));
 
+	// The binding's call site: set, kept by an entry without ContextId, back to Automatic with "".
+	TestTrue(TEXT("binding with a call site succeeds"),
+		SetNodeBindings(*Node, BindingAt(TEXT("Alpha"), TEXT("Speed"), TEXT("Batched_GameThreadPreEventGraph")), Error));
+	TestEqual(TEXT("the call site reads back"), ContextOf(*Node, TEXT("Alpha")), FString(TEXT("Batched_GameThreadPreEventGraph")));
+	TestTrue(TEXT("an entry without ContextId applies"), SetNodeBindings(*Node, Binding(TEXT("Alpha"), TEXT("Speed")), Error));
+	TestEqual(TEXT("an entry without ContextId keeps the call site"), ContextOf(*Node, TEXT("Alpha")),
+		FString(TEXT("Batched_GameThreadPreEventGraph")));
+	TestTrue(TEXT("call-site-bound Animation Blueprint compiles"), Compiles(*Blueprint));
+	FAssetDocumentGraphError BadSite;
+	TestFalse(TEXT("an unknown call site is rejected"), SetNodeBindings(*Node, BindingAt(TEXT("Alpha"), TEXT("Speed"), TEXT("Nowhere")), BadSite));
+	TestTrue(TEXT("the unknown call site error lists the call sites"), BadSite.Message.Contains(TEXT("UnBatched_ThreadSafe")));
+	TestTrue(TEXT("ContextId \"\" applies"), SetNodeBindings(*Node, BindingAt(TEXT("Alpha"), TEXT("Speed"), TEXT("")), Error));
+	TestEqual(TEXT("Automatic is omitted"), ContextOf(*Node, TEXT("Alpha")), FString());
+
+	// Bindings as the node has them (an entry without ContextId keeps any call site) change nothing: the node is not
+	// reconstructed and the Blueprint is not dirtied.
+	TestTrue(TEXT("binding with a call site again"),
+		SetNodeBindings(*Node, BindingAt(TEXT("Alpha"), TEXT("Speed"), TEXT("UnBatched_ThreadSafe")), Error));
+	Package->ClearDirtyFlag();
+	const TArray<UEdGraphPin*> PinsBefore = Node->Pins;
+	TestTrue(TEXT("unchanged bindings apply"), SetNodeBindings(*Node, Binding(TEXT("Alpha"), TEXT("Speed")), Error));
+	TestTrue(TEXT("unchanged bindings with their call site apply"),
+		SetNodeBindings(*Node, BindingAt(TEXT("Alpha"), TEXT("Speed"), TEXT("UnBatched_ThreadSafe")), Error));
+	TestFalse(TEXT("unchanged bindings leave the package clean"), Package->IsDirty());
+	TestTrue(TEXT("unchanged bindings keep the node's pins"), Node->Pins == PinsBefore);
+	TestEqual(TEXT("and the call site"), ContextOf(*Node, TEXT("Alpha")), FString(TEXT("UnBatched_ThreadSafe")));
+
 	// {} removes every binding.
 	TestTrue(TEXT("empty object clears bindings"), SetNodeBindings(*Node, MakeObjectValue(), Error));
 	TestEqual(TEXT("no bindings remain"), QueryNodeBindings(*Node).Kind, EAssetDocumentRuntimeValueKind::Null);
 	TestTrue(TEXT("unbound Animation Blueprint compiles"), Compiles(*Blueprint));
+
+	// An array element's pin (Blend List by Int's "BlendTime_0") binds that element; the whole array's binding and an
+	// element's replace each other.
+	const TStrongObjectPtr<UBlueprintNodeSpawner> ListSpawner(UBlueprintNodeSpawner::Create(UAnimGraphNode_BlendListByInt::StaticClass()));
+	UAnimGraphNode_BlendListByInt* List = Cast<UAnimGraphNode_BlendListByInt>(
+		ListSpawner->Invoke(AnimGraph->Get(), IBlueprintNodeBinder::FBindingSet(), FVector2D(0.0, 400.0)));
+	if (!TestNotNull(TEXT("Blend List by Int spawns"), List))
+	{
+		return false;
+	}
+	const FName FirstTime(TEXT("BlendTime"), 1);
+	TestTrue(TEXT("the first element's pin exists"), List->FindPin(FirstTime) != nullptr);
+	TestTrue(TEXT("binding an array element succeeds"), SetNodeBindings(*List, Binding(*FirstTime.ToString(), TEXT("Speed")), Error));
+	const FValue ElementValue = QueryNodeBindings(*List);
+	const FValue* Element = FindValueField(ElementValue, *FirstTime.ToString());
+	const FValue* ElementPath = Element != nullptr ? FindValueField(*Element, TEXT("Path")) : nullptr;
+	TestTrue(TEXT("the element binding reads back by the element's pin"), ElementPath != nullptr && ElementPath->StringValue == TEXT("Speed"));
+	TestTrue(TEXT("element-bound Animation Blueprint compiles"), Compiles(*Blueprint));
+	FAssetDocumentGraphError NoElement;
+	TestFalse(TEXT("an element without a pin is rejected"),
+		SetNodeBindings(*List, Binding(*FName(TEXT("BlendTime"), 9).ToString(), TEXT("Speed")), NoElement));
+	TestTrue(TEXT("clearing the element binding succeeds"), SetNodeBindings(*List, MakeObjectValue(), Error));
+	TestEqual(TEXT("no element binding remains"), QueryNodeBindings(*List).Kind, EAssetDocumentRuntimeValueKind::Null);
+
+	// A plain property named like an array element ("Weight_1", next to "Weight") binds by its whole name.
+	UClass* NumberedClass = LoadObject<UClass>(nullptr, NumberedPinNodeClass);
+	if (!TestNotNull(TEXT("numbered pin test node class"), NumberedClass))
+	{
+		return false;
+	}
+	const TStrongObjectPtr<UBlueprintNodeSpawner> NumberedSpawner(UBlueprintNodeSpawner::Create(NumberedClass));
+	UAnimGraphNode_Base* Numbered = Cast<UAnimGraphNode_Base>(
+		NumberedSpawner->Invoke(AnimGraph->Get(), IBlueprintNodeBinder::FBindingSet(), FVector2D(0.0, 800.0)));
+	if (!TestNotNull(TEXT("numbered pin node spawns"), Numbered))
+	{
+		return false;
+	}
+	TestTrue(TEXT("binding Weight_1 succeeds"), SetNodeBindings(*Numbered, Binding(TEXT("Weight_1"), TEXT("Speed")), Error));
+	const FValue NumberedValue = QueryNodeBindings(*Numbered);
+	TestTrue(TEXT("Weight_1 reads back by its name"), FindValueField(NumberedValue, TEXT("Weight_1")) != nullptr);
+	TestTrue(TEXT("Weight stays unbound"), FindValueField(NumberedValue, TEXT("Weight")) == nullptr);
+	TestTrue(TEXT("Weight_1's pin is shown"), Numbered->FindPin(TEXT("Weight_1")) != nullptr);
+	TestTrue(TEXT("Weight's pin stays hidden"), Numbered->FindPin(TEXT("Weight")) == nullptr);
+	FAssetDocumentGraphError NoNumbered;
+	TestFalse(TEXT("an unknown numbered name is refused"),
+		SetNodeBindings(*Numbered, Binding(TEXT("Weight_2"), TEXT("Speed")), NoNumbered));
 	return true;
 }
 

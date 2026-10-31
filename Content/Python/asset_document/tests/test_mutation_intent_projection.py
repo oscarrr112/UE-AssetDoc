@@ -76,9 +76,14 @@ class MutationIntentProjectionTests(unittest.TestCase):
         for key in ("Body", "Handle", "Handles", "HandleArguments", "OpaqueHandle", "Pointer",
                     "Address", "Rollback", "RollbackCode", "TransactionId", "Slot", "Generation"):
             with self.subTest(key=key):
-                self.steps[0]["Intent"] = {"Nested": [{key: "invalid"}]}
+                self.steps[0]["Intent"] = {key: "invalid"}
                 with self.assertRaises(ValueError):
                     self.build()
+                # An authored value may name a property like an envelope field.
+                self.steps[0]["Intent"] = {"Nested": [{key: "authored"}]}
+                self.build()
+        self.steps[0]["Intent"] = {"slot": "authored"}
+        self.build()
 
     def test_invalid_native_values_and_nonfinite_numbers(self):
         for bad in (object(), b"bytes", float("nan"), float("inf"), 1 << 63, {1: "key"}, (1, 2)):

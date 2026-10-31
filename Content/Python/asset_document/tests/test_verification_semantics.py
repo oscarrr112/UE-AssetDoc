@@ -178,7 +178,8 @@ class BlueprintGraphVerificationTests(unittest.TestCase):
 
     def test_reused_ghost_event_takes_its_ghost_parent_call_away(self):
         # A child Blueprint's ghost Tick comes with a ghost "Parent: Tick"; placing Tick from the palette
-        # removes both (RemoveGhostNodes). Linking the ghost would make the parent call real.
+        # removes both (RemoveGhostNodes). The listed Tick keeps the ghost node (linking it makes it real); the
+        # unlisted parent call is removed like the other unlisted nodes, so it is not made real with it.
         parent_guid = "B00000000000000000000000000000AA"
 
         def edit(value):
@@ -198,9 +199,9 @@ class BlueprintGraphVerificationTests(unittest.TestCase):
             {"Id": "Tick", "Action": "K2:Tick"}, {"Id": "Print", "Action": "K2:PrintString"}],
             "Links": [{"From": "Tick:then", "To": "Print:execute"}]}]}
         briefs = _plan(body, EMPTY, edit).briefs()
-        self.assertEqual(briefs[0], ("graph.node.remove", "UbergraphPages/EventGraph",
-                                     {"node_guid": parent_guid, "action_key": "K2:CallParentFunction:/Script/Engine.Actor:ReceiveTick"}))
-        self.assertEqual(sum(1 for brief in briefs if brief[0] == "graph.node.remove"), 1)
+        removed = [brief[2]["node_guid"] for brief in briefs if brief[0] == "graph.node.remove"]
+        self.assertEqual(removed, ["B0000000000000000000000000000001", "B0000000000000000000000000000002", parent_guid])
+        self.assertNotIn(TICK_GUID, removed)
 
 
 class BlueprintMemberVerificationTests(unittest.TestCase):

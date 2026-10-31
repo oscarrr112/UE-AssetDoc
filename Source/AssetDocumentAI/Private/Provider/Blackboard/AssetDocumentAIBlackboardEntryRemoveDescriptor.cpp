@@ -31,7 +31,8 @@ FAssetDocumentPrimitiveDescriptor MakeAssetDocumentAIBlackboardEntryRemoveV2Desc
 		TEXT("AIProvider.Blackboard.KeyMissing"), TEXT("AIProvider.Blackboard.KeyInherited"),
 		TEXT("AIProvider.Blackboard.OrderedKeysLifecycleUnavailable"),
 		TEXT("AIProvider.Blackboard.DerivedRefreshFailed"),
-		TEXT("AIProvider.Blackboard.EntryChangedSetMismatch")};
+		TEXT("AIProvider.Blackboard.EntryChangedSetMismatch"),
+		TEXT("Graph.PieActive"), TEXT("AIProvider.Blackboard.LayoutInUse")};
 	Descriptor.RequiredConsumerIds = {TEXT("ai_profile")};
 	FAssetDocumentPrimitiveAdmissionEvidence& A = Descriptor.Admission;
 	A.Disposition = EAssetDocumentPrimitiveDisposition::AdmittedBridge;

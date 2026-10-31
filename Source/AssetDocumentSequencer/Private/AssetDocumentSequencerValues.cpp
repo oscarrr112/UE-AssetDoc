@@ -113,15 +113,25 @@ bool ContainsAdapted(const UScriptStruct* Struct, int32 Depth = 0)
 	return bContains;
 }
 
+// The marker of a value the document has no form for: {"Unsupported": <reason>, "Text": <export text>} (read only; a
+// write keeps the value while the text is unchanged).
+FValue UnsupportedMarker(const FString& Reason, const FString& Text)
+{
+	FObjectBuilder Object;
+	Object.AddString(TEXT("Unsupported"), Reason);
+	Object.AddString(TEXT("Text"), Text);
+	return Object.Build();
+}
+
 FValue Unsupported(const FProperty& Property, const void* ValuePtr, FEncodeContext& Context, const FString& Why)
 {
 	FString Text;
 	Property.ExportTextItem_Direct(Text, ValuePtr, nullptr, nullptr, PPF_None);
 	Context.Warnings.Add(TEXT("Sequencer.UnsupportedValue"), FString::Printf(TEXT("%s (%s) cannot be represented in a document (%s); "
 		"it is shown as export text and kept as it is."), *Property.GetName(), *Property.GetCPPType(), *Why), Context.Path);
-	FObjectBuilder Object;
-	Object.AddString(TEXT("Unsupported"), Text);
-	return Object.Build();
+	const FString Detail = Why.IsEmpty() ? FString() : FString::Printf(TEXT(" (%s)"), *Why);
+	return UnsupportedMarker(FString::Printf(TEXT("%s (%s) has no document form%s; AssetDoc keeps the value."), *Property.GetName(),
+		*Property.GetCPPType(), *Detail), Text);
 }
 
 FValue EncodeCodec(const FProperty& Property, const void* ValuePtr, FEncodeContext& Context)
@@ -192,8 +202,8 @@ FValue EncodeTimeWarp(const FProperty& Property, const FMovieSceneTimeWarpVarian
 	{
 		FString Text;
 		Property.ExportTextItem_Direct(Text, &Variant, nullptr, nullptr, PPF_None);
-		Object.AddString(TEXT("Unsupported"), Text);
-		break;
+		return UnsupportedMarker(FString::Printf(TEXT("%s: this kind of time warp has no document form; AssetDoc keeps the value."),
+			*Property.GetName()), Text);
 	}
 	}
 	return Object.Build();

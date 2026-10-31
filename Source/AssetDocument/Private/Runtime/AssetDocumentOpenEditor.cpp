@@ -8,6 +8,7 @@
 #include "Framework/Commands/UICommandInfo.h"
 #include "Framework/Commands/UICommandList.h"
 #include "Misc/CoreDelegates.h"
+#include "Misc/CoreMisc.h"
 #include "Misc/EngineVersionComparison.h"
 #include "Misc/ScopeExit.h"
 #include "Misc/PackageName.h"
@@ -45,6 +46,22 @@ FOpenTimeChanges& OpenTimeChanges()
 {
 	static FOpenTimeChanges State;
 	return State;
+}
+
+// What first made each dirty package dirty (OpenEditor::DescribeFirstUnsavedChange). UObject::Modify marks the package
+// dirty before it broadcasts OnObjectModified, so the object of a dirty mark is the first one modified in the same frame.
+struct FFirstUnsavedChange
+{
+	FString Object;
+	bool bInTransaction = false;
+	bool bTransactional = false;
+	uint64 Frame = 0;
+};
+
+TMap<FObjectKey, FFirstUnsavedChange>& FirstUnsavedChanges()
+{
+	static TMap<FObjectKey, FFirstUnsavedChange> Changes;
+	return Changes;
 }
 
 // Anything that marks the package dirty outside an editor's open is a change of its own.
@@ -90,20 +107,35 @@ void StartOpenTimeTracking()
 			}
 		}
 	});
-	UPackage::PackageMarkedDirtyEvent.AddLambda([](UPackage* Package, bool)
+	UPackage::PackageMarkedDirtyEvent.AddLambda([](UPackage* Package, bool bWasDirty)
 	{
 		ForgetOpenTimeChanges(Package);
+		if (Package != nullptr && !bWasDirty)
+		{
+			FFirstUnsavedChange Change;
+			Change.bInTransaction = GUndo != nullptr;
+			Change.Frame = GFrameCounter;
+			FirstUnsavedChanges().Add(FObjectKey(Package), MoveTemp(Change));
+		}
 	});
 	UPackage::PackageDirtyStateChangedEvent.AddLambda([](UPackage* Package)
 	{
 		if (Package != nullptr && !Package->IsDirty())
 		{
 			OpenTimeChanges().Dirty.Remove(FObjectKey(Package));
+			FirstUnsavedChanges().Remove(FObjectKey(Package));
 		}
 	});
 	FCoreUObjectDelegates::OnObjectModified.AddLambda([](UObject* Object)
 	{
-		ForgetOpenTimeChanges(Object != nullptr ? Object->GetPackage() : nullptr);
+		UPackage* Package = Object != nullptr ? Object->GetPackage() : nullptr;
+		ForgetOpenTimeChanges(Package);
+		FFirstUnsavedChange* Change = Package != nullptr ? FirstUnsavedChanges().Find(FObjectKey(Package)) : nullptr;
+		if (Change != nullptr && Change->Object.IsEmpty() && Change->Frame == GFrameCounter)
+		{
+			Change->Object = FString::Printf(TEXT("%s (%s)"), *Object->GetPathName(), *Object->GetClass()->GetName());
+			Change->bTransactional = Object->HasAnyFlags(RF_Transactional);
+		}
 	});
 }
 
@@ -330,6 +362,22 @@ FString DescribePendingEditsWayOut(const UObject& Asset)
 {
 	const TSharedPtr<IAssetDocumentOpenEditorHandler> Handler = AssetDocumentOpenEditorLocal::FindHandler(Asset, true);
 	return DescribePendingEditsWayOut(Handler.IsValid() && Handler->CanCloseDiscardingPendingEdits(Asset));
+}
+
+FString DescribeFirstUnsavedChange(const UPackage& Package)
+{
+	const FFirstUnsavedChange* Change = Package.IsDirty() ? FirstUnsavedChanges().Find(FObjectKey(&Package)) : nullptr;
+	if (Change == nullptr)
+	{
+		return FString();
+	}
+	const TCHAR* Transaction = Change->bInTransaction ? TEXT("inside an editor transaction (an Undo entry)") : TEXT("outside any editor transaction");
+	if (Change->Object.IsEmpty())
+	{
+		return FString::Printf(TEXT("the package was marked dirty %s, by no object modified for the first time in that editor frame"), Transaction);
+	}
+	return FString::Printf(TEXT("%s, %s, %s"), *Change->Object,
+		Change->bTransactional ? TEXT("transactional") : TEXT("not transactional"), Transaction);
 }
 
 bool HasOnlyOpenTimeChanges(const UPackage& Package)

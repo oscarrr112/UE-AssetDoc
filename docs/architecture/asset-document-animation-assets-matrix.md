@@ -39,10 +39,14 @@ Profile（`Content/Python/asset_document/profiles/{skeleton,blend_space,pose_ass
 | Blend Profile：增、删、改名、模式、骨骼缩放 | `BlendProfiles[]` | Supported | `IEditableSkeleton::CreateNewBlendProfile / RemoveBlendProfile / RenameBlendProfile / SetBlendProfileMode / SetBlendProfileScale`（设为默认值即移除条目，与编辑器相同） |
 | 平移重定向模式（每骨骼） | `BoneRetargeting{bone: mode}` | Supported | `IEditableSkeleton::SetBoneTranslationRetargetingMode`；未列出 = `Animation` |
 | 曲线元数据：增、删、改名、Material / MorphTarget 标志 | `Curves[]` | Supported | `USkeleton` 曲线元数据 API（Anim Curves 面板） |
-| 曲线元数据的骨骼链接（LinkedBones） | — | Unsupported | 罕用；不在文档中 |
+| 曲线元数据的骨骼链接（Connected Bones、Max LOD） | `Curves[].LinkedBones` / `MaxLOD` | Supported | `IInterface_AnimCurveMetaData::SetCurveMetaDataBoneLinks`（与 `SAnimCurveMetadataEditor::ApplyCurveBoneLinks` 相同）；未设时不输出 |
 | Compatible Skeletons、Preview Forward Axis 等 Details | 顶层 `Properties` | Supported | 通用 Properties 区域 |
+| Asset User Data（曲线元数据对象之外） | 顶层 `Properties.AssetUserData` | Supported | 通用实例化对象编解码；曲线元数据对象（`Curves`）不出现在列表中，apply 写数组时先把该对象暂存到 `AssetUserDataEditorOnly` 末尾，写完放回原索引（超出新长度则放在末尾），对象本身保留（`AssetDocumentSkeletonRawEdits::ParkCurveMetaData` / `UnparkCurveMetaData`，Details 数组的删除与添加） |
+| 预览网格、附加预览网格集合 | `PreviewMesh` / `AdditionalPreviewMeshes` | Supported | `IEditableSkeleton::SetPreviewMesh / SetAdditionalPreviewSkeletalMeshes`；骨骼不兼容 → `AnimationAsset.IncompatibleSkeleton` |
+| 通知名（Animation Notifies 页签） | `AnimNotifyNames` | Supported（仅新增） | `IEditableSkeleton::AddNotify`；未列出的保留（页签的删除会改所有动画） |
+| 预览附加资产 | `PreviewAttachedAssets` | Read-only | `Skeleton.PreviewAttachedAssetsReadOnly`；Socket 改名 / 删除对附加资产的影响按骨骼树计算 |
 | 资产在 Skeleton 编辑器中打开时 apply | — | Supported | 原地修改后刷新骨骼树（`ISkeletonTree::Refresh`）和预览；测试 `AnimationAssets.OpenEditorApply.Skeleton` |
-| 骨骼重定向源（Retarget Sources） | — | Unsupported | 需要网格姿势捕获（交互式），罕用 |
+| 骨骼重定向源（Retarget Sources） | `RetargetSources[{Name, Mesh}]` | Read-only | `Skeleton.RetargetSourcesReadOnly`；新增需要网格姿势捕获（交互式），罕用 |
 
 ## 2. BlendSpace / BlendSpace1D / AimOffsetBlendSpace / AimOffsetBlendSpace1D
 
@@ -55,7 +59,7 @@ Profile（`Content/Python/asset_document/profiles/{skeleton,blend_space,pose_ass
 | 样本：增、删、移动、换动画、Rate Scale、Single Frame、Analyse All | `Samples[]`（按位置识别） | Supported | `UBlendSpace::AddSample / DeleteSample / ReplaceSampleAnimation`，随后 `ResampleData / ValidateSampleData`（编辑器的拖放流程）；越界 → `BlendSpace.SampleOutOfRange`（AddSample 会扩轴，因此先检查）；所有轴吸附时不在网格点 → `BlendSpace.SampleOffGrid`；Aim Offset 只接受旋转偏移加性动画（`BlendSpace.IncompatibleAnimation`） |
 | 插值 / 平滑、目标权重插值速度、通知触发模式等 Details | 顶层 `Properties` | Supported | 通用 Properties 区域；写入后执行编辑器的 `NotifyPostChange`（验证 + 重采样）。Details 写入与 ABP Blend Space Graph 节点共用一份实现（`AssetDocumentBlendSpaceEdits.cpp`） |
 | 资产在 Blend Space 编辑器中打开时 apply | — | Supported | 原地修改后重建文档页签并刷新预览；测试 `AnimationAssets.OpenEditorApply.BlendSpace` |
-| 分析（Analysis）属性 | 顶层 `Properties` | 部分 | 只能写通用 Properties 区域接受的部分；分析函数对象未单独建模 |
+| 分析（Analysis）函数与设置 | `Axes.<X/Y>.Analysis`（`{Function, Properties}` 或 null） | Supported | 与 `FBlendSpaceDetails::HandleAnalysisFunctionChanged` 相同：旧对象 `MakeCache`、按函数新建设置对象（先已注册的 `IBlendSpaceAnalysisFeature`，再 Persona 自带函数）、`InitializeFromCache`、赋值；设置行经通用子对象属性读写；有函数时才列出，省略 = 保留 |
 
 ## 3. PoseAsset（`profile.pose_asset.v1`）
 
@@ -63,11 +67,14 @@ Profile（`Content/Python/asset_document/profiles/{skeleton,blend_space,pose_ass
 |---|---|---|---|
 | 新建（Create Pose Asset：从动画序列每帧一个姿势） | `SourceAnimation` + `Action: Create` | Supported | `factory_context` → `UPoseAssetFactory::SourceAnimation`；缺少 → `PoseAsset.SourceAnimationRequired` |
 | 姿势改名 / 删除 | `Poses[name 或 {Name, RenamedFrom}]` | Supported | `UPoseAsset::ModifyPoseName / DeletePoses` |
-| 新增 / 重排姿势 | `Poses` | Unsupported | 编辑器不提供（姿势来自源动画 / 网格捕获）：`PoseAsset.PoseAddUnsupported`（列出现有姿势）、`PoseAsset.PoseOrderUnsupported` |
+| 新增姿势（无源动画时 Add Pose from Reference） | `Poses` 末尾的新名字 | Supported | `UPoseAsset::AddReferencePose`（预览网格或骨骼的参考姿势）；有源动画 → `PoseAsset.PoseAddUnsupported` |
+| 重排姿势 | `Poses` | Unsupported | 编辑器不提供：`PoseAsset.PoseOrderUnsupported` |
+| 清除源动画（Source Animation 行设为 None） | `SourceAnimation: ""` | Supported | PreEdit / PostEdit；姿势保留 |
+| 删除曲线（Delete Curves） | `Curves[]`（未列出 = 删除） | Supported | `UPoseAsset::DeleteCurves`；新增曲线 → `PoseAsset.CurveAddUnsupported` |
 | 加性 + 基础姿势（Details 的 Apply） | `Additive` + `BasePose` | Supported | `UPoseAsset::ConvertSpace`；基础姿势按索引保存，改名后跟随 |
 | 更换源动画（Update Source） | `SourceAnimation` | Supported | 设置 `SourceAnimation`（PreEdit / PostEdit）+ `UpdatePoseFromAnimation` |
 | 骨骼 | `Skeleton` | Read-only | 取自源动画：`PoseAsset.SkeletonImmutable` |
-| 姿势曲线 / 骨骼轨道数据 | — | Read-only | Inspect `PoseAssetDetails` |
+| 姿势曲线 / 骨骼轨道数据 | `Poses[].Curves` / `Bones` | Read-only | 保存的源数据（`SourceCurveData` / `SourceLocalSpacePose` 相对骨骼参考姿势）；`pose_asset.read {offset}` 分页读取；修改 → `PoseAsset.PoseDataReadOnly` |
 | Retarget Source 等 Details | 顶层 `Properties` | Supported | 通用 Properties 区域 |
 | 资产在 Pose Asset 编辑器中打开时 apply | — | Supported | 原地修改后重建文档页签（姿势列表）并刷新预览；测试 `AnimationAssets.OpenEditorApply.PoseAsset` |
 
@@ -79,7 +86,7 @@ Profile（`Content/Python/asset_document/profiles/{skeleton,blend_space,pose_ass
 | 片段：增、删、重排、换动画、起止时间、播放速率、循环次数 | `Segments[]`（按位置） | Supported | 与编辑器相同：`FAnimSegment::SetAnimReference` + `FAnimTrack::IsValidToAdd`，赋值后 `CollapseAnimSegments / SortAnimSegments / UpdateCommonTargetFrameRate / InvalidateRecursiveAsset / SetCompositeLength`；递归引用 → `AnimComposite.IncompatibleAnimation` |
 | 片段在时间轴上的位置 | — | Read-only | 片段首尾相接（编辑器 collapse）；Inspect `CompositeDetails` |
 | 预览网格 | `PreviewMesh` | Supported | 同 BlendSpace |
-| 通知 / 曲线 | — | Unsupported | 现有 AnimSequence 的通知 / 曲线原子操作只接受 AnimSequence；Composite 上很少使用 |
+| 通知 / 通知轨 / 通知状态 / 浮点曲线 | `Curves` / `NotifyTracks` / `Notifies` / `NotifyStates` | Supported | 与 AnimSequence 相同的文档形式与规则（`anim_sequence_codec`）；读取为 composite read 的 `timeline`，写入为 composite edit 的 `{op: timeline, intent}`，复用序列 authoring 代码（`ApplyAnimationAssetTimeline`，曲线与通知面板的同一调用）；排在片段之后，时间按新长度校验 |
 | 其它 Details | 顶层 `Properties` | Supported | 通用 Properties 区域 |
 | 资产在动画编辑器中打开时 apply | — | Supported | 与 Montage / Sequence 相同的处理（原地修改后重建文档页签、刷新预览）；测试 `AnimationAssets.OpenEditorApply.AnimComposite` |
 

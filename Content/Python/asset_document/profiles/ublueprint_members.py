@@ -23,6 +23,10 @@ variable: omitted Category / Tooltip / flags mean their defaults (the extract om
 an omitted DefaultValue keeps the current value.  Top-level document ``Properties`` (UBlueprint class settings)
 merge: only listed properties are written.
 
+A component property, class default or class setting too large to read in one query page reads as a marker
+(``{"Unsupported": "This value is too large ..."}``, warning ``UBlueprint.Unrepresented``): apply keeps the value
+when the marker is left or omitted, and refuses an edited one (``UBlueprint.UnrepresentedValue``).
+
 The legacy C++ Profile shapes (``{"Kind":"ClassRef"}``, ``{"Interface":...}``,
 ``{"PinCategory":...}`` types, string DefaultValue, ``Key``/``Scope:"OwnedSCS"`` components)
 are accepted and converted by :func:`canonical_members`.
@@ -33,20 +37,35 @@ import math
 import re
 import struct
 
-from asset_document.diagnostics import contract_error
+from asset_document import markers, text_forms
+from asset_document.diagnostics import AssetDocumentContractError, contract_error, read_warning
 from asset_document.diff.semantic_compare import number_text
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.graphs.model import PinType
 from asset_document.graphs.schemas.k2 import decode_pin_type, encode_pin_type
 
 MEMBER_KEYS = ("ParentClass", "ImplementedInterfaces", "Variables", "Components", "ClassDefaults")
-_VARIABLE_FIELDS = ("Name", "Type", "DefaultValue", "Category", "Tooltip", "InstanceEditable", "ReadOnly",
-                    "ExposeOnSpawn", "Private")
 _VARIABLE_FLAGS = {"InstanceEditable": "instance_editable", "ReadOnly": "blueprint_read_only",
                    "ExposeOnSpawn": "expose_on_spawn", "Private": "private"}
-_COMPONENT_FIELDS = ("Name", "Scope", "Class", "AttachTo", "AttachSocket", "Properties")
-_SCOPES = {"owned": "Owned", "ownedscs": "Owned", "inherited": "Inherited", "native": "Native"}
+# The variable's other Details settings: an omitted one keeps its current value (documents written before these were
+# read leave them out). Body label -> (blueprint.member query / variable.set key, default).
+_VARIABLE_DETAILS = {"Replication": ("replication", "None"), "RepNotifyFunc": ("rep_notify_func", ""),
+                     "ReplicationCondition": ("replication_condition", "None"), "Config": ("config", False),
+                     "Transient": ("transient", False), "SaveGame": ("save_game", False),
+                     "AdvancedDisplay": ("advanced_display", False), "ExposeToCinematics": ("expose_to_cinematics", False),
+                     "Deprecated": ("deprecated", False), "DeprecationMessage": ("deprecation_message", ""),
+                     "Metadata": ("metadata", {})}
+_REPLICATION = {"none": "None", "replicated": "Replicated", "rep_notify": "RepNotify"}
+_VARIABLE_FIELDS = ("Name", "Type", "DefaultValue", "Category", "Tooltip", "InstanceEditable", "ReadOnly",
+                    "ExposeOnSpawn", "Private") + tuple(_VARIABLE_DETAILS)
+_COMPONENT_FIELDS = ("Name", "Scope", "Class", "AttachTo", "AttachSocket", "Category", "Tooltip", "Properties")
+# An own component's variable Category and Tooltip (kept when omitted) -> blueprint.member.component.variable.set.v1.
+_COMPONENT_VARIABLE = {"Category": "category", "Tooltip": "tooltip"}
+# "Default": the DefaultSceneRoot the editor adds while no other scene component is the root (its values only).
+_SCOPES = {"owned": "Owned", "ownedscs": "Owned", "inherited": "Inherited", "native": "Native", "default": "Default"}
 DEFAULT_CATEGORY = "Default"
+# Diagnostic prefix of the member regions' markers (the regions every Blueprint profile shares).
+MARKER_PREFIX = "UBlueprint"
 
 
 def _error(path, message, code="UBlueprint.InvalidBodyRegion"):
@@ -189,6 +208,34 @@ def _canonical_variable(row: object, path: str) -> dict:
             if type(row[key]) is not bool:
                 raise _error(f"{path}/{key}", f"{key} must be true or false.")
             output[key] = row[key]
+    output.update(_canonical_details(row, name, path))
+    return output
+
+
+def _canonical_details(row: dict, name: str, path: str) -> dict:
+    output = {}
+    for key, (_, default) in _VARIABLE_DETAILS.items():
+        if key not in row:
+            continue
+        value = row[key]
+        if type(default) is bool and type(value) is not bool:
+            raise _error(f"{path}/{key}", f"{key} must be true or false.")
+        if type(default) is str and type(value) is not str:
+            raise _error(f"{path}/{key}", f"{key} must be a string.")
+        if key == "Metadata" and (type(value) is not dict or any(type(item) is not str for item in value.values())):
+            raise _error(f"{path}/{key}", "Metadata is an object of strings, such as {\"ClampMin\": \"0\", \"UIMax\": \"100\"}.")
+        output[key] = dict(value) if key == "Metadata" else value
+    if "Replication" in output:
+        spelled = {label.casefold(): label for label in _REPLICATION.values()}
+        if output["Replication"].casefold() not in spelled:
+            raise _error(f"{path}/Replication", "Replication is \"None\", \"Replicated\" or \"RepNotify\".")
+        output["Replication"] = spelled[output["Replication"].casefold()]
+    if output.get("RepNotifyFunc") and output.get("Replication", "RepNotify") != "RepNotify":
+        raise _error(f"{path}/RepNotifyFunc", "RepNotifyFunc needs \"Replication\": \"RepNotify\".")
+    if output.get("Replication") == "RepNotify" and not output.get("RepNotifyFunc"):
+        output["RepNotifyFunc"] = f"OnRep_{name}"
+    if "ReplicationCondition" in output and output["ReplicationCondition"].startswith("COND_"):
+        output["ReplicationCondition"] = output["ReplicationCondition"][len("COND_"):]
     return output
 
 
@@ -211,7 +258,7 @@ def _canonical_component(row: object, path: str) -> dict:
     scope_text = row.get("Scope", "Owned")
     scope = _SCOPES.get(scope_text.casefold()) if type(scope_text) is str else None
     if scope is None:
-        raise _error(f"{path}/Scope", "Scope is Owned (default), Inherited or Native.")
+        raise _error(f"{path}/Scope", "Scope is Owned (default), Inherited, Native or Default (the DefaultSceneRoot).")
     output = {"Name": name}
     if scope != "Owned":
         output["Scope"] = scope
@@ -233,6 +280,14 @@ def _canonical_component(row: object, path: str) -> dict:
         field = "AttachTo" if row.get("AttachTo") not in (None, "") else "AttachSocket"
         raise _error(f"{path}/{field}", f"{scope} components keep their parent's attachment; {field} is for own components.",
                      "UBlueprint.InvalidAttach")
+    for key in _COMPONENT_VARIABLE:
+        if key in row:
+            if scope != "Owned":
+                raise _error(f"{path}/{key}", f"{key} is the variable {key} of an own component; {scope} rows hold "
+                             "Properties only.")
+            if type(row[key]) is not str:
+                raise _error(f"{path}/{key}", f"{key} must be a string.")
+            output[key] = DEFAULT_CATEGORY if key == "Category" and not row[key] else row[key]
     # Legacy "Root": true names the scene root; it is the row without AttachTo.
     if row.get("Root", False) not in (True, False):
         raise _error(f"{path}/Root", "Root must be true or false.")
@@ -312,6 +367,10 @@ def members_from_query(query: dict) -> dict:
                 item["AttachTo"] = row["attach_to"]
             if row.get("attach_socket"):
                 item["AttachSocket"] = row["attach_socket"]
+            if row.get("category") and row["category"] != DEFAULT_CATEGORY:
+                item["Category"] = row["category"]
+            if row.get("tooltip"):
+                item["Tooltip"] = row["tooltip"]
         else:
             item["Scope"] = _SCOPES[row["scope"]]
         if row.get("properties"):
@@ -320,6 +379,49 @@ def members_from_query(query: dict) -> dict:
     body["Components"] = components
     body["ClassDefaults"] = dict(query.get("class_defaults", {}))
     return body
+
+
+def _pointer(key: str) -> str:
+    return key.replace("~", "~0").replace("/", "~1")
+
+
+def warn_unrepresented(query: dict) -> None:
+    """Read warnings for the saved properties the asset's class declares below the Blueprint class this profile reads
+    that the document has no form for (the member query's ``unrepresented``): an apply keeps them as they are."""
+    for row in _unrepresented(query):
+        held = (" It holds graphs the document does not show; an apply to this asset is refused." if row["holds_graphs"]
+                else " An apply keeps it as it is.")
+        read_warning("/Class", f"{MARKER_PREFIX}.Unrepresented", f"{row['name']} (declared by {row['owner_class']}) is "
+                     f"saved with the asset but has no place in this document.{held}")
+
+
+def refuse_unrepresented_graphs(query: dict) -> None:
+    """Refuses an apply to an asset whose class keeps graphs of its own beside the ones the document edits: a graph
+    edit and its compile do not know them."""
+    held = [f"{row['name']} (declared by {row['owner_class']})" for row in _unrepresented(query) if row["holds_graphs"]]
+    if held:
+        raise contract_error("/Class", f"{MARKER_PREFIX}.SubclassGraphsUnsupported", "This asset's class keeps graphs "
+                             f"the document does not show ({', '.join(held)}); AssetDoc reads it but does not apply to it. "
+                             "Edit it in its own editor.")
+
+
+def _unrepresented(query: dict) -> list:
+    return [row for row in query.get("unrepresented") or () if type(row) is dict and type(row.get("name")) is str]
+
+
+def warn_markers(body: dict, properties: dict | None = None, base: str = "/Body") -> None:
+    """Read warnings for the marked values of the member regions: component Properties, ClassDefaults (under
+    ``base``) and the document's Class Settings ``Properties``."""
+    for index, row in enumerate(body.get("Components") or ()):
+        for key, value in ((row.get("Properties") or {}).items() if type(row) is dict else ()):
+            if markers.is_marker(value):
+                markers.warn(f"{base}/Components/{index}/Properties/{_pointer(key)}", MARKER_PREFIX, value)
+    for key, value in (body.get("ClassDefaults") or {}).items():
+        if markers.is_marker(value):
+            markers.warn(f"{base}/ClassDefaults/{_pointer(key)}", MARKER_PREFIX, value)
+    for key, value in (properties or {}).items():
+        if markers.is_marker(value):
+            markers.warn(f"/Properties/{_pointer(key)}", MARKER_PREFIX, value)
 
 
 def _variable_from_live(row: dict) -> dict:
@@ -333,6 +435,31 @@ def _variable_from_live(row: dict) -> dict:
     for key, live in _VARIABLE_FLAGS.items():
         if row.get(live):
             output[key] = True
+    for key, value in _live_details(row).items():
+        if value != _detail_default(key, output["Type"]):
+            output[key] = value
+    return output
+
+
+def _detail_default(key: str, type_body_value) -> object:
+    """A Details setting of a new variable of this type: the editor marks a new String or Text variable Multi Line."""
+    if key == "Metadata":
+        try:
+            category = type_dto(type_body_value, "/Type").get("category")
+        except AssetDocumentContractError:
+            category = None
+        return {"MultiLine": "true"} if category in ("string", "text") else {}
+    return _VARIABLE_DETAILS[key][1]
+
+
+def _live_details(row: dict) -> dict:
+    """The Details settings of a live variable row, by Body label (rows of an older reader have none)."""
+    output = {}
+    for key, (live, _) in _VARIABLE_DETAILS.items():
+        if live in row:
+            value = row[live]
+            output[key] = _REPLICATION.get(value, value) if key == "Replication" else (
+                dict(value) if key == "Metadata" else value)
     return output
 
 
@@ -492,7 +619,8 @@ def values_equal(authored: object, observed: object, defaults: dict | None = Non
         except ValueError:
             return False
     if type(authored) is str and type(observed) is str:
-        if authored == observed or object_path(authored) == object_path(observed):
+        if authored == observed or object_path(authored) == object_path(observed) \
+                or text_forms.same_text(authored, observed):
             return True
         # A map's entries in another order are the same map (FMapProperty::Identical). Compiling a
         # Blueprint reorders a map whose struct default has entries (the class default object is
@@ -542,6 +670,9 @@ def plan_header(properties: dict, body: dict, query: dict) -> list:
     ops = []
     live = query.get("properties", {})
     for key in sorted(properties):
+        if markers.is_marker(properties[key]):
+            markers.require_unchanged(f"/Properties/{_pointer(key)}", properties[key], live.get(key), MARKER_PREFIX)
+            continue  # kept as it is
         if key not in live or not values_equal(properties[key], live[key]):
             ops.append(("blueprint.member.property.set.v1",
                         {"target": "blueprint", "property": key, "value": properties[key]}, f"/Properties/{key}"))
@@ -593,6 +724,15 @@ def _variable_values(row: dict, current: dict | None) -> dict | None:
         flag = row.get(key, False)
         if current is None and key in row or current is not None and bool(current.get(live_key)) != flag:
             values[live_key], changed = flag, True
+    have = _live_details(current) if current is not None else {}
+    for key, (live_key, default) in _VARIABLE_DETAILS.items():
+        if key in row and (current is None or have.get(key, default) != row[key]):
+            value = row[key]
+            if key == "Replication":
+                value = {label: live for live, label in _REPLICATION.items()}[value]
+            values[live_key], changed = value, True
+    if "replication" in values and "rep_notify_func" not in values and "RepNotifyFunc" in row:
+        values["rep_notify_func"] = row["RepNotifyFunc"]
     if "DefaultValue" in row and row["DefaultValue"] is not None and (
             changed or current is None
             or not _same_default(row["DefaultValue"], current.get("default"), current.get("default_name"))):
@@ -667,6 +807,30 @@ def plan_component_attach(body: dict, query: dict) -> list:
     return ops
 
 
+def _component_variable(row: dict) -> dict:
+    """An own component row's (or live row's) variable Category and Tooltip by Body label, defaults filled."""
+    category = row.get("Category", row.get("category")) or DEFAULT_CATEGORY
+    return {"Category": category, "Tooltip": row.get("Tooltip", row.get("tooltip")) or ""}
+
+
+def plan_component_variables(body: dict, query: dict) -> list:
+    """Category and Tooltip of own components (after the structure: a new component gets them too). An omitted one is
+    kept."""
+    if "Components" not in body:
+        return []
+    live = _live_components(query)
+    ops = []
+    for index, row in enumerate(body["Components"]):
+        current = live.get(("owned", row["Name"].casefold())) if "Scope" not in row else None
+        stated = {key: value for key, value in _component_variable(row).items() if key in row}
+        have = _component_variable(current or {})
+        values = {_COMPONENT_VARIABLE[key]: value for key, value in stated.items() if have[key] != value}
+        if values:
+            ops.append(("blueprint.member.component.variable.set.v1", {"name": row["Name"], **values},
+                        f"/Body/Components/{index}"))
+    return ops
+
+
 def plan_component_sockets(body: dict, query: dict) -> list:
     """AttachSocket (SCS AttachToName), after the component values: the editor's socket picker lists the sockets of
     the parent's mesh, which the same document may set."""
@@ -686,13 +850,18 @@ def plan_component_sockets(body: dict, query: dict) -> list:
 
 
 def _property_ops(target: dict, desired: dict, live: dict, path: str, defaults: dict | None = None) -> list:
+    """Set the listed values that differ and reset the unlisted ones. A marked value is never written: left as read
+    it is kept, an edited one is refused, and an omitted one is kept (not reset)."""
     ops = []
     for key in desired:
+        if markers.is_marker(desired[key]):
+            markers.require_unchanged(f"{path}/{_pointer(key)}", desired[key], live.get(key), MARKER_PREFIX)
+            continue
         if key not in live or not values_equal(desired[key], live[key], defaults):
             ops.append(("blueprint.member.property.set.v1", {**target, "property": key, "value": desired[key]},
                         f"{path}/{key}"))
     for key in live:
-        if key not in desired:
+        if key not in desired and not markers.is_marker(live[key]):
             ops.append(("blueprint.member.property.set.v1", {**target, "property": key, "reset": True}, path))
     return ops
 
@@ -721,7 +890,9 @@ def plan_component_values(body: dict, query: dict, defaults: dict | None = None)
             target = {"target": "component", "component": {"name": row["Name"], "scope": scope}}
             ops += _property_ops(target, row["Properties"], current, f"/Body/Components/{index}/Properties", defaults)
         for key, row in live.items():
-            if key in listed or row["scope"] == "owned":
+            # An own component is the structure's; an unlisted DefaultSceneRoot keeps its values (documents written
+            # before it was read do not list it).
+            if key in listed or row["scope"] in ("owned", "default"):
                 continue
             if row["scope"] == "inherited":
                 ops.append(("blueprint.member.component.remove.v1", {"name": row["name"], "scope": "inherited"},
@@ -751,8 +922,10 @@ def _replace(path, before, after_present, after):
 def _props_differ(desired: dict, live: dict, strict: bool = False, defaults: dict | None = None) -> bool:
     # A property absent from the extraction equals the parent value; authored defaults are accepted
     # (strict Diff cannot tell an authored default from an edit, so it reports it).
+    # An omitted marked value is kept, so it is no difference.
     return any((key in live or strict) and not (key in live and values_equal(value, live[key], defaults))
-               for key, value in desired.items()) or any(key not in desired for key in live)
+               for key, value in desired.items()) or any(key not in desired and not markers.is_marker(value)
+                                                         for key, value in live.items())
 
 
 def diff_members(authored: dict, extracted: dict, properties: dict, extracted_properties: dict,
@@ -806,6 +979,9 @@ def _variables_match(desired: list, live: list, strict: bool = False, enum_names
         if row.get("Tooltip", "") != current.get("Tooltip", ""):
             return False
         if any(row.get(key, False) != current.get(key, False) for key in _VARIABLE_FLAGS):
+            return False
+        if any(row[key] != current.get(key, _detail_default(key, current["Type"])) for key in _VARIABLE_DETAILS
+               if key in row):
             return False
     return True
 
@@ -889,6 +1065,12 @@ def _component_differences(desired: list, live: list, strict: bool = False, defa
                 out.append(_replace(f"{path}/AttachSocket", row.get("AttachSocket", ""), True,
                                     current.get("AttachSocket", "")))
                 continue
+            have = _component_variable(current)
+            changed = next((key for key, value in _component_variable(row).items() if key in row and have[key] != value),
+                           None)
+            if changed is not None:
+                out.append(_replace(f"{path}/{changed}", row[changed], True, have[changed]))
+                continue
         if "Properties" in row:
             have = current.get("Properties", {})
             for name, value in row["Properties"].items():
@@ -896,15 +1078,19 @@ def _component_differences(desired: list, live: list, strict: bool = False, defa
                     out.append(_replace(f"{path}/Properties/{name}", value, name in have, have.get(name)))
                     break
             else:
-                extra = sorted(name for name in have if name not in row["Properties"])
+                extra = sorted(name for name in have if name not in row["Properties"]
+                               and not markers.is_marker(have[name]))
                 if extra:
                     out.append(Difference(f"{path}/Properties/{extra[0]}", DiffKind.ADD, False, None, True, have[extra[0]]))
     for key, row in live_by.items():
         if key in listed:
             continue
         # A component the document does not list: an own one is surplus; overrides of an inherited / native one
-        # are reset by apply.
-        if key[0] == "Owned" or row.get("Properties"):
+        # are reset by apply; the DefaultSceneRoot's values are kept.
+        if key[0] == "Default":
+            continue
+        if key[0] == "Owned" or key[0] == "Inherited" and row.get("Properties") or any(
+                not markers.is_marker(value) for value in (row.get("Properties") or {}).values()):
             out.append(Difference("/Body/Components/-", DiffKind.ADD, False, None, True, row))
     return out
 

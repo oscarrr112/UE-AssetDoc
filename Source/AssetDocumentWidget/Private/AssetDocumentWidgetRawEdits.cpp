@@ -44,6 +44,51 @@ bool IsInSubtree(UWidget& Root, UWidget* Candidate)
 	return Candidate == &Root || Descendants.Contains(Candidate);
 }
 
+// Source widgets the tree does not reach: detached ones and everything inside them.
+TArray<UWidget*> UnreachableSourceWidgets(UWidgetBlueprint& Blueprint)
+{
+	TArray<UWidget*> Out;
+	if (Blueprint.WidgetTree == nullptr)
+	{
+		return Out;
+	}
+	TSet<UWidget*> InTree;
+	Blueprint.WidgetTree->ForEachWidget([&InTree](UWidget* Widget) { InTree.Add(Widget); });
+	for (UWidget* Widget : Blueprint.GetAllSourceWidgets())
+	{
+		if (!InTree.Contains(Widget))
+		{
+			Out.Add(Widget);
+		}
+	}
+	return Out;
+}
+
+// A variable GUID whose widget is gone: kept for the widget of the same name that replaces it.
+bool HasGuidWithoutWidget(UWidgetBlueprint& Blueprint)
+{
+	TSet<FName> Names;
+	for (const UWidget* Widget : Blueprint.GetAllSourceWidgets())
+	{
+		Names.Add(Widget->GetFName());
+	}
+	for (const UWidgetAnimation* Animation : Blueprint.Animations)
+	{
+		if (Animation != nullptr)
+		{
+			Names.Add(Animation->GetFName());
+		}
+	}
+	for (const TPair<FName, FGuid>& Entry : Blueprint.WidgetVariableNameToGuidMap)
+	{
+		if (!Names.Contains(Entry.Key))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 // Takes a deleted widget out of the Blueprint: with bDropReferences its graph variable nodes go and its variable GUID
 // is dropped (unless another source widget still has the name, as when a widget is replaced by one of the same name);
 // the object moves to the transient package so that the name is free for a new widget.
@@ -172,7 +217,7 @@ void DeleteWidget(UWidgetBlueprint& Blueprint, UWidget& Widget, bool bKeepRefere
 	}
 	else
 	{
-		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(&Blueprint);
+		MarkStructurallyModified(Blueprint);
 	}
 }
 
@@ -269,6 +314,33 @@ FPlacement GetPlacement(UWidgetBlueprint& Blueprint, UWidget& Widget)
 		}
 	}
 	return Placement;
+}
+
+TArray<UWidget*> GetDetachedWidgets(UWidgetBlueprint& Blueprint)
+{
+	const TArray<UWidget*> Unreachable = UnreachableSourceWidgets(Blueprint);
+	TSet<UWidget*> Inner;
+	for (UWidget* Widget : Unreachable)
+	{
+		TArray<UWidget*> Descendants;
+		UWidgetTree::GetChildWidgets(Widget, Descendants);
+		Inner.Append(Descendants);
+	}
+	TArray<UWidget*> Out = Unreachable.FilterByPredicate([&Inner](UWidget* Widget) { return !Inner.Contains(Widget); });
+	Out.Sort([](const UWidget& A, const UWidget& B) { return A.GetFName().LexicalLess(B.GetFName()); });
+	return Out;
+}
+
+void MarkStructurallyModified(UWidgetBlueprint& Blueprint)
+{
+	if (UnreachableSourceWidgets(Blueprint).IsEmpty() && !HasGuidWithoutWidget(Blueprint))
+	{
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(&Blueprint);
+	}
+	else
+	{
+		FBlueprintEditorUtils::MarkBlueprintAsModified(&Blueprint);
+	}
 }
 
 bool Detach(UWidgetBlueprint& Blueprint, UWidget& Widget)

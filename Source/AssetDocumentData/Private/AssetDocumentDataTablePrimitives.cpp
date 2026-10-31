@@ -57,6 +57,13 @@ FValue EncodeRow(FCall& Call, const UDataTable& Table, FName Name, uint8* Row, b
 	{
 		if (GetMemberCodecId(*Member).IsEmpty())
 		{
+			// A field the codec has no form for (an instanced object, a map keyed by float, ...): read as a marker
+			// when it holds a value (an empty one is left out), kept by every edit.
+			const void* const ValuePtr = Member->ContainerPtrToValuePtr<void>(Row);
+			if (!Member->Identical(ValuePtr, nullptr, PPF_None))
+			{
+				Values.Add(Member->GetAuthoredName(), MakeUnsupportedMarker(*Member, ValuePtr));
+			}
 			continue;
 		}
 		FValue Value;
@@ -92,7 +99,9 @@ bool HandleDataTableRead(FCall& Call, FObjectBuilder& Result)
 	}
 	const bool bComposite = GetParentTablesProperty(*Table->GetClass()) != nullptr;
 	Result.AddString(TEXT("class"), Table->GetClass()->GetPathName());
-	Result.AddString(TEXT("row_struct"), PathOf(Table->RowStruct));
+	// A row struct that no longer loads (deleted or renamed without a redirector): its stored path.
+	Result.AddString(TEXT("row_struct"), Table->RowStruct != nullptr ? PathOf(Table->RowStruct) : Table->GetRowStructPathName().ToString());
+	Result.AddBool(TEXT("row_struct_loaded"), Table->RowStruct != nullptr);
 	Result.AddBool(TEXT("row_struct_valid"), Table->RowStruct != nullptr && FDataTableEditorUtils::IsValidTableStruct(Table->RowStruct));
 	Result.AddBool(TEXT("composite"), bComposite);
 	int32 NodeCount = 16;
@@ -157,6 +166,39 @@ bool HandleDataTableRead(FCall& Call, FObjectBuilder& Result)
 
 namespace
 {
+// A value holding a marker ({"Unsupported": reason, ...}) at any depth: content the codec has no form for.
+bool HoldsMarker(const FValue& Value)
+{
+	if (Value.Kind != EAssetDocumentRuntimeValueKind::Object && Value.Kind != EAssetDocumentRuntimeValueKind::Array)
+	{
+		return false;
+	}
+	if (Value.Kind == EAssetDocumentRuntimeValueKind::Object)
+	{
+		const int32 Reason = Value.ObjectKeys.IndexOfByKey(TEXT("Unsupported"));
+		if (Value.Elements.IsValidIndex(Reason) && Value.Elements[Reason].Kind == EAssetDocumentRuntimeValueKind::String)
+		{
+			return true;
+		}
+	}
+	for (const FValue& Element : Value.Elements)
+	{
+		if (HoldsMarker(Element))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+// Whether the row's current value of Member holds content the codec has no form for (it reads with markers inside).
+bool HoldsMarkedContent(FProperty& Member, const uint8* Row)
+{
+	FValue Current;
+	FString Code;
+	return EncodeMember(Member, Row, Current, Code) && HoldsMarker(Current);
+}
+
 bool RequireRow(FCall& Call, FReader& Op, const UDataTable& Table, const TCHAR* Key, FName& OutName, bool bMustExist)
 {
 	FString Name;
@@ -185,6 +227,10 @@ bool RequireRow(FCall& Call, FReader& Op, const UDataTable& Table, const TCHAR* 
 // The row editor's property edit (SRowEditor::NotifyPreChange / NotifyPostChange) for a set of fields.
 // bReplace: the values are the complete row; every other field the codec can write goes back to the
 // struct's default (the row editor's per-field "reset to default"); fields it cannot write keep theirs.
+// A field whose current value holds content the codec has no form for (a struct with a field path member, an array
+// of such structs, a NaN float: it reads with markers inside) is never reset that way: left out, it keeps its value;
+// given, it is decoded as an edit of its current value, so its markers are checked against that value and the marked
+// content stays. A given value holding markers is decoded over the current value too.
 bool SetRowValues(FCall& Call, FReader& Op, UDataTable& Table, FName RowName, const FValue& Values, bool bReplace)
 {
 	if (Values.Kind != EAssetDocumentRuntimeValueKind::Object)
@@ -207,10 +253,21 @@ bool SetRowValues(FCall& Call, FReader& Op, UDataTable& Table, FName RowName, co
 		Struct.InitializeStruct(DefaultRow);
 		for (FProperty* Member : GetRowMembers(Struct))
 		{
-			if (!GetMemberCodecId(*Member).IsEmpty())
+			bool bDefault = true;
+			for (int32 Element = 0; bDefault && Element < Member->ArrayDim; ++Element)
 			{
-				Member->CopyCompleteValue_InContainer(StagedRow, DefaultRow);
+				bDefault = Member->Identical_InContainer(StagedRow, DefaultRow, Element, PPF_None);
 			}
+			if (GetMemberCodecId(*Member).IsEmpty() || bDefault)
+			{
+				continue;
+			}
+			const int32 Given = Values.ObjectKeys.IndexOfByKey(Member->GetAuthoredName());
+			if ((Values.Elements.IsValidIndex(Given) && HoldsMarker(Values.Elements[Given])) || HoldsMarkedContent(*Member, StagedRow))
+			{
+				continue;
+			}
+			Member->CopyCompleteValue_InContainer(StagedRow, DefaultRow);
 		}
 		Struct.DestroyStruct(DefaultRow);
 		FMemory::Free(DefaultRow);
@@ -238,10 +295,12 @@ bool SetRowValues(FCall& Call, FReader& Op, UDataTable& Table, FName RowName, co
 				*Key, *Member->GetCPPType()), Path);
 		}
 		FString Code;
-		if (!DecodeMember(*Member, Values.Elements[Index], StagedRow, Code, &Table))
+		FString Message;
+		FString ValuePath;
+		if (!DecodeMember(*Member, Values.Elements[Index], StagedRow, Code, &Table, Message, ValuePath))
 		{
-			return Fail(Call, TEXT("DataTable.InvalidValue"), FString::Printf(TEXT("The value of '%s' does not fit %s (%s)."),
-				*Key, *Member->GetCPPType(), *Code), Path);
+			return Fail(Call, TEXT("DataTable.InvalidValue"), FString::Printf(TEXT("The value of '%s' does not fit %s (%s)%s%s"),
+				*Key, *Member->GetCPPType(), *Code, Message.IsEmpty() ? TEXT(".") : TEXT(": "), *Message), Path + ValuePath);
 		}
 		// A cell naming a table row or a key that does not exist (the row editor's pickers list only existing ones).
 		EditorPickerValues::FInvalidPick Invalid;

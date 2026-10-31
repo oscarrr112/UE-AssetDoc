@@ -103,7 +103,6 @@ const TCHAR* GetPropertyInspectionFlagRejectionReason(const FProperty& Property)
 	}
 	const FFlagRejection Rejections[] = {
 		{CPF_Transient, TEXT("Transient")},
-		{CPF_DuplicateTransient, TEXT("DuplicateTransient")},
 		{CPF_Deprecated, TEXT("Deprecated")},
 		{CPF_SkipSerialization, TEXT("SkipSerialization")},
 	};
@@ -511,6 +510,77 @@ InspectAssetDocumentEditorProperties(UClass& ExactClass, UObject* LiveAsset,
 			TEXT("The exact class default object is unavailable."));
 	}
 	return BuildPropertyInspectionResult(ExactClass, *DefaultObject, LiveAsset, DeclaredNames);
+}
+
+FAssetDocumentEditorPropertyInspectionResult
+InspectAssetDocumentEditorOmittedSavedState(UClass& ExactClass, UObject& LiveAsset,
+	TConstArrayView<FString> DeclaredNames)
+{
+	UObject* DefaultObject = ExactClass.GetDefaultObject();
+	if (DefaultObject == nullptr)
+	{
+		return MakePropertyInspectionFailure(
+			TEXT("PropertyInspection.DefaultUnavailable"),
+			TEXT("The exact class default object is unavailable."));
+	}
+	constexpr EPropertyFlags UnsavedFlags = CPF_Edit | CPF_Transient | CPF_Deprecated | CPF_SkipSerialization;
+	TArray<FAssetDocumentEditorPropertyInspectionRow> Rows;
+	for (TFieldIterator<FProperty> It(&ExactClass); It; ++It)
+	{
+		const FProperty& Property = **It;
+		if (Property.HasAnyPropertyFlags(UnsavedFlags) || DeclaredNames.Contains(Property.GetAuthoredName()))
+		{
+			continue;
+		}
+		bool bIdentical = true;
+		for (int32 Index = 0; Index < Property.ArrayDim && bIdentical; ++Index)
+		{
+			bIdentical = Property.Identical(Property.ContainerPtrToValuePtr<void>(&LiveAsset, Index),
+				Property.ContainerPtrToValuePtr<void>(DefaultObject, Index), PPF_DeepComparison);
+		}
+		if (bIdentical)
+		{
+			continue;
+		}
+		const UClass* OwnerClass = Property.GetOwnerClass();
+		FString DiagnosticCode;
+		FAssetDocumentEditorPropertyInspectionRow& Row = Rows.AddDefaulted_GetRef();
+		const TArray<FAssetDocumentEditorValueField> Fields = {
+			{TEXT("name"), MakePropertyInspectionStringValue(Property.GetName())},
+			{TEXT("declaring_class"), MakePropertyInspectionStringValue(
+				OwnerClass != nullptr ? OwnerClass->GetPathName() : ExactClass.GetPathName())},
+			{TEXT("ue_cpp_type"), MakePropertyInspectionStringValue(Property.GetCPPType())},
+		};
+		if (!TryBuildAssetDocumentEditorValueObject(Fields, Row.Value, DiagnosticCode))
+		{
+			return MakePropertyInspectionFailure(
+				TEXT("PropertyInspection.OutputBuildFailed"),
+				TEXT("The omitted property row could not be encoded."));
+		}
+		Row.Name = Property.GetName();
+		Row.DeclaringClass = OwnerClass != nullptr ? OwnerClass->GetPathName() : ExactClass.GetPathName();
+	}
+	FString DiagnosticCode;
+	FAssetDocumentRuntimeValueDto Subject;
+	if (!TryBuildPropertyInspectionSubject(ExactClass, &LiveAsset, Subject, DiagnosticCode))
+	{
+		return MakePropertyInspectionFailure(
+			TEXT("PropertyInspection.OutputBuildFailed"),
+			TEXT("The inspection subject could not be encoded."));
+	}
+	FAssetDocumentEditorPropertyInspectionResult Result;
+	const TArray<FAssetDocumentEditorValueField> ResultFields = {
+		{TEXT("subject"), MoveTemp(Subject)},
+		{TEXT("omitted"), MakePropertyInspectionRows(Rows)},
+	};
+	if (!TryBuildAssetDocumentEditorValueObject(ResultFields, Result.Value, DiagnosticCode))
+	{
+		return MakePropertyInspectionFailure(
+			TEXT("PropertyInspection.OutputBuildFailed"),
+			TEXT("The inspection result could not be encoded."));
+	}
+	Result.bSucceeded = true;
+	return Result;
 }
 
 FAssetDocumentEditorPropertyInspectionResult

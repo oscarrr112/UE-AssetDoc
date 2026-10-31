@@ -16,7 +16,10 @@ Document (MCP/schemas/assetdocument/Sequencer.md)::
       "Tracks": [{"Type": "Fade", "Sections": [...]}],
       "Folders": [{"Path": "Set"}], "Markers": [{"Frame": 60, "Label": "Door opens"}],
       "Groups": [{"Name": "Hero", "Members": [{"Binding": "Hero"}, {"Track": "/Body/Tracks/0"}]}],
-      "Director": {"Variables": [...], "FunctionGraphs": [...], "UbergraphPages": [...]}, "MetaData": {"Notes": "..."}
+      "BindingTags": {"Hero": [{"Binding": "Hero"}]},
+      "Director": {"Variables": [...], "FunctionGraphs": [...], "UbergraphPages": [...]},
+      "MetaData": {"Notes": "...", "Objects": [{"Class": "/Script/MovieScene.MovieSceneShotMetaData",
+                                                "Properties": {"FavoriteRating": 4}}]}
     }
 
 * Create and Apply write every region as Sequencer's own edits (``seq.edit.v1``, planned in ``level_sequence_apply``).
@@ -24,10 +27,18 @@ Document (MCP/schemas/assetdocument/Sequencer.md)::
   and director bindings name its functions / custom events as ``Endpoint``.
 * A section's ``Group`` is a number shared by the sections of one section group; groups compare by which sections they
   group, not by their numbers. ``Groups`` (the Group Manager's node groups) compare their ``Members`` as a set.
+* ``BindingTags`` (Sequencer's binding tags, what gameplay finds bindings by) lists every tag with the bindings it tags
+  (binding references); listed, it is complete. A binding's ``SpawnedBy`` is the spawnable it possesses (a parent
+  sequence's, in the raw reference form); omitted it is kept, null clears it. ``MetaData.Objects`` lists the metadata
+  objects other than Author / Notes (take, shot, clip metadata) by Class with their fields; omitted it is kept.
 * Times are display frames of ``Settings.DisplayRate`` (shortest decimal that converts back to the same tick);
   sub / shot section ``Properties`` use the inner sequence's frames.
 * A channel with more than 64 keys is extracted in the columnar form ``{"Frames", "Values", "Interp"?, ...}``
   (``Interp`` one token when every key has it; omitted when every key is ``SmartAuto``).
+* Content with no document form reads as a marker (``asset_document.markers``): a value
+  ``{"Unsupported", "Text"}``, a channel ``{"Unsupported": <channel type>}``, a section's ``ChannelOverrides``. Extract
+  warns ``Sequencer.Unrepresented`` at each and carries the read's other warnings; apply keeps a marker left as
+  extracted or omitted from its object and refuses an edited one (``kept_markers``).
 """
 from __future__ import annotations
 
@@ -35,7 +46,15 @@ import copy
 import dataclasses
 import json
 
-from asset_document.diagnostics import DiagnosticSeverity, RuntimeDiagnostic, with_diagnostics
+from asset_document import markers as unrepresented
+from asset_document.diagnostics import (
+    AssetDocumentContractError,
+    DiagnosticSeverity,
+    RuntimeDiagnostic,
+    contract_errors,
+    read_warning,
+    with_diagnostics,
+)
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.dto import PrimitiveRequirement
 from asset_document.meta import (
@@ -61,14 +80,16 @@ CATALOG = "seq.catalog.v1"
 EDIT = "seq.edit.v1"
 STATUS = "seq.status.v1"
 
-BODY_KEYS = ("Settings", "Bindings", "Tracks", "Folders", "Markers", "Groups", "Director", "MetaData")
+BODY_KEYS = ("Settings", "Bindings", "Tracks", "Folders", "Markers", "Groups", "BindingTags", "Director", "MetaData")
 SETTINGS_KEYS = ("DisplayRate", "TickResolution", "Evaluation", "Clock", "CustomClock", "PlaybackRange",
                  "SelectionRange", "PlaybackRangeLocked", "ReadOnly", "MarkersLocked", "ShowMarkers")
-BINDING_KEYS = ("Name", "RenamedFrom", "Id", "Class", "Bind", "Spawnable", "CustomBinding", "References", "Tags",
-                "Folder", "Tracks", "Children")
+BINDING_KEYS = ("Name", "RenamedFrom", "Id", "Class", "Bind", "Spawnable", "CustomBinding", "References", "SpawnedBy",
+                "Tags", "Folder", "Tracks", "Children")
 TRACK_KEYS = ("Type", "Property", "Name", "Id", "Folder", "Muted", "MutedRows", "RowConditions", "Properties", "Sections")
+# "Unsupported": "ChannelOverrides" is the older form of the ChannelOverrides marker (canonicalize turns it into it).
 SECTION_KEYS = ("Class", "Start", "End", "Row", "OverlapPriority", "Active", "Locked", "Group", "Blend", "Easing",
-                "PreRoll", "PostRoll", "WhenFinished", "Properties", "Event", "Unsupported", "Channels", "Parameters")
+                "PreRoll", "PostRoll", "WhenFinished", "Properties", "Event", "ChannelOverrides", "Unsupported", "Channels",
+                "Parameters")
 # A parameter of a parameter section (material, MPC, custom primitive data, particle parameters, DMX patches).
 PARAMETER_KEYS = ("Type", "Name", "Properties", "Channels", "Parameters")
 CHANNEL_KEYS = ("Keys", "Default", "PreInfinity", "PostInfinity", "Unsupported", "Frames", "Values", "Interp",
@@ -76,7 +97,8 @@ CHANNEL_KEYS = ("Keys", "Default", "PreInfinity", "PostInfinity", "Unsupported",
 FOLDER_KEYS = ("Path", "Color")
 MARKER_KEYS = ("Frame", "Label", "Comment", "Color", "DeterminismFence", "Inclusive")
 GROUP_KEYS = ("Name", "Members")
-METADATA_KEYS = ("Author", "Notes")
+METADATA_KEYS = ("Author", "Notes", "Objects")
+METADATA_OBJECT_KEYS = ("Class", "Properties")
 # A listed Settings / MetaData: an omitted field takes a new sequence's value. The timing fields extract always
 # writes are kept when omitted (a Settings that lists only PlaybackRange must not reset the rates); Diff says so
 # (Sequencer.OmittedKept, Info).
@@ -84,7 +106,11 @@ SETTINGS_KEPT = ("DisplayRate", "TickResolution", "Evaluation", "PlaybackRange")
 # Omitted = this value; CustomClock and SelectionRange omitted = none (null in the settings op: the defaults).
 SETTINGS_DEFAULTS = {"Clock": "Tick", "PlaybackRangeLocked": False, "ReadOnly": False, "MarkersLocked": False,
                      "ShowMarkers": False}
-METADATA_DEFAULTS = {"Author": "", "Notes": ""}
+METADATA_DEFAULTS = {"Author": "", "Notes": "", "Objects": []}
+# A listed MetaData that leaves Objects out keeps the metadata objects (documents from before Objects existed).
+METADATA_KEPT = ("Objects",)
+# Binding fields an authored binding that leaves them out keeps (documents from before they were read); null = none.
+BINDING_KEPT = ("SpawnedBy",)
 # Columnar channel arrays (document key -> seq.read.v1 "columns" record key).
 COLUMNS = {"Frames": "frames", "Values": "values", "Interp": "interp", "Arrive": "arrive", "Leave": "leave",
            "ArriveWeight": "arrive_weight", "LeaveWeight": "leave_weight", "WeightMode": "weight_mode"}
@@ -205,6 +231,12 @@ def _validate_tracks(tracks, path):
             if group is not None and (type(group) not in (int, float) or not float(group).is_integer() or group < 1):
                 raise error(f"{at}/Group", "Group is a section group number (1, 2, ...): the sections of one group share it.",
                             "Sequencer.InvalidBody")
+            if "ChannelOverrides" in section and not unrepresented.is_marker(section["ChannelOverrides"]):
+                raise error(f"{at}/ChannelOverrides", "ChannelOverrides is read only: leave the marker as extracted, or "
+                            "omit it (the overrides are kept either way).", "Sequencer.InvalidBody")
+            if "Unsupported" in section and section["Unsupported"] != "ChannelOverrides":
+                raise error(f"{at}/Unsupported", "A section has no Unsupported field (its procedural channel overrides "
+                            "read as the ChannelOverrides marker).", "Sequencer.InvalidBody")
             if "Channels" in section:
                 _validate_channels(section["Channels"], f"{at}/Channels")
             if "Parameters" in section:
@@ -245,7 +277,26 @@ def validate_body(body):
         for number, member in enumerate(_list(group.get("Members", []), f"{path}/Groups/{index}/Members", "Members")):
             _object(member, f"{path}/Groups/{index}/Members/{number}", "A group member")
     if "MetaData" in body:
-        _keys(_object(body["MetaData"], f"{path}/MetaData", "MetaData"), METADATA_KEYS, f"{path}/MetaData", "MetaData")
+        metadata = _object(body["MetaData"], f"{path}/MetaData", "MetaData")
+        _keys(metadata, METADATA_KEYS, f"{path}/MetaData", "MetaData")
+        classes = set()
+        for index, item in enumerate(_list(metadata.get("Objects", []), f"{path}/MetaData/Objects", "Objects")):
+            where = f"{path}/MetaData/Objects/{index}"
+            _keys(_object(item, where, "A metadata object"), METADATA_OBJECT_KEYS, where, "metadata object")
+            if type(item.get("Class")) is not str or not item["Class"]:
+                raise error(f"{where}/Class", "A metadata object has Class (its class path).", "Sequencer.InvalidBody")
+            if item["Class"] in classes:
+                raise error(f"{where}/Class", f"{item['Class']} is listed twice: a sequence has one metadata object per "
+                            "class.", "Sequencer.InvalidBody")
+            classes.add(item["Class"])
+            _object(item.get("Properties", {}), f"{where}/Properties", "Properties")
+    if "BindingTags" in body:
+        for tag, rows in _object(body["BindingTags"], f"{path}/BindingTags", "BindingTags").items():
+            where = f"{path}/BindingTags/{escape(tag)}"
+            if not tag:
+                raise error(where, "A binding tag has a name.", "Sequencer.InvalidBody")
+            for index, row in enumerate(_list(rows, where, "A binding tag")):
+                _object(row, f"{where}/{index}", "A tagged binding")
 
 
 def _drop_defaults(value):
@@ -319,6 +370,87 @@ def camera_cut_first(body):
     return out
 
 
+# ---------------------------------------------------------------------------
+# Content the document has no form for: markers (asset_document.markers)
+# ---------------------------------------------------------------------------
+# A section's procedural channel overrides (the reason must match the seq.read.v1 section entry's).
+CHANNEL_OVERRIDES = unrepresented.marker("Procedural channel overrides (noise) have no document form; AssetDoc keeps them.")
+# The read warnings of content that reads as a marker: Extract gives that marker's Sequencer.Unrepresented instead.
+MARKER_CODES = ("Sequencer.UnsupportedValue", "Sequencer.UnsupportedChannel", "Sequencer.UnsupportedChannelOverride")
+# Body regions that can hold markers (Director is the Blueprint profile's).
+MARKED_REGIONS = ("Settings", "Bindings", "Root", "Tracks", "MetaData")
+
+
+def upgrade_markers(value):
+    """The older document form: a section's ``"Unsupported": "ChannelOverrides"`` is its ChannelOverrides marker."""
+    if type(value) is list:
+        return [upgrade_markers(item) for item in value]
+    if type(value) is not dict:
+        return value
+    out = {key: upgrade_markers(item) for key, item in value.items()}
+    for section in out.get("Sections") if type(out.get("Sections")) is list else ():
+        if type(section) is dict and section.get("Unsupported") == "ChannelOverrides":
+            del section["Unsupported"]
+            section.setdefault("ChannelOverrides", dict(CHANNEL_OVERRIDES))
+    return out
+
+
+def kept_markers(authored, live, path="", check=False):
+    """``authored`` against ``live`` (the current read at the same place, objects key by key, lists index by index):
+    a marked value ``authored`` omits from an object is put back (it keeps the content, never resets it), and an older
+    value marker ``{"Unsupported": <export text>}`` holding the current text becomes the current marker. ``check``: a
+    marker that is not the current one there (edited, or where the asset has none) is refused with
+    ``Sequencer.UnrepresentedValue``."""
+    if unrepresented.is_marker(authored):
+        if (unrepresented.is_marker(live) and unrepresented.TEXT not in authored and len(authored) == 1
+                and authored[unrepresented.KEY] == live.get(unrepresented.TEXT)):
+            return live
+        if check:
+            unrepresented.require_unchanged(path or "/", authored, live, PREFIX)
+        return authored
+    if type(authored) is dict:
+        current = live if type(live) is dict else {}
+        out = {key: kept_markers(item, current.get(key), f"{path}/{escape(key)}", check) for key, item in authored.items()}
+        for key, item in current.items():
+            if key not in authored and not key.startswith("_") and unrepresented.is_marker(item):
+                out[key] = item
+        for key in BINDING_KEPT:
+            if key not in authored and key in current:
+                out[key] = current[key]
+            elif key in out and out[key] is None and key not in current:
+                del out[key]  # null = none, as the read leaves it out
+        return out
+    if type(authored) is list:
+        current = live if type(live) is list else []
+        return [kept_markers(item, current[index] if index < len(current) else None, f"{path}/{index}", check)
+                for index, item in enumerate(authored)]
+    return authored
+
+
+def warn_read(body, facts):
+    """Extract's read warnings: one ``Sequencer.Unrepresented`` per marker (with the read's own message for that place
+    when it has one), and every other warning of the read (orphaned bindings, raw references, locators and remote
+    bindings shown as stored, Control Rig tracks, ...)."""
+    warnings = [item for item in (facts or {}).get("warnings", []) if type(item) is dict]
+    told = {item.get("Path"): item.get("Message") for item in warnings if item.get("Code") in MARKER_CODES}
+
+    def walk(value, path):
+        if unrepresented.is_marker(value):
+            read_warning(path, f"{PREFIX}.Unrepresented", told.get(path) or value[unrepresented.KEY])
+        elif type(value) is dict:
+            for key, item in value.items():
+                walk(item, f"{path}/{escape(key)}")
+        elif type(value) is list:
+            for index, item in enumerate(value):
+                walk(item, f"{path}/{index}")
+    for key in MARKED_REGIONS:
+        if key in body:
+            walk(body[key], f"/Body/{key}")
+    for item in warnings:
+        if item.get("Code") not in MARKER_CODES:
+            read_warning(item.get("Path") or "/Body", item.get("Code") or f"{PREFIX}.ReadWarning", item.get("Message", ""))
+
+
 def canonicalize(document):
     body = common.validate_header(document, (CLASS,), PREFIX, BODY_KEYS)
     validate_body(body)
@@ -327,8 +459,10 @@ def canonicalize(document):
     canonical.setdefault("Properties", {})
     if "Body" in canonical:
         canonical["Body"] = camera_cut_first(canonical["Body"])
-    canonical["Body"] = {key: (_drop_defaults(value) if key in ("Bindings", "Tracks") else value)
+    canonical["Body"] = {key: (_drop_defaults(upgrade_markers(value)) if key in ("Bindings", "Tracks") else value)
                          for key, value in canonical.get("Body", {}).items()}
+    if type(canonical["Body"].get("MetaData")) is dict and "Objects" in canonical["Body"]["MetaData"]:
+        canonical["Body"]["MetaData"]["Objects"] = metadata_objects(canonical["Body"]["MetaData"]["Objects"])
     if "Director" in canonical["Body"]:
         canonical["Body"]["Director"] = director.canonical(canonical["Body"]["Director"],
                                                            director.default_class(document["Target"]))
@@ -518,6 +652,8 @@ def normalize_region(key, value):
         return _drop_defaults([normalize_track(track) for track in value])
     if key == "Markers":
         return sorted(value, key=_frame_order)
+    if key == "BindingTags":
+        return {tag: rows for tag, rows in value.items() if rows != []} if type(value) is dict else value
     if key == "Groups":
         return [{**group, "Members": sorted(group.get("Members", []), key=lambda member: json.dumps(member, sort_keys=True))}
                 if type(group) is dict and type(group.get("Members")) is list else group for group in value]
@@ -625,6 +761,8 @@ def assemble(records, ids=False):
         body["Markers"] = header["markers"]
     if header.get("groups"):
         body["Groups"] = header["groups"]
+    if header.get("binding_tags"):
+        body["BindingTags"] = header["binding_tags"]
     if header.get("metadata"):
         body["MetaData"] = header["metadata"]
     return body, {"header": header, "warnings": warnings}
@@ -659,6 +797,7 @@ def director_class(facts, target):
 def document_body(calls, read, context, target):
     """The extracted Body: the read regions and the Director region."""
     body, facts = read_body(calls)
+    warn_read(body, facts)
     owner = director_class(facts, target)
     if owner is not None:
         body["Director"] = director.extract(context, read, ROUTE, BY_ID, owner)
@@ -711,11 +850,14 @@ def body_diff(authored, live, exact, groups=True):
         if key not in authored or key == "Director":
             continue
         path = f"/Body/{key}"
-        if key in ("Settings", "MetaData"):
-            _sparse_diff(path, authored[key], live.get(key, {}), key, exact, changes)
+        if key == "Settings":
+            _sparse_diff(path, kept_markers(authored[key], live.get(key, {})), live.get(key, {}), key, exact, changes)
+        elif key == "MetaData":
+            _sparse_diff(path, kept_metadata(authored[key], live.get(key, {})), live.get(key, {}), key, exact, changes)
         else:
-            value_diff(path, strip_groups(normalize_region(key, authored[key])),
-                       strip_groups(normalize_region(key, live.get(key, []))), exact, changes)
+            theirs = strip_groups(normalize_region(key, live.get(key, [])))
+            value_diff(path, kept_markers(strip_groups(normalize_region(key, authored[key])), theirs), theirs, exact,
+                       changes)
     if groups and any(key in authored for key in GROUPED):
         changes.extend(group_diff({key: normalize_region(key, authored[key] if key in authored else live.get(key, []))
                                    for key in GROUPED},
@@ -723,11 +865,77 @@ def body_diff(authored, live, exact, groups=True):
     return changes
 
 
+def _object_class(item):
+    return str(item.get("Class")) if type(item) is dict else ""
+
+
+def metadata_objects(objects):
+    """MetaData.Objects in its comparison form: sorted by Class (one object per class)."""
+    if type(objects) is not list:
+        return objects
+    return sorted(objects, key=_object_class)
+
+
+def _metadata_index_maps(body, maps):
+    """The map of MetaData.Objects from the comparison form (sorted by Class) back to the document's order."""
+    metadata = body.get("MetaData") if type(body) is dict else None
+    objects = metadata.get("Objects") if type(metadata) is dict else None
+    if type(objects) is not list:
+        return maps
+    order = sorted(range(len(objects)), key=lambda number: _object_class(objects[number]))
+    if order != list(range(len(objects))):
+        maps["/Body/MetaData/Objects"] = _permutation(order)
+    return maps
+
+
+def in_document_order(document, run):
+    """``run()``, its refusals at MetaData.Objects paths reported in the document's order (the canonical form sorts
+    the objects by Class)."""
+    maps = _metadata_index_maps(document.get("Body") if type(document) is dict else None, {})
+    if not maps:
+        return run()
+    try:
+        return run()
+    except AssetDocumentContractError as error:
+        diagnostics = [dataclasses.replace(item, path=document_path(item.path, maps)) for item in error.diagnostics]
+        raise contract_errors(diagnostics) from None
+
+
+def kept_metadata(authored, live, path="/Body/MetaData", check=False):
+    """A listed MetaData against the live one (kept_markers): Objects pair by Class."""
+    live = live if type(live) is dict else {}
+    out = kept_markers({key: value for key, value in authored.items() if key != "Objects"}, live, path, check)
+    if "Objects" in authored:
+        current = {item.get("Class"): item for item in live.get("Objects", []) if type(item) is dict}
+        out["Objects"] = [kept_markers(item, current.get(item.get("Class")) if type(item) is dict else None,
+                                       f"{path}/Objects/{index}", check)
+                          for index, item in enumerate(authored["Objects"])]
+    return out
+
+
+def _objects_diff(path, mine, theirs, exact, changes):
+    """MetaData.Objects by Class: an object added, removed, or its Properties changed."""
+    current = {item.get("Class"): item for item in theirs if type(item) is dict}
+    listed = set()
+    for index, item in enumerate(mine):
+        name = item.get("Class") if type(item) is dict else None
+        listed.add(name)
+        if name not in current:
+            changes.append(Difference(f"{path}/{index}", DiffKind.ADD, True, item, False, None))
+        else:
+            value_diff(f"{path}/{index}", item, current[name], exact, changes)
+    removed = len(mine)
+    for name, item in current.items():
+        if name not in listed:
+            changes.append(Difference(f"{path}/{removed}", DiffKind.REMOVE, False, None, True, item))
+            removed += 1
+
+
 def omitted_values(region, authored, live):
     """{name: value} that a listed Settings / MetaData resets: the live fields it leaves out (Settings: but the kept
     timing fields), each at a new sequence's value (None: CustomClock / SelectionRange, none)."""
     defaults = SETTINGS_DEFAULTS if region == "Settings" else METADATA_DEFAULTS
-    kept = SETTINGS_KEPT if region == "Settings" else ()
+    kept = SETTINGS_KEPT if region == "Settings" else METADATA_KEPT
     if region == "Settings" and authored.get("Clock") == "Custom":
         # A custom clock source has its clock object (the editor has no "none" for it): omitted keeps it.
         kept = kept + ("CustomClock",)
@@ -740,6 +948,9 @@ def _sparse_diff(path, mine, theirs, region, exact, changes):
     defaults = SETTINGS_DEFAULTS if region == "Settings" else METADATA_DEFAULTS
     for name in mine:
         if name not in theirs and name in defaults and common.same(mine[name], defaults[name], exact):
+            continue
+        if region == "MetaData" and name == "Objects":
+            _objects_diff(f"{path}/Objects", mine[name], theirs.get(name, []), exact, changes)
             continue
         value_diff(f"{path}/{escape(name)}", mine[name], theirs.get(name), exact, changes)
     for name in omitted_values(region, mine, theirs):
@@ -903,7 +1114,7 @@ def body_index_maps(body, root_path=None):
     order = sorted(range(len(markers)), key=lambda number: _frame_order(markers[number]))
     if order != list(range(len(markers))):
         maps["/Body/Markers"] = _permutation(order)
-    return maps
+    return _metadata_index_maps(body, maps)
 
 
 def document_path(path, maps):
@@ -997,14 +1208,16 @@ class LevelSequenceRuntimeProfile:
     def preflight(self, document, scratch_handle, context):
         canonical = canonicalize(document)
         _properties().validate(canonical.get("Properties", {}), context)
-        _apply.preflight(canonical, existing(context, canonical), context)
+        in_document_order(document, lambda: _apply.preflight(canonical, existing(context, canonical), context))
         return SNAPSHOT_COVERED
 
     def apply(self, document, read_asset_handle, mutable_asset_handle, context):
-        return _apply.apply(canonicalize(document), read_asset_handle, mutable_asset_handle, context)
+        canonical = canonicalize(document)
+        return in_document_order(document, lambda: _apply.apply(canonical, read_asset_handle, mutable_asset_handle, context))
 
     def repair(self, document, asset_handle, context):
-        return _apply.repair(canonicalize(document), asset_handle, context)
+        canonical = canonicalize(document)
+        return in_document_order(document, lambda: _apply.repair(canonical, asset_handle, context))
 
     def extract(self, *, target, asset_handle, context, include_defaults=False):
         return extract(common.require_target(target, PREFIX), asset_handle, context, include_defaults)
@@ -1036,7 +1249,7 @@ class LevelSequenceRuntimeProfile:
 def _meta():
     rows = [("settings", "/Body/Settings"), ("bindings", "/Body/Bindings"), ("tracks", "/Body/Tracks"),
             ("folders", "/Body/Folders"), ("markers", "/Body/Markers"), ("groups", "/Body/Groups"),
-            ("director", "/Body/Director"),
+            ("binding_tags", "/Body/BindingTags"), ("director", "/Body/Director"),
             ("metadata", "/Body/MetaData")]
     regions = tuple(RegionMeta(f"level_sequence.{name}.v1", path, RegionOwnership.MANAGED, IdentityPolicy.STABLE_KEY,
                                OrderPolicy.CANONICAL, DefaultPolicy.EXPLICIT, OmissionPolicy.PRESERVE,

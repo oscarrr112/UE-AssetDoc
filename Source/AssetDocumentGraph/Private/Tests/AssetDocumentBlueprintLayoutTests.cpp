@@ -12,6 +12,12 @@
 //                   leaves no overlaps and applying it again changes nothing.
 //   CommentBoxes    comment boxes (K2:Comment): text, position, size, colour; a node's CommentBubbleVisible;
 //                   extract writes them and the extract applies back unchanged.
+//   NodeSizes       an extract that asks (bIncludeLayout) gives every node's drawn size beside the document (a big
+//                   node larger than a getter, a comment box its own size); the document has none of it, applies
+//                   back unchanged and diffs empty; the extract leaves the package clean and opens no editor; logs
+//                   the time on a 124-node graph.
+//   OverlapWarnings Validate warns (never refuses) about placed nodes that overlap, comment boxes that cross and a
+//                   node half out of its box; overlaps the document does not touch give none.
 
 #include "AssetDocumentGraphNodeSize.h"
 #include "AssetDocumentModule.h"
@@ -25,7 +31,9 @@
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphNode_Comment.h"
 #include "EdGraphSchema_K2.h"
+#include "Editor.h"
 #include "Engine/Blueprint.h"
+#include "HAL/PlatformTime.h"
 #include "HAL/FileManager.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
@@ -33,6 +41,7 @@
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "PackageTools.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -755,6 +764,287 @@ bool FAssetDocumentBlueprintLayoutCommentBoxesTest::RunTest(const FString&)
 	{
 		return Diagnostic.Code == TEXT("Graph.NodeNotResizable") && Diagnostic.Path.EndsWith(TEXT("/Size"));
 	}));
+	return true;
+}
+
+namespace AssetDocumentBlueprintLayoutTests
+{
+FString LayoutTestJson(const TSharedPtr<FJsonObject>& Object)
+{
+	FString Text;
+	if (Object.IsValid())
+	{
+		const auto Writer = TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Text);
+		FJsonSerializer::Serialize(Object.ToSharedRef(), Writer);
+	}
+	return Text;
+}
+
+FAssetDocumentResult LayoutTestExtract(const FLayoutTestFixture& Fixture, bool bLayout)
+{
+	FAssetDocumentExtractRequest Request;
+	Request.AssetPath = Fixture.Asset.ObjectPath;
+	Request.bIncludeLayout = bLayout;
+	return FAssetDocumentModule::Get().GetService().Extract(Request);
+}
+
+// The document's nodes of its first event graph, by Id.
+TMap<FString, TSharedPtr<FJsonObject>> LayoutTestDocumentNodes(const TSharedPtr<FJsonObject>& Document)
+{
+	TMap<FString, TSharedPtr<FJsonObject>> Nodes;
+	const TSharedPtr<FJsonObject>* Body = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* Pages = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* Items = nullptr;
+	if (Document.IsValid() && Document->TryGetObjectField(TEXT("Body"), Body) && (*Body)->TryGetArrayField(TEXT("UbergraphPages"), Pages)
+		&& Pages->Num() > 0 && (*Pages)[0]->AsObject()->TryGetArrayField(TEXT("Nodes"), Items))
+	{
+		for (const TSharedPtr<FJsonValue>& Item : *Items)
+		{
+			Nodes.Add(Item->AsObject()->GetStringField(TEXT("Id")), Item->AsObject());
+		}
+	}
+	return Nodes;
+}
+
+// The Id of the document node whose Action contains Action and whose Comment is Comment.
+FString LayoutTestFindId(const TMap<FString, TSharedPtr<FJsonObject>>& Nodes, const TCHAR* Action, const TCHAR* Comment)
+{
+	for (const TPair<FString, TSharedPtr<FJsonObject>>& Node : Nodes)
+	{
+		FString NodeComment;
+		Node.Value->TryGetStringField(TEXT("Comment"), NodeComment);
+		if (Node.Value->GetStringField(TEXT("Action")).Contains(Action) && NodeComment == Comment)
+		{
+			return Node.Key;
+		}
+	}
+	return FString();
+}
+
+// {"Width", "Height"} of a node in an extract's layout, or (0, 0).
+FIntPoint LayoutTestSize(const TSharedPtr<FJsonObject>& Graph, const FString& NodeId, bool* bOutEstimated = nullptr)
+{
+	const TSharedPtr<FJsonObject>* Size = nullptr;
+	if (!Graph.IsValid() || !Graph->TryGetObjectField(NodeId, Size))
+	{
+		return FIntPoint::ZeroValue;
+	}
+	if (bOutEstimated != nullptr)
+	{
+		bool bEstimated = false;
+		(*Size)->TryGetBoolField(TEXT("Estimated"), bEstimated);
+		*bOutEstimated = bEstimated;
+	}
+	return FIntPoint(static_cast<int32>((*Size)->GetNumberField(TEXT("Width"))), static_cast<int32>((*Size)->GetNumberField(TEXT("Height"))));
+}
+
+const FAssetDocumentDiagnostic* LayoutTestFindWarning(const FAssetDocumentResult& Result, const TCHAR* Code, const TCHAR* Contains = nullptr)
+{
+	return Result.Diagnostics.FindByPredicate([Code, Contains](const FAssetDocumentDiagnostic& Diagnostic)
+	{
+		return Diagnostic.Code == Code && (Contains == nullptr || Diagnostic.Message.Contains(Contains));
+	});
+}
+
+int32 LayoutTestCountLayoutWarnings(const FAssetDocumentResult& Result)
+{
+	int32 Count = 0;
+	for (const FAssetDocumentDiagnostic& Diagnostic : Result.Diagnostics)
+	{
+		Count += Diagnostic.Code.StartsWith(TEXT("Graph.Layout")) ? 1 : 0;
+	}
+	return Count;
+}
+} // namespace AssetDocumentBlueprintLayoutTests
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentBlueprintLayoutNodeSizesTest,
+	"UEAssetDoc.Blueprint.Layout.NodeSizes",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentBlueprintLayoutNodeSizesTest::RunTest(const FString&)
+{
+	namespace LT = AssetDocumentBlueprintLayoutTests;
+	LT::FLayoutTestFixture Fixture(*this, TEXT("BP_LayoutSizes"));
+	int32 Authored = 0;
+	// The player-sized graph and a comment box around its first band.
+	const FString Body = LT::LayoutTestPlayerBody(Authored).Replace(TEXT("\"Nodes\":["),
+		TEXT("\"Nodes\":[{\"Id\":\"Box\",\"Action\":\"K2:Comment\",\"Comment\":\"Band\",\"Position\":{\"X\":-64,\"Y\":-96},\"Size\":{\"Width\":640,\"Height\":320}},"));
+	if (!Fixture.ApplyOk(Fixture.Document(TEXT("Create"), Body), TEXT("sized graph")))
+	{
+		return false;
+	}
+	UBlueprint* Blueprint = Fixture.Asset.Blueprint();
+	UPackage* Package = Blueprint != nullptr ? Blueprint->GetOutermost() : nullptr;
+	if (!TestNotNull(TEXT("blueprint"), Blueprint) || !TestFalse(TEXT("the saved package is clean"), Package->IsDirty()))
+	{
+		return false;
+	}
+	UAssetEditorSubsystem* Editors = GEditor != nullptr ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr;
+	TestTrue(TEXT("no editor is open for it"), Editors != nullptr && Editors->FindEditorForAsset(Blueprint, false) == nullptr);
+
+	const double PlainStart = FPlatformTime::Seconds();
+	const FAssetDocumentResult Plain = LT::LayoutTestExtract(Fixture, false);
+	const double PlainSeconds = FPlatformTime::Seconds() - PlainStart;
+	const double SizedStart = FPlatformTime::Seconds();
+	const FAssetDocumentResult Sized = LT::LayoutTestExtract(Fixture, true);
+	const double SizedSeconds = FPlatformTime::Seconds() - SizedStart;
+	AddInfo(FString::Printf(TEXT("extract of %d nodes: %.1f ms without sizes, %.1f ms with sizes"), Authored + 1,
+		PlainSeconds * 1000.0, SizedSeconds * 1000.0));
+	if (!TestTrue(TEXT("both extracts succeed"), Plain.IsSuccess() && Sized.IsSuccess() && Sized.Payload.IsValid()))
+	{
+		Fixture.Report(TEXT("extract"), Sized);
+		return false;
+	}
+	TestFalse(TEXT("an extract that does not ask has no layout"), Plain.Layout.IsValid());
+	TestFalse(TEXT("the extract leaves the package clean"), Package->IsDirty());
+	TestTrue(TEXT("the extract opens no editor"), Editors != nullptr && Editors->FindEditorForAsset(Blueprint, false) == nullptr);
+	TestEqual(TEXT("the sizes are not part of the document"), LT::LayoutTestJson(Sized.Payload), LT::LayoutTestJson(Plain.Payload));
+	TestFalse(TEXT("no _Layout in the document"), Sized.Payload->HasField(AssetDocumentExtractLayoutField));
+	TestTrue(TEXT("the result serializes layout"), Sized.ToJson()->HasField(TEXT("layout")) && !Plain.ToJson()->HasField(TEXT("layout")));
+
+	const TSharedPtr<FJsonObject>* Graphs = nullptr;
+	const TSharedPtr<FJsonObject>* Sizes = nullptr;
+	if (!TestTrue(TEXT("layout lists the event graph"), Sized.Layout.IsValid() && Sized.Layout->TryGetObjectField(TEXT("Graphs"), Graphs)
+		&& (*Graphs)->TryGetObjectField(TEXT("UbergraphPages/EventGraph"), Sizes)))
+	{
+		AddInfo(LT::LayoutTestJson(Sized.Layout).Left(2000));
+		return false;
+	}
+	// Every node of the document has a measured size.
+	const TMap<FString, TSharedPtr<FJsonObject>> Nodes = LT::LayoutTestDocumentNodes(Sized.Payload);
+	TestEqual(TEXT("the document lists every node"), Nodes.Num(), Authored + 1);
+	int32 Missing = 0;
+	int32 Estimated = 0;
+	for (const TPair<FString, TSharedPtr<FJsonObject>>& Node : Nodes)
+	{
+		bool bEstimated = false;
+		const FIntPoint Size = LT::LayoutTestSize(*Sizes, Node.Key, &bEstimated);
+		Missing += Size.X <= 0 || Size.Y <= 0 ? 1 : 0;
+		Estimated += bEstimated ? 1 : 0;
+	}
+	TestEqual(TEXT("every node has a size"), Missing, 0);
+	TestEqual(TEXT("every node is measured"), Estimated, 0);
+	const FIntPoint Getter = LT::LayoutTestSize(*Sizes, LT::LayoutTestFindId(Nodes, TEXT("K2:Get:Speed"), TEXT("band 13")));
+	const FIntPoint Trace = LT::LayoutTestSize(*Sizes, LT::LayoutTestFindId(Nodes, TEXT("LineTraceSingle"), TEXT("band 13")));
+	AddInfo(FString::Printf(TEXT("getter %d x %d, line trace %d x %d"), Getter.X, Getter.Y, Trace.X, Trace.Y));
+	TestTrue(TEXT("a line trace is wider and taller than a getter"), Trace.X > Getter.X && Trace.Y > Getter.Y);
+	TestEqual(TEXT("a comment box is its own size"), LT::LayoutTestSize(*Sizes, LT::LayoutTestFindId(Nodes, TEXT("K2:Comment"), TEXT("Band"))), FIntPoint(640, 320));
+	// The size is the editor's own measure of the node.
+	UEdGraphNode* TraceNode = nullptr;
+	const UEdGraph* EventGraph = Fixture.EventGraph();
+	for (UEdGraphNode* Node : EventGraph != nullptr ? EventGraph->Nodes : TArray<TObjectPtr<UEdGraphNode>>())
+	{
+		if (Node != nullptr && Node->NodeComment == TEXT("band 13") && Node->GetNodeTitle(ENodeTitleType::ListView).ToString().Contains(TEXT("Trace")))
+		{
+			TraceNode = Node;
+		}
+	}
+	FVector2D Measured(0.0, 0.0);
+	if (TestNotNull(TEXT("the line trace"), TraceNode) && UE::AssetDocument::Graph::MeasureGraphNodeWidget(*TraceNode, Measured))
+	{
+		TestEqual(TEXT("the line trace's size is its widget's"), Trace,
+			FIntPoint(FMath::CeilToInt(Measured.X), FMath::CeilToInt(Measured.Y)));
+	}
+	// The extract applies back unchanged, and diffs empty.
+	const TSharedPtr<FJsonObject> Document = Sized.Payload;
+	FAssetDocumentDiffRequest DiffRequest;
+	DiffRequest.Document = Document;
+	const FAssetDocumentResult Diff = FAssetDocumentModule::Get().GetService().Diff(DiffRequest);
+	const TArray<TSharedPtr<FJsonValue>>* Changed = nullptr;
+	TestTrue(TEXT("the extract diffs empty"), Diff.IsSuccess() && Diff.Payload.IsValid() && Diff.Payload->TryGetArrayField(TEXT("changed"), Changed)
+		&& Changed->IsEmpty());
+	Fixture.ReapplyExtract(Document, TEXT("sized extract applied"));
+	TestFalse(TEXT("the package is still clean"), Package->IsDirty());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentBlueprintLayoutOverlapWarningsTest,
+	"UEAssetDoc.Blueprint.Layout.OverlapWarnings",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentBlueprintLayoutOverlapWarningsTest::RunTest(const FString&)
+{
+	namespace LT = AssetDocumentBlueprintLayoutTests;
+	LT::FLayoutTestFixture Fixture(*this, TEXT("BP_LayoutWarnings"));
+	// Begin and Print side by side; Old1 and Old2 piled by hand (an overlap the documents below leave alone).
+	const FString Graph = TEXT(R"JSON("ParentClass":"/Script/Engine.Actor","UbergraphPages":[{"Name":"EventGraph","Nodes":[
+{"Id":"Begin","Action":"K2:BeginPlay","Position":{"X":0,"Y":0}},
+{"Id":"Print","Action":"K2:PrintString","Position":{"X":400,"Y":0}},
+{"Id":"Old1","Action":"K2:PrintString","Position":{"X":0,"Y":1000}},
+{"Id":"Old2","Action":"K2:PrintString","Position":{"X":{Old2X},"Y":1020}}{Nodes}],
+"Links":[{"From":"Begin:then","To":"Print:execute"}]}])JSON");
+	const auto Variant = [&Fixture, &Graph](const TCHAR* Action, const TCHAR* Old2X, const FString& Nodes)
+	{
+		return Fixture.Document(Action, LT::LayoutTestFill(*Graph, {{TEXT("{Old2X}"), Old2X}, {TEXT("{Nodes}"), Nodes}}));
+	};
+	if (!Fixture.ApplyOk(Variant(TEXT("Create"), TEXT("40"), FString()), TEXT("placed graph")))
+	{
+		return false;
+	}
+	// The document as applied: nothing placed, nothing judged (Old1 / Old2 overlap, untouched).
+	const FAssetDocumentResult Same = Fixture.Validate(Variant(TEXT("Update"), TEXT("40"), FString()), TEXT("same layout"));
+	TestTrue(TEXT("same layout: valid"), Same.IsSuccess());
+	TestEqual(TEXT("same layout: no layout warnings"), LT::LayoutTestCountLayoutWarnings(Same), 0);
+	// A new node placed on Print: a warning naming both and the overlap; the document stays valid.
+	const FAssetDocumentResult Added = Fixture.Validate(Variant(TEXT("Update"), TEXT("40"),
+		TEXT(R"JSON(,{"Id":"Branch","Action":"K2:Branch","Position":{"X":420,"Y":20}})JSON")), TEXT("new node on Print"));
+	TestTrue(TEXT("new node on Print: valid"), Added.IsSuccess());
+	const FAssetDocumentDiagnostic* Overlap = LT::LayoutTestFindWarning(Added, TEXT("Graph.LayoutNodeOverlap"), TEXT("'Branch'"));
+	if (TestNotNull(TEXT("new node on Print: Graph.LayoutNodeOverlap"), Overlap))
+	{
+		TestEqual(TEXT("at the new node's Position"), Overlap->Path, FString(TEXT("/Body/UbergraphPages/0/Nodes/4/Position")));
+		TestTrue(TEXT("names Print and the overlap"), Overlap->Message.Contains(TEXT("node 'Print'")) && Overlap->Message.Contains(TEXT(" at (420, 20)")));
+		TestEqual(TEXT("a warning"), Overlap->Severity, FString(TEXT("warning")));
+	}
+	TestEqual(TEXT("new node on Print: only that warning"), LT::LayoutTestCountLayoutWarnings(Added), 1);
+	// Moving Old2 within the pile: judged now.
+	const FAssetDocumentResult Moved = Fixture.Validate(Variant(TEXT("Update"), TEXT("60"), FString()), TEXT("moved into the pile"));
+	TestNotNull(TEXT("moved into the pile: Graph.LayoutNodeOverlap"), LT::LayoutTestFindWarning(Moved, TEXT("Graph.LayoutNodeOverlap"), TEXT("'Old2'")));
+	// Two new comment boxes crossing each other.
+	const FAssetDocumentResult Crossing = Fixture.Validate(Variant(TEXT("Update"), TEXT("40"), TEXT(R"JSON(,
+{"Id":"Left","Action":"K2:Comment","Position":{"X":-100,"Y":-700},"Size":{"Width":400,"Height":300}},
+{"Id":"Right","Action":"K2:Comment","Position":{"X":200,"Y":-650},"Size":{"Width":400,"Height":300}})JSON")), TEXT("crossing boxes"));
+	TestTrue(TEXT("crossing boxes: valid"), Crossing.IsSuccess());
+	TestNotNull(TEXT("crossing boxes: Graph.LayoutCommentOverlap"),
+		LT::LayoutTestFindWarning(Crossing, TEXT("Graph.LayoutCommentOverlap"), TEXT("comment box 'Left' partly overlaps comment box 'Right'")));
+	// A new box from Print's left edge: one holding most of Print warns that the rest is outside; one holding a
+	// small part of it, or all of Begin and Print, does not.
+	FVector2D PrintSize(0.0, 0.0);
+	const UEdGraph* EventGraph = Fixture.EventGraph();
+	if (!TestNotNull(TEXT("event graph"), EventGraph))
+	{
+		return false;
+	}
+	const UEdGraphNode* Print = nullptr;
+	for (UEdGraphNode* Node : EventGraph->Nodes)
+	{
+		if (Node != nullptr && Node->NodePosX == 400 && Node->NodePosY == 0)
+		{
+			UE::AssetDocument::Graph::MeasureGraphNodeWidget(*Node, PrintSize);
+			Print = Node;
+		}
+	}
+	if (!TestTrue(TEXT("Print is measured"), Print != nullptr && PrintSize.X > 0.0 && PrintSize.Y > 0.0))
+	{
+		return false;
+	}
+	const auto Frame = [&Variant, &PrintSize](double Part)
+	{
+		return Variant(TEXT("Update"), TEXT("40"), FString::Printf(
+			TEXT(",{\"Id\":\"Frame\",\"Action\":\"K2:Comment\",\"Position\":{\"X\":380,\"Y\":-80},\"Size\":{\"Width\":%d,\"Height\":%d}}"),
+			20 + static_cast<int32>(PrintSize.X * Part), 160 + static_cast<int32>(PrintSize.Y)));
+	};
+	const FAssetDocumentResult Most = Fixture.Validate(Frame(0.7), TEXT("box holding most of Print"));
+	const FAssetDocumentDiagnostic* Outside = LT::LayoutTestFindWarning(Most, TEXT("Graph.LayoutNodeOutsideComment"));
+	if (TestNotNull(TEXT("box holding most of Print: Graph.LayoutNodeOutsideComment"), Outside))
+	{
+		TestTrue(TEXT("names Print and Frame"), Outside->Message.Contains(TEXT("Node 'Print' is partly outside comment box 'Frame'")));
+		TestEqual(TEXT("at the new box's Position"), Outside->Path, FString(TEXT("/Body/UbergraphPages/0/Nodes/4/Position")));
+	}
+	TestEqual(TEXT("box over a small part of Print: no layout warnings"),
+		LT::LayoutTestCountLayoutWarnings(Fixture.Validate(Frame(0.3), TEXT("box over a small part of Print"))), 0);
+	const FAssetDocumentResult Around = Fixture.Validate(Variant(TEXT("Update"), TEXT("40"), FString::Printf(
+		TEXT(",{\"Id\":\"Frame\",\"Action\":\"K2:Comment\",\"Position\":{\"X\":-40,\"Y\":-80},\"Size\":{\"Width\":%d,\"Height\":%d}}"),
+		480 + static_cast<int32>(PrintSize.X), 160 + static_cast<int32>(PrintSize.Y))), TEXT("box around Begin and Print"));
+	TestEqual(TEXT("box around Begin and Print: no layout warnings"), LT::LayoutTestCountLayoutWarnings(Around), 0);
 	return true;
 }
 #endif // WITH_DEV_AUTOMATION_TESTS

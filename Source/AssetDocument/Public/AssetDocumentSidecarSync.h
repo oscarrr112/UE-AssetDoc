@@ -96,6 +96,7 @@ class ASSETDOCUMENT_API FAssetDocumentSidecarSync
 public:
 	static constexpr const TCHAR* ConflictNotice = TEXT("sidecar_sync_conflict");
 	static constexpr const TCHAR* FailedNotice = TEXT("sidecar_sync_failed");
+	static constexpr const TCHAR* InterruptedApplyCode = TEXT("Sync.ApplyInterrupted");
 
 	explicit FAssetDocumentSidecarSync(FAssetDocumentService& InService);
 	// Saves the local index when it changed.
@@ -112,6 +113,19 @@ public:
 	FAssetDocumentSidecarSyncIndex& GetIndex() { return Index; }
 	// Records the outcome in the local index (also for outcomes the runner decides without a pass).
 	void RecordIndex(const FAssetDocumentSidecarSyncOutcome& Outcome);
+
+	// Interrupted applies. Before a pass applies the sidecar it records the package, the sidecar and the content's
+	// digest in Saved/AssetDocument/SidecarSync/InFlight (one file per package), and removes the record when the apply
+	// returns. A record that is there when a pass is about to apply is one an earlier editor session left: that apply
+	// never returned (the editor crashed or was killed during it). Passes the editor starts on its own (at start, on a
+	// file change, on a save) then do not apply that content again: the outcome is failed with Sync.ApplyInterrupted
+	// and a sidecar_sync_failed notice, until the file's content changes. An explicit apply (apply_asset_document_file,
+	// sync_asset_document accept_sidecar) still runs it, and clears the record when it returns.
+	static FString GetInFlightApplyPath(const FString& PackageName);
+	// The digest of the sidecar content an unfinished apply of the package was applying, or empty.
+	static FString FindInFlightApply(const FString& PackageName);
+	static bool BeginInFlightApply(const FString& PackageName, const FString& SidecarPath, const FString& Digest);
+	static void EndInFlightApply(const FString& PackageName);
 
 	// Test hooks: extracts made by passes since the editor started, and a step after which the next pass stops as if
 	// the editor had been closed ("merge": after the asset's regions were written into the sidecar; "apply": after the

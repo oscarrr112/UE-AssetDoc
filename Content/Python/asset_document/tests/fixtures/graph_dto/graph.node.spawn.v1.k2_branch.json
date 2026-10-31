@@ -16,6 +16,7 @@
     },
     "comment": "",
     "enabled_state": "enabled",
+    "enabled_state_user_set": false,
     "parent_node_guid": null,
     "subnode_index": null,
     "subgraph_guids": [],

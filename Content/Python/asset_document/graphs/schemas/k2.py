@@ -16,8 +16,12 @@ Body shape (``UbergraphPages`` / ``FunctionGraphs`` / ``MacroGraphs`` arrays)::
 Pin type shorthands: ``float`` is the UE5 Blueprint Float (real/double), ``float32`` a
 single-precision real; ``bool``, ``int``, ``int64``, ``byte``, ``string``, ``name``,
 ``text``, ``<category>:<object path>`` and ``array:``/``set:`` prefixes as before.
-Signature flags (function graphs only): ``Pure``, ``Const``, ``CallInEditor``,
-``Access`` (public/protected/private), ``Category``, ``Tooltip``, ``Keywords``.
+Signature flags of function graphs: ``Pure``, ``Const``, ``CallInEditor``,
+``Access`` (public/protected/private), ``Category``, ``Tooltip``, ``Keywords``; an omitted one means its default.
+``Exec``, ``ThreadSafe``, ``UnsafeDuringActorConstruction``, ``Deprecated``, ``DeprecationMessage``,
+``CompactNodeTitle`` and ``InstanceColor`` (``{R, G, B, A}``) are kept as they are when omitted. Macro graphs
+state ``Category``, ``Tooltip`` (the Description), ``Keywords``, ``CompactNodeTitle`` and ``InstanceColor``,
+each kept when omitted.
 
 ``Entry`` and ``Result`` are reserved node ids for the implicit function/macro
 terminators and may be used as link endpoints without being declared.
@@ -29,7 +33,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from asset_document.diagnostics import contract_error
+from asset_document.diagnostics import contract_error, read_warning
 from asset_document.graphs.actions import action_field_name, action_kind, legacy_k2_action
 from asset_document.graphs.live import LiveNode
 from asset_document.graphs.model import (
@@ -49,7 +53,7 @@ _GRAPH_FIELDS = frozenset({"Name", "Schema", "GraphGuid", "Nodes", "Links", "Sig
 _SUBGRAPH_FIELDS = _GRAPH_FIELDS | {"Owner", "Role"}
 _NODE_FIELDS = frozenset({"Id", "Action", "Class", "Member", "Implicit", "NodeGuid", "Position", "PinOverrides",
                           "Properties", "TemplateProperties", "Name", "Comment", "Parent", "Extras", "Inputs",
-                          "PinTypes", "Size", "CommentBubbleVisible"})
+                          "PinTypes", "Size", "CommentBubbleVisible", "Enabled", "Ghost"})
 COMMENT_BOX_KIND = "EdGraphNode_Comment"
 # Node kinds identified by their Name (custom events, timelines, collapsed graphs); other K2 node names are titles.
 NAMED_KINDS = frozenset({"CustomEvent", "Timeline", "Composite"})
@@ -69,11 +73,25 @@ _SHORT_BY_TYPE = {}
 for _short, _type in _SHORT_TYPES.items():
     _SHORT_BY_TYPE.setdefault(_type, _short)  # first spelling wins: (real, double) -> "float"
 # Body Signature flag keys -> graph.function.flags.set.v1 / extras.signature_flags keys.
-SIGNATURE_FLAGS = {"Pure": "pure", "Const": "const", "CallInEditor": "call_in_editor", "Access": "access",
-                   "Category": "category", "Tooltip": "tooltip", "Keywords": "keywords"}
-SIGNATURE_FLAG_DEFAULTS = {"pure": False, "const": False, "call_in_editor": False, "access": "public",
-                           "category": "", "tooltip": "", "keywords": ""}
-_BOOL_FLAGS = frozenset({"pure", "const", "call_in_editor"})
+SIGNATURE_FLAGS = {"Pure": "pure", "Const": "const", "Exec": "exec", "CallInEditor": "call_in_editor",
+                   "ThreadSafe": "thread_safe", "UnsafeDuringActorConstruction": "unsafe_during_actor_construction",
+                   "Deprecated": "deprecated", "DeprecationMessage": "deprecation_message", "Access": "access",
+                   "Category": "category", "Tooltip": "tooltip", "Keywords": "keywords",
+                   "CompactNodeTitle": "compact_node_title", "InstanceColor": "instance_color"}
+WHITE = {"R": 1.0, "G": 1.0, "B": 1.0, "A": 1.0}
+SIGNATURE_FLAG_DEFAULTS = {"pure": False, "const": False, "exec": False, "call_in_editor": False, "thread_safe": False,
+                           "unsafe_during_actor_construction": False, "deprecated": False, "deprecation_message": "",
+                           "access": "public", "category": "", "tooltip": "", "keywords": "",
+                           "compact_node_title": "", "instance_color": WHITE}
+MACRO_FLAG_DEFAULTS = {key: SIGNATURE_FLAG_DEFAULTS[key]
+                       for key in ("category", "tooltip", "keywords", "compact_node_title", "instance_color")}
+# Flags an omitted label keeps as they are (documents written before these flags were read leave them out).
+SIGNATURE_FLAGS_KEPT = frozenset({"exec", "thread_safe", "unsafe_during_actor_construction", "deprecated",
+                                  "deprecation_message", "compact_node_title", "instance_color"})
+FLAG_DEFAULTS_BY_ROLE = {"function": SIGNATURE_FLAG_DEFAULTS, "macro": MACRO_FLAG_DEFAULTS}
+FLAGS_KEPT_BY_ROLE = {"function": SIGNATURE_FLAGS_KEPT, "macro": frozenset(MACRO_FLAG_DEFAULTS)}
+_BOOL_FLAGS = frozenset({"pure", "const", "exec", "call_in_editor", "thread_safe", "unsafe_during_actor_construction",
+                         "deprecated"})
 _ACCESS = ("public", "protected", "private")
 _SIGNATURE_FIELDS = frozenset({"Inputs", "Outputs"}) | frozenset(SIGNATURE_FLAGS)
 _EXEC_NAMES = frozenset({"execute", "then", "else", "exec", "completed", "loop body", "break", "cast failed"})
@@ -134,6 +152,7 @@ class K2SchemaAdapter(SchemaAdapter):
     # "UbergraphPages": [] empties the EventGraph (a user can delete all of its nodes, not the graph).
     clears_kept_graphs = True
     keeps_authored_ids = True
+    represents_enabled_state = True
 
     # Adapter-owned node settings (extras.properties, SetNodeSetting): "Pure", "Fields", "Function" ---
     def live_properties(self, node, container):
@@ -142,15 +161,33 @@ class K2SchemaAdapter(SchemaAdapter):
             return super().live_properties(node, container)
         return {**super().live_properties(node, container), **thaw_json(settings)}
 
+    def pins_shown_before_links(self, container, key, have, wanted):
+        # A Make / Break Struct's HiddenFields: members hidden only after the links to their pins are broken.
+        if container != "node" or key != "HiddenFields" or type(have) is not list or type(wanted) is not list:
+            return None
+        if not set(wanted) - set(have):
+            return None
+        return [member for member in have if member in wanted]
+
     def property_follows_links(self, action, container, key):
         # Create Event's Function: an unlinked node clears the name (UK2Node_CreateDelegate::
         # HandleAnyChangeWithoutNotifying); the author picks it from the combo once OutputDelegate is linked.
         return container == "node" and key == "Function" and action_kind(action) == "CreateDelegate"
 
     def extract_properties(self, node, hint):
+        instanced = node.extras.get("template_instanced")
+        if instanced:
+            # Changed template values holding an instanced subobject: an apply keeps them on the node; a node the
+            # document places gets the component class's.
+            read_warning("/Body", "Graph.UnrepresentedValue",
+                         f"{node.title} ({node.guid}): template {', '.join(str(item) for item in instanced)} "
+                         "hold instanced objects a document cannot state; an apply keeps them on this node.")
         settings = node.extras.get("properties")
-        if not settings or not hasattr(settings, "items"):
+        changed_template = node.extras.get("template_changed")
+        if (not settings or not hasattr(settings, "items")) and not changed_template:
             return None
+        if not settings or not hasattr(settings, "items"):
+            settings = {}
         defaults = node.extras.get("property_defaults") or {}
         authored = hint.properties.node if hint is not None else {}
         output = {}
@@ -162,10 +199,14 @@ class K2SchemaAdapter(SchemaAdapter):
             for key in authored:
                 if key not in output and key in live:
                     output[key] = thaw_json(live[key])
-        template = {}
+        # An Add Component node's template: the values its Details panel changed from the component class's
+        # defaults, and any the previous document stated.
+        template = {key: thaw_json(value) for key, value in (changed_template or {}).items()} \
+            if hasattr(changed_template, "items") else {}
         if hint is not None and node.properties is not None:
             live = node.property_container("template")
-            template = {key: thaw_json(live[key]) for key in hint.properties.template if key in live}
+            template.update({key: thaw_json(live[key]) for key in hint.properties.template
+                             if key in live and key not in template})
         return NodeProperties(output, template)
 
     # Promotable operators: Pin Conversions ----------------------------------------------------
@@ -289,7 +330,11 @@ class K2SchemaAdapter(SchemaAdapter):
         return None
 
     def signature_flag_defaults(self, graph_role: str) -> dict | None:
-        return dict(SIGNATURE_FLAG_DEFAULTS) if graph_role == "function" else None
+        defaults = FLAG_DEFAULTS_BY_ROLE.get(graph_role)
+        return dict(defaults) if defaults is not None else None
+
+    def signature_flags_kept(self, graph_role: str) -> frozenset:
+        return FLAGS_KEPT_BY_ROLE.get(graph_role, frozenset())
 
     def node_base_id(self, node: LiveNode) -> str:
         if node.implicit_role or self.live_name(node):
@@ -461,10 +506,20 @@ def _decode_signature_flags(row: dict, path: str) -> dict:
                 raise contract_error(f"{path}/{label}", "Graph.InvalidSignature",
                                      "Access must be \"public\", \"protected\" or \"private\".")
             value = value.casefold()
+        elif key == "instance_color":
+            value = _decode_color(value, f"{path}/{label}")
         elif type(value) is not str:
             raise contract_error(f"{path}/{label}", "Graph.InvalidSignature", f"{label} must be a string.")
         flags[key] = value
     return flags
+
+
+def _decode_color(value: object, path: str) -> dict:
+    """{R, G, B, A?} (A defaults to 1) with float channels, rounded to 6 decimals as the live read gives them."""
+    if type(value) is not dict or not {"R", "G", "B"} <= set(value) or set(value) - {"R", "G", "B", "A"} \
+            or any(type(item) not in (int, float) or type(item) is bool for item in value.values()):
+        raise contract_error(path, "Graph.InvalidSignature", "A colour is {\"R\": 1.0, \"G\": 0.5, \"B\": 0.0, \"A\": 1.0}.")
+    return {channel: round(float(value.get(channel, 1.0)), 6) for channel in ("R", "G", "B", "A")}
 
 
 def _decode_signature(value: object, path: str) -> Signature:
@@ -580,6 +635,7 @@ def _decode_node(value: object, path: str, self_class: str | None) -> NodeDoc:
             properties=NodeProperties(row.get("Properties", {}), row.get("TemplateProperties", {})),
             name=name, comment=row.get("Comment"), extras=row.get("Extras", {}), user_pins=user_pins,
             pin_types=pin_types, size=size, comment_bubble_visible=bubble, authored_action=authored_action,
+            enabled=row.get("Enabled"), ghost=None if row.get("Ghost") is False else row.get("Ghost"),
         )
     except Exception as error:
         if hasattr(error, "diagnostic"):
@@ -735,6 +791,10 @@ def encode_node(node: NodeDoc) -> dict:
         output["Size"] = {"Width": node.size.width, "Height": node.size.height}
     if node.comment_bubble_visible is not None:
         output["CommentBubbleVisible"] = node.comment_bubble_visible
+    if node.enabled is not None:
+        output["Enabled"] = node.enabled
+    if node.ghost:
+        output["Ghost"] = True
     if node.pin_overrides:
         output["PinOverrides"] = [_encode_override(item) for item in node.pin_overrides]
     if node.properties.node:

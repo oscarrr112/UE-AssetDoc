@@ -5,7 +5,8 @@
 from copy import deepcopy
 import unittest
 
-from asset_document.diagnostics import AssetDocumentContractError
+from asset_document.diagnostics import AssetDocumentContractError, collecting_read_warnings
+from asset_document.tolerance import authoring, reading_live, settle
 from asset_document.profiles.behavior_tree_codec import (
     authored_digest_v2, canonicalize_body, encode_runtime_value,
     readback_v2_to_tree, tree_to_semantic_projection,
@@ -157,10 +158,8 @@ class BehaviorTreeCodecTests(unittest.TestCase):
                          ("DuplicateBehaviorTreeNodeGuid", "/Body/Tree/Root/Children/0/Id"))
         source = tree_fixture()
         source["Root"]["Children"][0]["Editor"] = {"Position": {"X": 0, "Y": 0}}
-        with self.assertRaises(AssetDocumentContractError) as raised:
-            tree_to_semantic_projection(source)
-        self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
-                         ("DuplicateBehaviorTreeSiblingCoordinate", "/Body/Tree/Root/Children/0/Editor/Position/X"))
+        # Nodes on top of each other are kept as they are.
+        self.assertEqual(tree_to_semantic_projection(source)["root"]["children"][0]["editor"]["position"], {"x": 0, "y": 0})
 
     def test_bound_graph_diagnostics_preserve_old_cycle_before_arity_order(self):
         base = "/Body/Tree/Root/Decorators/0/BoundGraph"
@@ -237,16 +236,77 @@ class BehaviorTreeCodecTests(unittest.TestCase):
         source["Root"]["Decorators"][0]["BoundGraph"]["Links"][2]["ToInput"] = 2
         with self.assertRaises(AssetDocumentContractError): tree_to_semantic_projection(source)
 
-    def test_v2_extra_bound_content_is_never_silently_lost(self):
-        for extension in ("comments", "inputs"):
-            value = tree_to_semantic_projection(tree_fixture())
-            bound = value["root"]["decorators"][0]["bound_graph"]
-            if extension == "comments": bound["comments"] = [deepcopy(value["comments"][0])]
-            else: bound["nodes"][1]["input_count"] = 3
-            before = deepcopy(value)
-            with self.assertRaises(AssetDocumentContractError): readback_v2_to_tree(value)
-            self.assertEqual(value, before)
-            self.assertEqual(len(authored_digest_v2("/Game/Tree.Tree", value)), 64)
+    def test_bound_comments_and_open_inputs_read_as_kept(self):
+        value = tree_to_semantic_projection(tree_fixture())
+        bound = value["root"]["decorators"][0]["bound_graph"]
+        bound["comments"] = [dict(deepcopy(value["comments"][0]), stable_node_id=guid(50))]
+        bound["nodes"][1]["input_count"] = 3
+        with collecting_read_warnings() as warnings, reading_live():
+            extracted = readback_v2_to_tree(value)
+        graph = extracted["Root"]["Decorators"][0]["BoundGraph"]
+        self.assertEqual(graph["Comments"][0]["Id"], guid(50))
+        self.assertEqual(graph["Nodes"][1]["InputCount"], 3)
+        self.assertNotIn("InputCount", graph["Nodes"][0])
+        self.assertEqual([(item.code, item.path) for item in warnings],
+                         [("InvalidBehaviorTreeDecoratorArity", "/Body/Tree/Root/Decorators/0/BoundGraph/Nodes/1")])
+        # The extract re-applies unchanged: the finding is waived because the asset holds the same node.
+        with authoring() as findings:
+            lowered = tree_to_semantic_projection(extracted)
+        self.assertEqual(lowered, value)
+        settle(findings, {"Body": {"Tree": extracted}}, {"Body": {"Tree": deepcopy(extracted)}})
+        # A new open input is refused.
+        edited = deepcopy(extracted)
+        edited["Root"]["Decorators"][0]["BoundGraph"]["Nodes"][1]["InputCount"] = 4
+        with authoring() as findings:
+            tree_to_semantic_projection(edited)
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            settle(findings, {"Body": {"Tree": edited}}, {"Body": {"Tree": extracted}})
+        self.assertEqual(raised.exception.diagnostic.code, "InvalidBehaviorTreeDecoratorArity")
+
+    def test_an_apply_names_its_document_after_preflight_settled_its_rules(self):
+        from types import SimpleNamespace
+        from asset_document import runtime
+        from asset_document.dto import RuntimeOperation
+        value = tree_to_semantic_projection(tree_fixture())
+        value["root"]["decorators"][0]["bound_graph"]["nodes"][1]["input_count"] = 3
+        with collecting_read_warnings(), reading_live():
+            extracted = readback_v2_to_tree(value)
+        request = SimpleNamespace(request_id="apply", expected_runtime_revision=1, operation=RuntimeOperation.APPLY,
+            requested_asset_class_path="/Script/AIModule.BehaviorTree", target_asset_path="/Game/BT_Open.BT_Open",
+            canonical_document={"SchemaVersion": 1, "Target": "/Game/BT_Open", "Class": "/Script/AIModule.BehaviorTree",
+                                "Action": "CreateOrUpdate", "Definitions": {}, "Properties": {},
+                                "Body": {"BlackboardAsset": None, "Tree": extracted}})
+        identity = runtime._behavior_tree_expected_identity(request)
+        self.assertEqual(identity[:5], ("apply", 1, "/Script/AIModule.BehaviorTree", "/Game/BT_Open.BT_Open", "Apply"))
+
+    def test_bound_node_not_wired_to_the_sink_reads_with_a_warning(self):
+        source = tree_fixture()
+        graph = source["Root"]["Decorators"][0]["BoundGraph"]
+        graph["Nodes"].append({"Id": guid(60), "Kind": "Not"})
+        graph["Links"].append({"From": guid(60), "To": guid(4), "ToInput": 2})
+        graph["Nodes"].append({"Id": guid(61), "Kind": "Test", "Class": "/Script/AIModule.BTDecorator_Blackboard"})
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            tree_to_semantic_projection(source)
+        self.assertEqual(raised.exception.diagnostic.code, "InvalidBehaviorTreeDecoratorArity")
+        graph["Nodes"][1]["InputCount"] = 3
+        with collecting_read_warnings() as warnings, reading_live():
+            lowered = tree_to_semantic_projection(source)
+        self.assertEqual(sorted((item.code, item.path.rsplit("/", 1)[-1]) for item in warnings),
+                         [("InvalidBehaviorTreeDecoratorArity", "4"), ("UnreachableBehaviorTreeDecoratorNode", "5")])
+        with collecting_read_warnings(), reading_live():
+            extracted = readback_v2_to_tree(lowered)
+        nodes = extracted["Root"]["Decorators"][0]["BoundGraph"]["Nodes"]
+        # The And has all three inputs wired; the Not's input is open.
+        self.assertEqual([node.get("InputCount") for node in nodes], [None, None, None, None, 1, None])
+
+    def test_an_input_count_must_fit_the_node_kind_and_its_links(self):
+        for kind, count in (("Not", 2), ("And", 1)):
+            source = tree_fixture()
+            nodes = source["Root"]["Decorators"][0]["BoundGraph"]["Nodes"]
+            nodes[1] = dict(nodes[1], Kind=kind, InputCount=count)
+            with self.assertRaises(AssetDocumentContractError) as raised:
+                tree_to_semantic_projection(source)
+            self.assertEqual(raised.exception.diagnostic.path, "/Body/Tree/Root/Decorators/0/BoundGraph/Nodes/1/InputCount")
 
     def test_missing_wrapper_authored_fields_rejected(self):
         value = tree_to_semantic_projection(tree_fixture())
@@ -277,6 +337,125 @@ class BehaviorTreeCodecTests(unittest.TestCase):
         self.assertNotEqual(encode_runtime_value(1), encode_runtime_value(1.0))
         self.assertEqual(encode_runtime_value(-0.0), encode_runtime_value(0.0))
         self.assertEqual(encode_runtime_value({"z": 1, "a": 2}), encode_runtime_value({"a": 2, "z": 1}))
+
+    def test_detached_branches_round_trip_in_identity_order_and_only_when_present(self):
+        source = tree_fixture()
+        source["Detached"] = [
+            {"Id": guid(31), "Class": "/Script/AIModule.BTTask_Wait", "Editor": {"Position": {"X": 900, "Y": 40}}},
+            {"Id": guid(30), "Class": "/Script/AIModule.BTComposite_Selector",
+             "Children": [{"Id": guid(32), "Class": "/Script/AIModule.BTTask_Wait"}]}]
+        lowered = tree_to_semantic_projection(source)
+        self.assertEqual([item["stable_node_id"] for item in lowered["detached"]], [guid(30), guid(31)])
+        self.assertEqual(lowered["detached"][0]["children"][0]["stable_node_id"], guid(32))
+        self.assertEqual(lowered["detached"][1]["editor"]["position"], {"x": 900, "y": 40})
+        extracted = readback_v2_to_tree(lowered)
+        self.assertEqual([item["Id"] for item in extracted["Detached"]], [guid(30), guid(31)])
+        self.assertEqual(tree_to_semantic_projection(extracted), lowered)
+        # A Root-less tree may keep detached branches.
+        rootless = tree_to_semantic_projection({"Root": {}, "Detached": source["Detached"]})
+        self.assertIsNone(rootless["root"])
+        self.assertEqual(readback_v2_to_tree(dict(rootless, graph_guid=guid(100)))["Root"], {})
+        # No branch, no key: a connected tree lowers and reads exactly as before.
+        plain = tree_to_semantic_projection(tree_fixture())
+        self.assertNotIn("detached", plain)
+        self.assertNotIn("Detached", readback_v2_to_tree(plain))
+        self.assertNotIn("detached", tree_to_semantic_projection(dict(tree_fixture(), Detached=[])))
+        self.assertEqual(authored_digest_v2("/Game/Tree.Tree", tree_to_semantic_projection(readback_v2_to_tree(plain))),
+                         authored_digest_v2("/Game/Tree.Tree", plain))
+        for branch, code, path in (
+                ({"Id": guid(1), "Class": "/Script/AIModule.BTTask_Wait"}, "DuplicateBehaviorTreeNodeGuid", "/Body/Tree/Detached/0/Id"),
+                ({"Id": guid(40), "Class": "/Script/AIModule.BTTask_Wait", "Kind": "Composite"}, "UnknownField", "/Body/Tree/Detached/0/Kind"),
+                ([], "InvalidBehaviorTreeNode", "/Body/Tree/Detached/0")):
+            with self.subTest(path=path):
+                with self.assertRaises(AssetDocumentContractError) as raised:
+                    tree_to_semantic_projection(dict(tree_fixture(), Detached=[branch]))
+                self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path), (code, path))
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            tree_to_semantic_projection(dict(tree_fixture(), Detached={}))
+        self.assertEqual(raised.exception.diagnostic.path, "/Body/Tree/Detached")
+
+    def test_detached_nodes_join_the_selector_inventory(self):
+        props = {"Choice": {"Key": "Target"}}
+        source = dict(tree_fixture(), Detached=[{"Id": guid(30), "Class": "/Script/AIModule.BTTask_Wait"}])
+        value = tree_to_semantic_projection(source, property_mapper=lambda _class, _props: deepcopy(props))
+        evidence = lambda name: {"node_class_path": name, "authored_defaults": props,
+                                "property_schema": {"Choice": {"kind": "selector"}}}
+        self.assertIn(guid(30), [row["stable_node_id"] for row in selector_inventory(value, evidence=evidence)])
+
+    def test_unsupported_property_marker_passes_through_and_refuses_a_value(self):
+        reason = "A TMap<int32,float> property value has no document form; AssetDoc keeps the value."
+        default, live = {"Text": "()", "Unsupported": reason}, {"Text": "((1, 2.000000))", "Unsupported": reason}
+        evidence = lambda name: {"node_class_path": name, "authored_defaults": {"Table": default, "Duration": 0.0},
+                                 "property_schema": {"Table": {"kind": "unsupported", "default": default},
+                                                     "Duration": {"kind": "number", "precision": "float32"}}}
+        observed = {"Table": live, "Duration": 1.5}
+        self.assertEqual(extract_authored_properties("/Script/Test.Node", observed, evidence=evidence), observed)
+        self.assertEqual(extract_authored_properties("/Script/Test.Node", {"Table": default, "Duration": 0.0},
+                                                     evidence=evidence, omit_defaults=True), {})
+        self.assertEqual(lower_authored_properties("/Script/Test.Node", {"Table": live}, evidence=evidence),
+                         {"Table": live, "Duration": 0.0})
+        # Omitted, the property lowers to the class default's marker.
+        self.assertEqual(lower_authored_properties("/Script/Test.Node", {}, evidence=evidence)["Table"], default)
+        for value in ({}, {"1": 2.0}, None, "((1, 2.0))"):
+            with self.subTest(value=value), self.assertRaises(AssetDocumentContractError) as raised:
+                lower_authored_properties("/Script/Test.Node", {"Table": value}, evidence=evidence)
+            self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                             ("BehaviorTree.UnrepresentedValue", "/Properties/Table"))
+
+    def test_a_non_finite_number_reads_as_a_marker_of_a_typed_property(self):
+        nan = {"Text": "nan", "Unsupported": "A non-finite number has no document form; AssetDoc keeps the value."}
+        evidence = lambda name: {"node_class_path": name, "authored_defaults": {"Duration": 0.0},
+                                 "property_schema": {"Duration": {"kind": "number", "precision": "float32"}}}
+        self.assertEqual(extract_authored_properties("/Script/Test.Node", {"Duration": nan}, evidence=evidence),
+                         {"Duration": nan})
+        self.assertEqual(lower_authored_properties("/Script/Test.Node", {"Duration": nan}, evidence=evidence),
+                         {"Duration": nan})
+        with self.assertRaises(AssetDocumentContractError):
+            lower_authored_properties("/Script/Test.Node", {"Duration": float("nan")}, evidence=evidence)
+
+    def test_a_marked_property_holds_no_selector(self):
+        marker = {"Text": "(SelectedKeyName=\"Target\")", "Unsupported": "reason"}
+        value = tree_to_semantic_projection({"Root": {"Id": guid(1), "Class": "/Script/Test.Node"}},
+                                            property_mapper=lambda _class, _props: {"Choice": deepcopy(marker)})
+        evidence = lambda name: {"node_class_path": name, "authored_defaults": {"Choice": {"Key": "None"}},
+                                 "property_schema": {"Choice": {"kind": "selector"}}}
+        self.assertEqual(selector_inventory(value, evidence=evidence), [])
+
+    def test_a_node_whose_class_is_missing_reads_and_lowers_as_a_marked_node(self):
+        gone = "/Game/Gone/BTT_Gone.BTT_Gone_C"
+        reason = f"The node's class {gone} is missing; AssetDoc keeps the node as it is."
+        tree = {"Root": {"Id": guid(1), "Class": "/Script/AIModule.BTComposite_Sequence", "Children": [
+            {"Id": guid(2), "Class": gone, "Unsupported": reason,
+             "Decorators": [{"Id": guid(3), "Class": gone, "Unsupported": reason}],
+             "Services": [{"Id": guid(4), "Class": gone, "Unsupported": reason}]}]}}
+
+        def mapper(class_path, properties):
+            self.assertNotEqual(class_path, gone, "a marked node has no properties to map")
+            return properties
+
+        value = tree_to_semantic_projection(tree, property_mapper=mapper)
+        value["graph_guid"] = guid(100)
+        marked = value["root"]["children"][0]
+        for node in (marked, marked["decorators"][0], marked["services"][0]):
+            self.assertEqual((node["node_class_path"], node["authored_properties"], node["unsupported"]),
+                             (gone, {}, reason))
+        raised = readback_v2_to_tree(value, property_mapper=mapper)
+        node = raised["Root"]["Children"][0]
+        self.assertEqual((node["Class"], node["Unsupported"], "Properties" in node), (gone, reason, False))
+        self.assertEqual(node["Decorators"][0]["Unsupported"], reason)
+        self.assertEqual(node["Services"][0]["Unsupported"], reason)
+        self.assertEqual(selector_inventory(value, evidence=lambda name: self.fail("no evidence for " + name)
+                                            if name == gone else {"node_class_path": name, "authored_defaults": {},
+                                                                  "property_schema": {}}), [])
+        # A marked node has no properties to write, and its reason is a string.
+        with_properties = deepcopy(tree); with_properties["Root"]["Children"][0]["Properties"] = {}
+        bad_reason = deepcopy(tree); bad_reason["Root"]["Children"][0]["Services"][0]["Unsupported"] = 3
+        for source, path in ((with_properties, "/Body/Tree/Root/Children/0/Properties"),
+                             (bad_reason, "/Body/Tree/Root/Children/0/Services/0/Unsupported")):
+            with self.subTest(path=path), self.assertRaises(AssetDocumentContractError) as error:
+                tree_to_semantic_projection(source)
+            self.assertEqual((error.exception.diagnostic.code, error.exception.diagnostic.path),
+                             ("BehaviorTree.UnrepresentedValue", path))
 
     def test_nonfinite_boolean_coordinate_and_invalid_comment_rejected(self):
         for editor in ({"Position": {"X": True, "Y": 0}}, {"Position": {"X": float("nan"), "Y": 0}}):

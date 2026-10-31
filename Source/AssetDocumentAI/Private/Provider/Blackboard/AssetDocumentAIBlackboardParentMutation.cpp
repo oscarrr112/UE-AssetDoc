@@ -230,6 +230,11 @@ bool PrepareParentMutation(
 		OutFailure = Failure(TEXT("AIProvider.InvalidContext"), TEXT("Blackboard parent mutation requires the Editor game thread."));
 		return false;
 	}
+	if (TOptional<FAssetDocumentPrimitiveOutcome> InUse = RefuseLiveBlackboardLayoutChange(*OutBlackboard))
+	{
+		OutFailure = MoveTemp(InUse.GetValue());
+		return false;
+	}
 	if (!ResolveParent(OutRequest, *OutBlackboard, OutParent, OutFailure)) return false;
 	OutLease = AcquireAssetDocumentAIMutableAssetLease(Handles, Invocation);
 	if (OutLease.Lease != nullptr) return true;

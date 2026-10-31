@@ -563,4 +563,29 @@ TArray<FString> ConstraintKeys(const UPhysicsAsset& Asset)
 	}
 	return Keys;
 }
+
+TArray<FString> BodyKeys(const UPhysicsAsset& Asset)
+{
+	TArray<FString> Keys;
+	TMap<FName, int32> Seen;
+	Keys.SetNum(Asset.SkeletalBodySetups.Num());
+	for (int32 Index = 0; Index < Asset.SkeletalBodySetups.Num(); ++Index)
+	{
+		const USkeletalBodySetup* Body = Asset.SkeletalBodySetups[Index];
+		if (Body == nullptr)
+		{
+			continue;
+		}
+		const FString Bone = Body->BoneName.IsNone() ? FString() : Body->BoneName.ToString();
+		int32& Count = Seen.FindOrAdd(Body->BoneName, 0);
+		++Count;
+		Keys[Index] = Count == 1 ? Bone : FString::Printf(TEXT("%s~%d"), *Bone, Count);
+	}
+	return Keys;
+}
+
+int32 FindBodyByKey(const UPhysicsAsset& Asset, const FString& Key)
+{
+	return Key.IsEmpty() ? INDEX_NONE : BodyKeys(Asset).IndexOfByKey(Key);
+}
 } // namespace UE::AssetDocument::Graph::Physics

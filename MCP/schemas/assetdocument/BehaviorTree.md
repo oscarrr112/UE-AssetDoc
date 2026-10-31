@@ -9,13 +9,14 @@ Apply works with the tree open in the Behavior Tree editor: the editor is closed
 `Body` keys (unknown keys fail with `UnknownBodyKey`):
 
 - `BlackboardAsset`: optional. Omitted = keep the current Blackboard; `null` = clear it; otherwise an object path string `"/Game/AI/BB_Enemy.BB_Enemy"` or `{"Kind": "AssetRef", "Path": "/Game/AI/BB_Enemy.BB_Enemy"}`. A path that is not an existing BlackboardData fails with `BehaviorTree.BlackboardNotFound` at `/Body/BlackboardAsset` (create the Blackboard first).
-- `Tree`: optional. Omitted = keep the current graph unchanged. When present it is the complete authoritative tree: the whole editor graph is rebuilt from it, so nodes, decorators, services, and comments that are not listed are removed. `Tree: null` is invalid.
+- `Tree`: optional. Omitted = keep the current graph unchanged. When present it is the complete authoritative tree: the whole editor graph is rebuilt from it, so nodes, decorators, services, and comments that are not listed are removed (detached branches only when `Detached` is given). `Tree: null` is invalid.
 
 `Tree` fields:
 
 - `Root` (required): the root composite node object, or `{}` for an empty tree. The root must be a composite class (`InvalidBehaviorTreeNodeClass` otherwise).
 - `GraphGuid` (optional): 32-hex GUID of the editor graph. Omit it (the existing GUID is reused) or copy it from extract; a different GUID for an existing graph fails with `BehaviorTreeGraphGuidReplacementRejected`.
 - `Comments` (optional array): comment boxes.
+- `Detached` (optional array): main nodes, with their subtrees, that are not connected to the Root (a branch parked beside the tree). Omitted = keep the asset's detached branches; a list (`[]` deletes them) replaces them. Extract writes it only when the graph has such branches.
 
 Every node, decorator, service, comment, and bound-graph node has an `Id` that must be a non-zero 32-character hex GUID (for example `"0000000000000000000000000000000A"`), unique across the whole tree (`InvalidBehaviorTreeNodeGuid`, `DuplicateBehaviorTreeNodeGuid`). Reuse the ids from extract to keep node identity.
 
@@ -26,7 +27,7 @@ Main node (root and every entry of `Children`), allowed fields `Id`, `Class`, `P
 - `Decorators`: array of decorator objects `{Id, Class, Properties?, Editor?}`, or composite decorators (below).
 - `Services`: array of service objects `{Id, Class, Properties?, Editor?}`.
 - `Properties`: the node class's reflected properties. Omitted properties are reset to the class defaults (this is a full replacement, not a sparse patch). Unknown names fail with `UnknownProperty`.
-- `Editor` (optional): `{"Position": {"X": int, "Y": int}, "NodeComment": string, "bCommentBubblePinned": bool, "bCommentBubbleVisible": bool}`. If `Position` is omitted a layout is generated from the parse order. Children of an ordinary composite must have strictly increasing `Editor.Position.X` (`BehaviorTreeLayoutOrderConflict`, `DuplicateBehaviorTreeSiblingCoordinate`), because Unreal orders children by X.
+- `Editor` (optional): `{"Position": {"X": int, "Y": int}, "NodeComment": string, "bCommentBubblePinned": bool, "bCommentBubbleVisible": bool}`. If `Position` is omitted a layout is generated from the parse order. Children of an ordinary composite are listed in the editor's order, increasing `Editor.Position.X`, then increasing `Y` at the same X (`BehaviorTreeLayoutOrderConflict`); children at the same position keep their order, and nodes may share a position.
 
 Node property value shapes:
 
@@ -35,6 +36,8 @@ Node property value shapes:
 - Enums: enumerator name string (or its integer value). Numbers: JSON numbers. Structs: object; omitted fields take defaults. Arrays/sets/maps: replace the whole container.
 - Object/class references: path string or `{"Kind": "AssetRef" | "ClassRef", "Path": "..."}`; `null` or `""` clears.
 - Instanced UObject: `{"Class": "...", "Properties": {...}}`. `FInstancedStruct`: `{"Struct": "/Script/Module.Struct", "Properties": {...}}`.
+- `FGameplayTag`: the tag name, `"Ability.Cooldown"` (`"None"` = no tag). `FGameplayTagContainer`: the tag names in order, `["State.Stunned", "State.Rooted"]`, each once.
+- `FText`: the source string, or its localization form when the string alone would lose it (`LOCTABLE("Table", "Key")`, `INVTEXT("...")`, `NSLOCTEXT("ns", "key", "source")`). An unchanged string keeps the text (its key and String Table link).
 
 Composite decorator (logic graph of decorator tests):
 
@@ -60,7 +63,7 @@ Composite decorator (logic graph of decorator tests):
 }
 ```
 
-Bound graph rules: node `Kind` is `Sink`, `Test`, `And`, `Or`, or `Not`; only `Test` nodes have `Class`/`Properties`; exactly one `Sink`; every node reaches the Sink through exactly one outgoing link; `And`/`Or` need at least 2 contiguous inputs, `Not` and `Sink` exactly 1, `Test` 0; no cycles. Violations use codes such as `InvalidBehaviorTreeDecoratorSink`, `InvalidBehaviorTreeDecoratorArity`, `UnreachableBehaviorTreeDecoratorNode`, `BehaviorTreeDecoratorGraphCycle`, `DanglingBehaviorTreeDecoratorLink`.
+Bound graph rules: node `Kind` is `Sink`, `Test`, `And`, `Or`, or `Not`; only `Test` nodes have `Class`/`Properties`; exactly one `Sink`; every node reaches the Sink through exactly one outgoing link; `And`/`Or` need at least 2 contiguous inputs, `Not` and `Sink` exactly 1, `Test` 0; no cycles. Violations use codes such as `InvalidBehaviorTreeDecoratorSink`, `InvalidBehaviorTreeDecoratorArity`, `UnreachableBehaviorTreeDecoratorNode`, `BehaviorTreeDecoratorGraphCycle`, `DanglingBehaviorTreeDecoratorLink`. `BoundGraph` may also hold `Comments` (comment fields below). A node with an input left open has `InputCount` (its number of inputs; extract writes it only then). An asset that already holds an open input or a node not wired to the Sink reads with a warning and re-applies unchanged; the rules refuse new ones.
 
 Comment fields: `Id` (required), `Text`, `Position` `{X, Y}`, `Size` `{Width, Height}` (positive), `Color` `{R, G, B, A}` floats, `CommentDepth`, `FontSize` (>= 1), `MoveMode` (`GroupMovement` or `NoGroupMovement`), `NodeDetails`, `bCommentBubblePinned`, `bCommentBubbleVisible`, `bCommentBubbleVisible_InDetailsPanel`, `bColorCommentBubble`. For a new comment omitted fields get defaults; for an existing comment `Id`, omitted fields keep their current values.
 
@@ -119,6 +122,8 @@ Example:
   }
 }
 ```
+
+Content without a document form is shown, not dropped. A node property of a kind the document cannot express (a map keyed by a gameplay tag, a weak, interface or field-path property, a non-finite float) reads as a marker `{"Unsupported": reason, "Text": exported value}` with the warning `BehaviorTree.Unrepresented`; left as extracted, apply keeps the stored value, and an edited marker fails with `BehaviorTree.UnrepresentedValue`. A decorator, service or non-root node whose class no longer exists (a deleted Blueprint task) reads as `{"Id", "Class", "Unsupported", "Editor", ...}` without `Properties`; left as extracted it is kept as the editor's missing-class node, and editing it or adding one is refused. A missing root composite class, or a missing class on a bound-graph `Test` node, still fails the read (`AIProvider.BehaviorTree.GraphReadbackUnsupportedNode`).
 
 Extract with `diff_only` (default) omits node `Properties` equal to the class default (omitted = class default, so the extract still applies as a no-op); `diff_only: false` lists them all.
 

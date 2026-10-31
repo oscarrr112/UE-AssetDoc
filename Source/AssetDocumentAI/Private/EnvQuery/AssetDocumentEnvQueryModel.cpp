@@ -88,11 +88,12 @@ bool HasKeyName(const UEdGraphNode& Node)
 
 FString NodeKey(const UAIGraphNode& Node)
 {
-	if (Node.NodeInstance == nullptr)
+	// A node whose class does not load has no instance: its graph node's name is its key.
+	if (Node.NodeInstance == nullptr || HasKeyName(Node))
 	{
-		return FString();
+		return Node.GetName();
 	}
-	return HasKeyName(Node) ? Node.GetName() : Node.NodeInstance->GetName();
+	return Node.NodeInstance->GetName();
 }
 
 FString OptionKey(const UEnvQuery& Query, const UEnvQueryOption& Option)
@@ -697,10 +698,71 @@ void SyncTraceChannels(UObject& Object)
 	SyncTraceChannels(Object, 0);
 }
 
+namespace
+{
+FString ExportPropertyText(const FProperty& Property, const UObject& Object)
+{
+	FString Text;
+	for (int32 Index = 0; Index < Property.ArrayDim; ++Index)
+	{
+		FString Element;
+		Property.ExportText_InContainer(Index, Element, &Object, nullptr, nullptr, PPF_None);
+		Text += Index > 0 ? TEXT(",") + Element : Element;
+	}
+	return Property.ArrayDim > 1 ? TEXT("(") + Text + TEXT(")") : Text;
+}
+
+// A Details value the document cannot carry, when it differs from Reference's: {"Unsupported": Reason, "Text": the
+// export text}. False when it holds Reference's value (or there is no Reference: nothing to compare with).
+bool MarkUnrepresented(const FProperty& Property, UObject& Object, UObject* Reference, const FString& Reason, FValue& OutMarker)
+{
+	if (Reference == nullptr || !Reference->IsA(Property.GetOwnerClass()))
+	{
+		return false;
+	}
+	const FString Text = ExportPropertyText(Property, Object);
+	if (Text == ExportPropertyText(Property, *Reference))
+	{
+		return false;
+	}
+	OutMarker = FObjectBuilder().AddString(TEXT("Unsupported"), Reason).AddString(TEXT("Text"), Text).Build();
+	return true;
+}
+
+// A Details panel property with no document codec (a delegate, a field path, ...): editable, not transient or
+// deprecated, and not among the admitted fields.
+bool IsUnadmittedDetail(const FProperty& Property, const TSet<const FProperty*>& Admitted)
+{
+	return Property.HasAnyPropertyFlags(CPF_Edit)
+		&& !Property.HasAnyPropertyFlags(CPF_EditConst | CPF_Transient | CPF_Deprecated | CPF_SkipSerialization)
+		&& !Admitted.Contains(&Property);
+}
+} // namespace
+
 FValue EncodeProperties(UObject& Object, UObject* Reference, TArray<FString>& OutUnsupported)
 {
 	FObjectBuilder Values;
-	for (const Props::FAdmittedField& Field : Props::ListFields(*Object.GetClass()))
+	const TArray<Props::FAdmittedField> Fields = Props::ListFields(*Object.GetClass());
+	TSet<const FProperty*> Admitted;
+	for (const Props::FAdmittedField& Field : Fields)
+	{
+		Admitted.Add(Field.Property);
+	}
+	for (TFieldIterator<FProperty> It(Object.GetClass()); It; ++It)
+	{
+		if (IsUnadmittedDetail(**It, Admitted))
+		{
+			const FString Name = It->GetAuthoredName();
+			OutUnsupported.Add(Name);
+			FValue Marker;
+			if (MarkUnrepresented(**It, Object, Reference, FString::Printf(TEXT("%s has no document form; AssetDoc keeps the "
+				"value."), *It->GetCPPType()), Marker))
+			{
+				Values.Add(Name, MoveTemp(Marker));
+			}
+		}
+	}
+	for (const Props::FAdmittedField& Field : Fields)
 	{
 		if (!Field.bWritable && !Field.bEditableOnTemplates)
 		{
@@ -710,6 +772,12 @@ FValue EncodeProperties(UObject& Object, UObject* Reference, TArray<FString>& Ou
 		if (!Props::Read(Object, Field, Value))
 		{
 			OutUnsupported.Add(Field.Name);
+			FValue Marker;
+			if (MarkUnrepresented(*Field.Property, Object, Reference, FString::Printf(TEXT("The %s value could not be read; "
+				"AssetDoc keeps it."), *Field.Property->GetCPPType()), Marker))
+			{
+				Values.Add(Field.Name, MoveTemp(Marker));
+			}
 			continue;
 		}
 		TidyValue(*Field.Property, Value);

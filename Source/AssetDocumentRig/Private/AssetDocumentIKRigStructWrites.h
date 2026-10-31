@@ -19,10 +19,12 @@ struct FStructWriteResult
 
 // Writes the settings object Op[Key] (complete sparse state: unlisted editable fields take their value in Defaults)
 // into the struct of Type at Memory, as the IK Rig editor's struct wrapper does: Owner.Modify() (inside the caller's
-// transaction), then the new values. Skip names fields owned by other document keys. Fails with
-// IKRig.FieldNotEditable / IKRig.InvalidValue at Key/<field> and writes nothing.
+// transaction), then the new values. Skip names fields owned by other document keys. A field the codec cannot
+// represent keeps its stored value when its marker is left as read or omitted. Fails with IKRig.FieldNotEditable /
+// IKRig.InvalidValue / <Profile>.UnrepresentedValue (an edited marker, a value for a field with no document form)
+// at Key/<field> and writes nothing.
 bool WriteSettingsStruct(FReader& Op, const TCHAR* Key, const UScriptStruct& Type, void* Memory, const void* Defaults,
-	UObject& Owner, TFunctionRef<bool(const FProperty&)> Skip, FStructWriteResult& OutResult);
+	UObject& Owner, const TCHAR* Profile, TFunctionRef<bool(const FProperty&)> Skip, FStructWriteResult& OutResult);
 
 // Writes the object Op[Key] (complete sparse state over Fields, unlisted ones take the class default) into Object as
 // Details edits (PreEditChange / write / PostEditChangeProperty per changed field). DocumentKeys maps document keys to

@@ -39,7 +39,8 @@ target); preflight therefore returns ``SNAPSHOT_COVERED``.
 """
 from __future__ import annotations
 
-from asset_document.diagnostics import AssetDocumentContractError
+from asset_document import markers
+from asset_document.diagnostics import AssetDocumentContractError, read_warning
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.meta import (
     ComparisonPolicy, DefaultPolicy, DeletePolicy, IdentityPolicy, OmissionPolicy, OrderPolicy, ProfileMeta,
@@ -94,7 +95,9 @@ def canonical_body(body, class_path):
             raise common.error("/Body/ParentTables", "ParentTables is an ordered list of DataTable object paths.",
                                "DataTable.InvalidParentTables")
         out["ParentTables"] = list(tables)
-    if "Rows" in body:
+    if "Rows" in body and markers.is_marker(body["Rows"]):
+        out["Rows"] = dict(body["Rows"])
+    elif "Rows" in body:
         rows = body["Rows"]
         if type(rows) is not list:
             raise common.error("/Body/Rows", "Rows is an ordered list of {\"Name\", \"Values\"} objects.",
@@ -180,12 +183,76 @@ def row_defaults(first):
     return dict(values) if type(values) is dict else None
 
 
+def _rows_marker(first):
+    return markers.marker(f"The row struct {first.get('row_struct', '')} does not load (deleted or renamed without a "
+                          "redirector); AssetDoc cannot read the rows and keeps them as they are.")
+
+
 def _body(first, rows):
     body = {"RowStruct": first.get("row_struct", "")}
     if first.get("composite"):
         body["ParentTables"] = list(first.get("parent_tables", []))
-    body["Rows"] = rows
+    body["Rows"] = _rows_marker(first) if first.get("row_struct_loaded") is False else rows
     return body
+
+
+def _warn(body):
+    """Read warnings: a row struct that does not load, and one per field the codec has no form for (at any depth of a
+    row value; the first row that has it)."""
+    if markers.is_marker(body.get("Rows")):
+        read_warning("/Body/RowStruct", "DataTable.RowStructMissing", body["Rows"][markers.KEY])
+        return
+    seen = set()
+    for index, row in enumerate(body.get("Rows", [])):
+        for key, value in (row.get("Values") or {}).items():
+            for inner, marker in _markers_in(value, f"/{common.escape(key)}"):
+                if inner not in seen:
+                    seen.add(inner)
+                    markers.warn(f"/Body/Rows/{index}/Values{inner}", PREFIX, marker)
+
+
+def _markers_in(value, path):
+    """(path, marker) of every marker in a row value, at any depth (a struct member, an array element); a marker's
+    own content is not walked."""
+    if markers.is_marker(value):
+        yield path, value
+    elif type(value) is dict:
+        for name, item in value.items():
+            yield from _markers_in(item, f"{path}/{common.escape(str(name))}")
+    elif type(value) is list:
+        for index, item in enumerate(value):
+            yield from _markers_in(item, f"{path}/{index}")
+
+
+def writable_rows(rows, live):
+    """The authored rows with their marked values left out (each checked against the live row's: a marker keeps the
+    value, an edited one is refused). A value with markers inside (a struct with a member that has no document form)
+    is sent as it is: the editor decodes it as an edit of the field's current value and checks its markers there."""
+    current = {row["Name"]: row["Values"] for row in live}
+    out = []
+    for index, row in enumerate(rows):
+        values = row.get("Values")
+        if not values or not any(markers.is_marker(value) for value in values.values()):
+            out.append(row)
+            continue
+        live_values = current.get(row["Name"]) or current.get(row.get("RenamedFrom")) or {}
+        kept = {}
+        for key, value in values.items():
+            if markers.is_marker(value):
+                markers.require_unchanged(f"/Body/Rows/{index}/Values/{common.escape(key)}", value, live_values.get(key),
+                                          PREFIX)
+            else:
+                kept[key] = value
+        out.append(dict(row, Values=kept))
+    return out
+
+
+def _unmarked(defaults):
+    """Row defaults without the fields the codec has no form for (an omitted marked field keeps its value; see
+    ``_keeps`` for a field whose value holds markers inside)."""
+    if defaults is None:
+        return None
+    return {key: value for key, value in defaults.items() if not markers.is_marker(value)}
 
 
 # ---------------------------------------------------------------------------
@@ -196,18 +263,25 @@ def _body(first, rows):
 ORDER_SEGMENT = 1000
 
 
+def _keeps(key, values, live_value):
+    """Whether a field the authored row leaves out keeps its live value instead of going back to the default: a live
+    value holding content the codec has no form for (markers at any depth) is never reset by an omission."""
+    return key not in values and markers.holds_marker(live_value)
+
+
 def _row_differs(values, current, defaults):
     """Whether a live row differs from the authored row (``defaults``: unwritten fields are these)."""
     if any(key not in current or not common.same(value, current[key]) for key, value in values.items()):
         return True
-    return defaults is not None and any(key not in values and key in defaults and not common.same(defaults[key], value)
-                                        for key, value in current.items())
+    return defaults is not None and any(key not in values and key in defaults and not _keeps(key, values, value)
+                                        and not common.same(defaults[key], value) for key, value in current.items())
 
 
 def row_ops(authored, live, defaults=None):
     """Edit ops (with document paths) that turn the live rows into the authored rows. ``defaults`` (the
     row struct's defaults): a row is the complete row, so a live field the row leaves out goes back to
-    its default (a "replace" set); None keeps the fields a row leaves out."""
+    its default (a "replace" set), except a field whose live value holds markers, which keeps it; None keeps the
+    fields a row leaves out."""
     live_names = [row["Name"] for row in live]
     live_values = {row["Name"]: row["Values"] for row in live}
     authored_names = [row["Name"] for row in authored]
@@ -263,7 +337,8 @@ def _rows_mismatch(authored_rows, live_rows, exact, defaults=None):
                 return f"/Body/Rows/{index}/Values/{common.escape(key)}"
         if defaults is not None:
             for key, value in live[row["Name"]].items():
-                if key not in values and key in defaults and not common.same(defaults[key], value, exact):
+                if key not in values and key in defaults and not _keeps(key, values, value) \
+                        and not common.same(defaults[key], value, exact):
                     return f"/Body/Rows/{index}/Values/{common.escape(key)}"
     return None
 
@@ -281,7 +356,8 @@ def apply(document, read, mutable, context):
         raise common.error("/Body/RowStruct", f"The table's row struct is {row_struct}; the editor offers no row "
                            "struct change on an existing table (create a new table instead).",
                            "DataTable.RowStructImmutable")
-    if ("RowStruct" in body or "Rows" in body) and first.get("row_struct_valid") is not True:
+    rows_kept = markers.is_marker(body.get("Rows")) and first.get("row_struct_loaded") is False
+    if ("RowStruct" in body or "Rows" in body) and first.get("row_struct_valid") is not True and not rows_kept:
         # A create with a struct that cannot be a row struct fails here and is rolled back.
         raise common.error("/Body/RowStruct", f"'{row_struct or body.get('RowStruct')}' cannot be a data table row "
                            "struct: it must derive from FTableRowBase or be a User Defined Struct "
@@ -296,11 +372,14 @@ def apply(document, read, mutable, context):
     if _composite(class_path):
         if "ParentTables" in body and body["ParentTables"] != first.get("parent_tables", []):
             ops.append(({"op": "parent_tables", "tables": body["ParentTables"]}, "/Body/ParentTables"))
+    elif "Rows" in body and markers.is_marker(body["Rows"]):
+        markers.require_unchanged("/Body/Rows", body["Rows"],
+                                  _rows_marker(first) if first.get("row_struct_loaded") is False else None, PREFIX)
     elif "Rows" in body:
-        ops.extend(row_ops(body["Rows"], live, row_defaults(first)))
+        ops.extend(row_ops(writable_rows(body["Rows"], live), live, _unmarked(row_defaults(first))))
     if ops:
         changes.extend(calls.edit(common.DATA_TABLE_EDIT, {"row_struct": row_struct}, ops, _BASE_PATHS))
-    if _composite(class_path) and "Rows" in body:
+    if _composite(class_path) and "Rows" in body and not markers.is_marker(body["Rows"]):
         _, derived = read_live(calls)
         where = _rows_mismatch(body["Rows"], derived, exact=False)
         if where is not None:
@@ -364,7 +443,9 @@ def create_target_context(document, context):
 def extract(target, class_path, read, context, include_defaults=True):
     calls = common.DataCalls(context, BY_ID, read, prefix=PREFIX)
     first, rows = read_live(calls)
-    return common.document(target, class_path, _properties(class_path).extract(read, context, include_defaults), _body(first, rows))
+    body = _body(first, rows)
+    _warn(body)
+    return common.document(target, class_path, _properties(class_path).extract(read, context, include_defaults), body)
 
 
 def extract_with_defaults(target, class_path, read, context):
@@ -385,7 +466,8 @@ def _value_differences(index, row, current, exact, defaults=None):
     if defaults is not None:
         changes.extend(Difference(where + common.escape(key), DiffKind.REPLACE, True, defaults[key], True, value, row=row["Name"])
                        for key, value in live.items()
-                       if key not in values and key in defaults and not common.same(defaults[key], value, exact))
+                       if key not in values and key in defaults and not _keeps(key, values, value)
+                       and not common.same(defaults[key], value, exact))
     return changes
 
 
@@ -397,8 +479,11 @@ def diff(authored, extracted, exact, defaults=None):
     for key in ("RowStruct", "ParentTables"):
         if key in body and body[key] != live.get(key):
             changes.append(Difference(f"/Body/{key}", DiffKind.REPLACE, True, body[key], key in live, live.get(key)))
-    if "Rows" in body:
-        field_defaults = None if _composite(class_path) else defaults
+    if "Rows" in body and (markers.is_marker(body["Rows"]) or markers.is_marker(live.get("Rows"))):
+        if body["Rows"] != live.get("Rows"):
+            changes.append(Difference("/Body/Rows", DiffKind.REPLACE, True, body["Rows"], "Rows" in live, live.get("Rows")))
+    elif "Rows" in body:
+        field_defaults = None if _composite(class_path) else _unmarked(defaults)
         changes.extend(common.row_differences(body["Rows"], live.get("Rows", []),
                                               lambda index, row, current: _value_differences(index, row, current,
                                                                                              exact, field_defaults)))

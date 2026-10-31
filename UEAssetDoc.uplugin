@@ -109,11 +109,6 @@
 			"LoadingPhase": "PostDefault"
 		},
 		{
-			"Name": "AssetDocumentUMG",
-			"Type": "Editor",
-			"LoadingPhase": "PostDefault"
-		},
-		{
 			"Name": "AssetDocumentAudio",
 			"Type": "Editor",
 			"LoadingPhase": "PostDefault"

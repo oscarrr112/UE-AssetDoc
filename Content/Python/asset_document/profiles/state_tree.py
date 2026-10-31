@@ -29,14 +29,18 @@ Document (docs/architecture/asset-document-statetree-matrix.md)::
   (``Parameters``, ``States``, ``Children``, node lists, ``Transitions``) is the complete list.  A state
   without ``Children`` keeps its children.  Transitions are complete values (omitted fields take the
   editor defaults) except ``Conditions`` (omitted = keep).
-* Identity: states by path (``Root/Idle``; names may not contain ``/`` or ``:``) or ``RenamedFrom`` (old
-  name under the same parent, or an old full path to move a state); state GUIDs are kept.  Nodes by
-  ``Name``, otherwise the k-th unnamed node of the same ``Type`` in the same list; transitions by
-  position.  Matched nodes keep their instance data and bindings.
+* Identity: states by path (``Root/Idle``) or ``RenamedFrom`` (old name under the same parent, or an old full
+  path to move a state); state GUIDs are kept.  A path segment is the state name with ``~ / : #`` written
+  ``~0 ~1 ~2 ~3``; the n-th (n >= 2) of several same-named siblings is ``<name>#n``.  Nodes by ``Name``
+  (same-named nodes in order), otherwise the k-th unnamed node of the same ``Type`` in the same list;
+  transitions by position.  Matched nodes keep their instance data and bindings.
+* Values the document codec has no form for (node and function values, parameter values) read as the marker
+  ``{"Unsupported": "<reason>"}``; apply keeps them (left as read or omitted) and refuses an edited one.
 * Bindings (node ``Bindings``, linked / subtree state ``ParameterBindings``): ``{"<target property
   path>": "<source>:<property path>"}`` (``"Node:<path>"`` targets a node struct property; a source
   without ``:<path>`` binds the whole struct, e.g. ``"Context/Actor"``) or ``{"<target>": {"Function":
-  "<property function struct>", "Instance": {...}, "Bindings": {...}}}``.  Sources: ``Parameters``,
+  "<property function struct>", "Instance": {...}, "Bindings": {...}}}`` (a function input may bind another
+  property function the same way).  Sources: ``Parameters``,
   ``Context/<Name>``, ``Evaluators/<key>``, ``GlobalTasks/<key>``, ``<StatePath>/Parameters``,
   ``<StatePath>/EnterEvent``, ``<StatePath>/{Tasks|EnterConditions|Considerations}/<key>``,
   ``<StatePath>/Transitions/<i>/{Event|Conditions/<key>}`` (key = node Name or list index).
@@ -52,6 +56,7 @@ from __future__ import annotations
 import re
 import uuid
 
+from asset_document import markers
 from asset_document.diagnostics import (
     AssetDocumentContractError, DiagnosticContext, DiagnosticSeverity, RuntimeDiagnostic, with_diagnostics,
 )
@@ -67,6 +72,7 @@ from asset_document.profiles import data_table_common as common
 from asset_document.profiles.ublueprint_members import type_body, type_dto
 from asset_document.regions.primitive_catalog import NamedOpaqueHandleArgument, _single_handle
 from asset_document.regions.target_lifecycle import generic_factory_lifecycle, lifecycle_requirements
+from asset_document.tolerance import authored_rule
 
 STATE_TREE_CLASS = "/Script/StateTreeModule.StateTree"
 SCHEMA_BASE = "/Script/StateTreeModule.StateTreeSchema"
@@ -92,10 +98,12 @@ STATE_LISTS = ("EnterConditions", "Tasks", "Considerations")
 STATE_KEYS = (("Name", "RenamedFrom") + STATE_FIELDS
               + ("Parameters", "ParameterValues", "ParameterBindings") + STATE_LISTS + ("Transitions", "Children"))
 NODE_KEYS = ("Type", "Name", "Enabled", "ConsideredForCompletion", "EvaluationMode", "Indent", "Operand", "Node",
-             "Instance", "Bindings")
+             "Instance", "Bindings", "OutputBindings")
+# A node's output bindings (an output property bound to a parameter): read-only, keyed by the output property.
+OUTPUT_BINDINGS = "OutputBindings"
 NODE_FLAGS = (("Enabled", "enabled"), ("ConsideredForCompletion", "considered"), ("EvaluationMode", "evaluation_mode"),
               ("Indent", "indent"), ("Operand", "operand"))
-TRANSITION_KEYS = ("Trigger", "Event", "To", "Priority", "Delay", "Enabled", "Conditions")
+TRANSITION_KEYS = ("Trigger", "Event", "To", "Priority", "Delay", "Enabled", "Conditions", "Delegate")
 EVENT_KEYS = ("Tag", "Payload", "Consume")
 STATE_TYPES = ("State", "Group", "Linked", "LinkedAsset", "Subtree")
 LINKED_TYPES = ("Linked", "LinkedAsset")
@@ -153,6 +161,32 @@ def _escape(key):
     return common.escape(key)
 
 
+_SEGMENT_ESCAPES = (("~", "~0"), ("/", "~1"), (":", "~2"), ("#", "~3"))
+
+
+def segment(name, occurrence=1):
+    """A state or node name as one path segment (``~ / : #`` escaped); the n-th (n >= 2) same-named sibling is
+    ``<segment>#n``."""
+    for raw, escaped in _SEGMENT_ESCAPES:
+        name = name.replace(raw, escaped)
+    return name if occurrence < 2 else f"{name}#{occurrence}"
+
+
+def segments(names):
+    """The path segment of each name of one sibling list (same names numbered in order)."""
+    seen = {}
+    out = []
+    for name in names:
+        seen[name] = seen.get(name, 0) + 1
+        out.append(segment(name, seen[name]))
+    return out
+
+
+# A value the document codec has no form for (node / function values, parameter values): read as this marker.
+VALUE_MARKER = markers.marker("This value's type has no document form; AssetDoc keeps it as it is (leave the marker "
+                              "or omit the value).")
+
+
 # ---------------------------------------------------------------------------
 # Document shape
 # ---------------------------------------------------------------------------
@@ -193,9 +227,10 @@ def _number(value, path, what):
 
 def _state_name(value, path):
     _string(value, path, "A state Name", empty=False)
-    if "/" in value or ":" in value or value.strip() != value or len(value) >= 1024:
-        raise _error(path, f"State name '{value}' may not contain '/' or ':' or surrounding spaces (state paths "
-                     "join names with '/').", "InvalidStateName")
+    if len(value) >= 1024:
+        raise _error(path, "A state name is shorter than 1024 characters.", "InvalidStateName")
+    if value.strip() != value:
+        authored_rule(path, f"{PREFIX}.InvalidStateName", f"State name '{value}' has surrounding spaces.")
     return value
 
 
@@ -246,6 +281,8 @@ def _validate_node(value, path):
             _object(value[key], f"{path}/{key}", key)
     if "Bindings" in value:
         _validate_bindings(value["Bindings"], f"{path}/Bindings")
+    if OUTPUT_BINDINGS in value:
+        _object(value[OUTPUT_BINDINGS], f"{path}/{OUTPUT_BINDINGS}", OUTPUT_BINDINGS)
 
 
 def _validate_nodes(value, path):
@@ -255,7 +292,8 @@ def _validate_nodes(value, path):
         name = node.get("Name", "")
         if name:
             if name in names:
-                raise _error(f"{path}/{index}/Name", f"Node name '{name}' appears twice in this list.", "DuplicateNodeName")
+                authored_rule(f"{path}/{index}/Name", f"{PREFIX}.DuplicateNodeName", f"Node name '{name}' appears twice "
+                              "in this list; give a new node a name of its own.")
             names.add(name)
 
 
@@ -300,6 +338,9 @@ def _validate_transition(value, path):
                          "cannot be delayed (the editor clears their delay).", "InvalidDelay")
     if "Conditions" in value:
         _validate_nodes(value["Conditions"], f"{path}/Conditions")
+    if "Delegate" in value:
+        _object(value["Delegate"], f"{path}/Delegate", "Delegate", ("Source",))
+        _string(value["Delegate"].get("Source"), f"{path}/Delegate/Source", "Source")
 
 
 def _validate_state(value, path):
@@ -308,8 +349,8 @@ def _validate_state(value, path):
     if "RenamedFrom" in value:
         source = _string(value["RenamedFrom"], f"{path}/RenamedFrom", "RenamedFrom", empty=False)
         if source.strip("/") != source or "//" in source or ":" in source:
-            raise _error(f"{path}/RenamedFrom", "RenamedFrom is the old state name or the old state path "
-                         "(e.g. Root/Old).", "InvalidRename")
+            raise _error(f"{path}/RenamedFrom", "RenamedFrom is the old state's path segment or its old state path "
+                         "(e.g. Root/Old, Root/Patrol#2).", "InvalidRename")
     for key in ("Description", "Tag", "LinkedSubtree", "LinkedAsset"):
         if key in value:
             _string(value[key], f"{path}/{key}", key)
@@ -357,10 +398,14 @@ def _validate_state(value, path):
     names = set()
     for index, child in enumerate(_list(value.get("Children", []), f"{path}/Children", "Children")):
         _validate_state(child, f"{path}/Children/{index}")
-        if child["Name"] in names:
-            raise _error(f"{path}/Children/{index}/Name", f"Two children are named '{child['Name']}' (state paths must "
-                         "be unique).", "DuplicateStateName")
-        names.add(child["Name"])
+        _duplicate_state(child["Name"], names, f"{path}/Children/{index}/Name")
+
+
+def _duplicate_state(name, names, path):
+    if name in names:
+        authored_rule(path, f"{PREFIX}.DuplicateStateName", f"Another sibling state is named '{name}'; give a new "
+                      f"state a name of its own (paths address the existing ones as '{segment(name)}#2', ...).")
+    names.add(name)
 
 
 def validate_body(body):
@@ -381,10 +426,7 @@ def validate_body(body):
         names = set()
         for index, state in enumerate(_list(body["States"], "/Body/States", "States")):
             _validate_state(state, f"/Body/States/{index}")
-            if state["Name"] in names:
-                raise _error(f"/Body/States/{index}/Name", f"Two subtrees are named '{state['Name']}'.",
-                             "DuplicateStateName")
-            names.add(state["Name"])
+            _duplicate_state(state["Name"], names, f"/Body/States/{index}/Name")
 
 
 def canonicalize(document):
@@ -434,10 +476,10 @@ class Live:
         self.by_path = {}
 
         def walk(ids, prefix):
-            for state_id in ids:
-                path = f"{prefix}{self.states[state_id]['name']}"
+            for state_id, name in zip(ids, segments(self.states[state_id]["name"] for state_id in ids)):
+                path = f"{prefix}{name}"
                 self.paths[state_id] = path
-                self.by_path.setdefault(path, state_id)
+                self.by_path[path] = state_id
                 walk(self.states[state_id]["children"], path + "/")
         walk(self.roots, "")
 
@@ -450,6 +492,22 @@ class Live:
 
     def node_list(self, list_name, state="", transition=""):
         return self.nodes.get((list_name, state, transition), [])
+
+
+def merge_parts(records):
+    """Records with their ``part`` records folded back in: the read moves the object fields of a record over the page
+    budget to the part records after it (``values``: members; ``name`` + ``items``: a slice of one list member)."""
+    out = []
+    for record in records:
+        if record.get("kind") != "part":
+            out.append(record)
+            continue
+        values = out[-1].setdefault(record["field"], {})
+        if "items" in record:
+            values.setdefault(record["name"], []).extend(record["items"])
+        else:
+            values.update(record["values"])
+    return out
 
 
 class Calls:
@@ -472,7 +530,7 @@ class Calls:
             records += page.get("records", [])
             offset = page.get("next_offset", -1)
             if type(offset) is not int or offset < 0:
-                return Live(records)
+                return Live(merge_parts(records))
 
     def edit(self, ops):
         """ops: [(op, PathMap)] -> changed records."""
@@ -598,6 +656,7 @@ class Planner:
             entries = []
             parent_live_path = live.paths.get(parent.id) if parent is not None and parent.live is not None else (
                 "" if parent is None else None)
+            names = segments(state["Name"] for state in states)
             for index, state in enumerate(states):
                 doc_path = f"{doc_base}/{index}"
                 match = None
@@ -608,7 +667,7 @@ class Planner:
                     if match in claimed:
                         match = None
                 if match is None:
-                    candidate = _join(parent_live_path, state["Name"])
+                    candidate = _join(parent_live_path, names[index])
                     match = live.by_path.get(candidate) if candidate is not None else None
                 if match is not None and match in claimed:
                     raise _error(f"{doc_path}/RenamedFrom" if source is not None else f"{doc_path}/Name",
@@ -658,15 +717,8 @@ class Planner:
 
     def _index_paths(self):
         def walk(entries, prefix):
-            names = {}
-            for entry in entries:
-                entry.path = f"{prefix}{entry.name}"
-                if entry.path in self.paths:
-                    where = entry.doc_path or names.get(entry.name)
-                    raise _error(f"{where}/Name" if where else "/Body/States",
-                                 f"Two states have the path {entry.path} (a state kept from the asset has this name; "
-                                 "rename one of them).", "DuplicateStateName")
-                names[entry.name] = entry.doc_path
+            for entry, name in zip(entries, segments(entry.name for entry in entries)):
+                entry.path = f"{prefix}{name}"
                 self.paths[entry.path] = entry.id
                 walk(entry.children, entry.path + "/")
         walk(self.roots, "")
@@ -739,8 +791,14 @@ class Planner:
             prop = {"id": match["id"] if match else new_id(), "name": row["Name"], "type": type_dto(row["Type"], f"{doc_path}/{index}/Type")}
             claimed.add(prop["id"])
             changed = match is None or _type_key(prop["type"]) != _type_key(match["type"]) or match["name"] != row["Name"]
-            if "Value" in row and (changed or not match.get("supported", True) or "value" not in match
-                                   or not _same(row["Value"], match["value"], self.exact)):
+            if "Value" in row and markers.is_marker(row["Value"]):
+                # A marker keeps the current value: it must be the one the parameter reads as.
+                current = None
+                if match is not None and not changed:
+                    current = match.get("value") if match.get("supported", True) else VALUE_MARKER
+                markers.require_unchanged(f"{doc_path}/{index}/Value", row["Value"], current, PREFIX)
+            elif "Value" in row and (changed or not match.get("supported", True) or "value" not in match
+                                     or not _same(row["Value"], match["value"], self.exact)):
                 prop["value"] = row["Value"]
             props.append((prop, changed))
             where.add(f"props/{index}", f"{doc_path}/{index}").add(f"props/{index}/value", f"{doc_path}/{index}/Value") \
@@ -780,16 +838,22 @@ class Planner:
             where = f"{entry.doc_path}/ParameterValues"
             if self.state_type(entry) not in LINKED_TYPES:
                 raise _error(where, "ParameterValues override the parameters of a Linked / LinkedAsset state.", "InvalidValue")
-            values = entry.doc["ParameterValues"]
+            authored = entry.doc["ParameterValues"]
             record = live.state_params.get(entry.id, {"props": [], "overrides": []})
             props = {prop["name"]: prop for prop in record.get("props", [])}
             overridden = {prop["name"] for prop in record.get("props", []) if prop["id"] in record.get("overrides", [])}
-            same = set(values) == overridden and all(
+            # A marked value keeps its override and its current value.
+            values = writable_values(authored, where, {name: props[name].get("value", VALUE_MARKER)
+                                                       for name in overridden})
+            kept = [name for name in authored if name not in values]
+            same = set(authored) == overridden and all(
                 name in props and "value" in props[name] and _same(value, props[name]["value"], self.exact)
                 for name, value in values.items())
             if not same:
-                ops.append(({"op": "parameter_values", "state": entry.id, "values": dict(values)},
-                            PathMap(where, {"values": where})))
+                op = {"op": "parameter_values", "state": entry.id, "values": values}
+                if kept:
+                    op["kept"] = kept
+                ops.append((op, PathMap(where, {"values": where})))
         return ops
 
     # -- states ----------------------------------------------------------------
@@ -854,6 +918,12 @@ class Planner:
                        "priority": transition.get("Priority", "Normal"), "enabled": transition.get("Enabled", True)}
                 delay = transition.get("Delay")
                 dto["delay"] = None if delay is None else {"duration": delay["Duration"], "variance": delay.get("Variance", 0)}
+                if "Delegate" in transition and not _same_bound(SourceRefs(self, self.live),
+                                                                transition["Delegate"].get("Source", ""),
+                                                                _delegate_binding(self.live, current)):
+                    raise _error(f"{doc_path}/Delegate", "Delegate (the dispatcher an OnDelegate transition listens to) "
+                                 "is read-only: bind it in the StateTree editor. List it as extracted, or leave it out "
+                                 "to keep it.", "DelegateReadOnly")
                 self.transition_ids[(entry.id, index)] = dto["id"]
                 self.doc_paths[dto["id"]] = doc_path
                 differs = differs or not self._transition_same(dto, current)
@@ -912,7 +982,7 @@ class Planner:
             where = PathMap(doc_path)
             for index, (node, match) in enumerate(zip(nodes, matches)):
                 node_path = f"{doc_path}/{index}"
-                dto, changed = self._node_dto(node, match)
+                dto, changed = self._node_dto(node, match, node_path)
                 differs = differs or changed
                 desired.append(dto)
                 self.node_ids[(list_name, state_id, transition_id, index)] = dto["id"]
@@ -931,7 +1001,7 @@ class Planner:
                 ops.append((op, where))
         return ops
 
-    def _node_dto(self, node, match):
+    def _node_dto(self, node, match, node_path=""):
         dto = {"id": match["id"] if match else new_id(), "type": node["Type"]}
         changed = match is None
         record = match or {}
@@ -947,14 +1017,12 @@ class Planner:
                 dto[field] = NODE_DEFAULTS[key]
                 changed = True
         for key, field in (("Node", "node"), ("Instance", "instance")):
-            values = node.get(key, {})
             live_values = record.get(field, {})
+            values = writable_values(node.get(key, {}), f"{node_path}/{key}", document_values(record, field))
             delta = {name: value for name, value in values.items()
                      if match is None or name not in live_values or not _same(value, live_values[name], self.exact)}
-            # A value the document leaves out is the node type's default (record "<field>_reset": the default of
-            # each value that differs from it).
-            delta.update({name: value for name, value in (record.get(field + "_reset") or {}).items()
-                          if name not in values})
+            # A value the document leaves out is the node type's default; a marked one is kept.
+            delta.update({name: value for name, value in reset_values(record, field).items() if name not in values})
             if delta:
                 dto[field] = delta
                 changed = True
@@ -964,14 +1032,24 @@ class Planner:
     def plan_bindings(self, live):
         refs = SourceRefs(self, live)
         ops = []
+        outputs = None
         for nodes, doc_path, list_name, state_id, transition_id in self.node_lists():
             for index, node in enumerate(nodes):
-                if "Bindings" not in node:
+                if "Bindings" not in node and OUTPUT_BINDINGS not in node:
                     continue
                 node_id = self.node_ids[(list_name, state_id, transition_id, index)]
                 record = next((item for item in live.node_list(list_name, state_id, transition_id)
                                if item["id"] == node_id), None)
-                if record is None:
+                if OUTPUT_BINDINGS in node:
+                    outputs = outputs if outputs is not None else _output_binding_targets(live)
+                    current = _node_outputs(record, outputs) if record is not None else {}
+                    authored = node[OUTPUT_BINDINGS]
+                    if not (type(authored) is dict and set(authored) == set(current)
+                            and all(_same_bound(refs, authored[key], current[key]) for key in current)):
+                        raise _error(f"{doc_path}/{index}/{OUTPUT_BINDINGS}", "OutputBindings are read-only: an output "
+                                     "property bound to a parameter is set in the StateTree editor. List them as "
+                                     "extracted, or leave them out to keep them.", "OutputBindingsReadOnly")
+                if record is None or "Bindings" not in node:
                     continue
                 targets = (node_id, record["node_id"])
                 ops += self._bindings_op(node["Bindings"], targets, refs, live, f"{doc_path}/{index}/Bindings")
@@ -986,7 +1064,7 @@ class Planner:
         return ops
 
     def _bindings_op(self, bindings, targets, refs, live, doc_path):
-        desired = binding_dtos(bindings, targets, refs, doc_path)
+        desired = binding_dtos(bindings, targets, refs, doc_path, live)
         current = [binding for binding in live.bindings
                    if not binding.get("output") and binding["target"]["struct"] in targets]
         if bindings_same(desired, current, live, self.exact):
@@ -1157,12 +1235,12 @@ class SourceRefs:
 def _node_key(records, index):
     name = records[index].get("name", "")
     if name and sum(1 for item in records if item.get("name") == name) == 1:
-        return name
+        return segment(name)
     return str(index)
 
 
 def _find_node(records, key):
-    named = [item for item in records if item.get("name") == key]
+    named = [item for item in records if item.get("name") and segment(item["name"]) == key]
     if len(named) == 1:
         return named[0]["id"]
     if key.isdigit() and int(key) < len(records):
@@ -1184,8 +1262,13 @@ def _target_dto(target, targets):
     return {"struct": targets[0], "path": target}
 
 
-def binding_dtos(bindings, targets, refs, doc_path):
-    """[(binding dto, comparable key)] for one target node."""
+def binding_dtos(bindings, targets, refs, doc_path, live=None):
+    """[(binding dto, comparable key)] for one target node (``live``: the current bindings, for the values a property
+    function holds that the document codec has no form for)."""
+    current = {}
+    if live is not None:
+        current = {(binding["target"]["struct"], binding["target"]["path"]): binding.get("function")
+                   for binding in live.bindings if not binding.get("output")}
     out = []
     for target, source in bindings.items():
         where = f"{doc_path}/{_escape(target)}"
@@ -1197,21 +1280,62 @@ def binding_dtos(bindings, targets, refs, doc_path):
             ref, path = _split_source(source)
             out.append(({"target": target_dto, "source": {"struct": refs.resolve(ref, where), "path": path}}, None))
             continue
-        function = {"type": source["Function"]}
-        if "Instance" in source:
-            function["instance"] = dict(source["Instance"])
-        nested = []
-        for nested_target, nested_source in source.get("Bindings", {}).items():
-            nested_where = f"{where}/Bindings/{_escape(nested_target)}"
-            if type(nested_source) is not str:
-                raise _error(nested_where, "A property function input binds to a source (nested property functions are "
-                             "not supported).", "InvalidBinding")
+        function = _function_dto(source, where, refs, live, current.get((target_dto["struct"], target_dto["path"])))
+        out.append(({"target": target_dto, "function": function}, None))
+    return out
+
+
+def _function_dto(source, where, refs, live, current):
+    """A property function binding (its inputs may bind further functions); ``current``: the live function bound to the
+    same target, whose marked values a marker keeps."""
+    if current is not None and not _type_matches(source["Function"], current.get("type", "")):
+        current = None
+    function = {"type": source["Function"]}
+    if "Instance" in source:
+        function["instance"] = writable_values(source["Instance"], f"{where}/Instance",
+                                               document_values(current, "instance") if current else {})
+    nested_current = {}
+    if current is not None and live is not None:
+        nested_current = {binding["target"]["path"]: binding.get("function") for binding in live.bindings
+                          if not binding.get("output") and binding["target"]["struct"] == current["id"]}
+    nested = []
+    for nested_target, nested_source in source.get("Bindings", {}).items():
+        nested_where = f"{where}/Bindings/{_escape(nested_target)}"
+        if type(nested_source) is str:
             ref, path = _split_source(nested_source)
             nested.append({"target": {"path": nested_target},
                            "source": {"struct": refs.resolve(ref, nested_where), "path": path}})
-        if nested:
-            function["bindings"] = nested
-        out.append(({"target": target_dto, "function": function}, None))
+        else:
+            nested.append({"target": {"path": nested_target},
+                           "function": _function_dto(nested_source, nested_where, refs, live,
+                                                     nested_current.get(nested_target))})
+    if nested:
+        function["bindings"] = nested
+    return function
+
+
+def document_values(record, field):
+    """A node's or function's ``field`` values as a read shows them: a value the codec cannot encode is VALUE_MARKER
+    (``<field>_marked``); a value the codec reads as a marker itself (a NaN float, ...) is that marker."""
+    return {**(record.get(field) or {}), **{name: VALUE_MARKER for name in record.get(field + "_marked", ())}}
+
+
+def reset_values(record, field):
+    """The defaults an apply writes for the ``field`` values a document leaves out (record ``<field>_reset``: the
+    default of each value that differs from it), except the values read as markers, which an omission keeps."""
+    kept = {name for name, value in document_values(record, field).items() if markers.is_marker(value)}
+    return {name: value for name, value in (record.get(field + "_reset") or {}).items() if name not in kept}
+
+
+def writable_values(values, path, current):
+    """The values apply writes: a marker stays out (the current value is kept) once it is checked against the value
+    at the same place of ``current`` (the values as a read shows them, document_values)."""
+    out = {}
+    for name, value in values.items():
+        if markers.is_marker(value):
+            markers.require_unchanged(f"{path}/{_escape(name)}", value, current.get(name), PREFIX)
+        else:
+            out[name] = value
     return out
 
 
@@ -1228,23 +1352,33 @@ def bindings_same(desired, current, live, exact=False):
             if "function" in live_binding or live_binding["source"] != dto["source"]:
                 return False
             continue
-        function = live_binding.get("function")
-        if function is None or not _type_matches(dto["function"]["type"], function["type"]):
+        if not _function_same(dto["function"], live_binding.get("function"), live, exact):
             return False
-        instance = function.get("instance", {})
-        if any(name not in instance or not _same(value, instance[name], exact)
-               for name, value in dto["function"].get("instance", {}).items()):
+    return True
+
+
+def _function_same(wanted, function, live, exact):
+    if function is None or not _type_matches(wanted["type"], function["type"]):
+        return False
+    instance = function.get("instance", {})
+    if any(name not in instance or not _same(value, instance[name], exact)
+           for name, value in wanted.get("instance", {}).items()):
+        return False
+    nested = [binding for binding in live.bindings
+              if not binding.get("output") and binding["target"]["struct"] == function["id"]]
+    inputs = wanted.get("bindings", [])
+    if len(nested) != len(inputs):
+        return False
+    nested_by_target = {item["target"]["path"]: item for item in nested}
+    for item in inputs:
+        match = nested_by_target.get(item["target"]["path"])
+        if match is None:
             return False
-        nested = [binding for binding in live.bindings
-                  if not binding.get("output") and binding["target"]["struct"] == function["id"]]
-        wanted = dto["function"].get("bindings", [])
-        if len(nested) != len(wanted):
-            return False
-        nested_by_target = {item["target"]["path"]: item for item in nested}
-        for item in wanted:
-            match = nested_by_target.get(item["target"]["path"])
-            if match is None or "function" in match or match["source"] != item["source"]:
+        if "function" in item:
+            if not _function_same(item["function"], match.get("function"), live, exact):
                 return False
+        elif "function" in match or match["source"] != item["source"]:
+            return False
     return True
 
 
@@ -1265,7 +1399,7 @@ def plan_structure(planner):
 def _needs_second_pass(body):
     """ParameterValues / bindings are planned against the layout the structural edits produce."""
     def node_bindings(nodes):
-        return any("Bindings" in node for node in nodes)
+        return any("Bindings" in node or OUTPUT_BINDINGS in node for node in nodes)
 
     def state(value):
         return ("ParameterValues" in value or "ParameterBindings" in value
@@ -1349,6 +1483,7 @@ def create_target_context(document, context):
 def body_from_live(live, include_defaults=False):
     refs = SourceRefs(None, live)
     bindings = _bindings_by_target(live, refs)
+    bindings[OUTPUT_BINDINGS] = _output_bindings_by_source(live, refs)
     tree = live.tree
     body = {"Schema": {"Class": tree.get("schema_class", ""),
                        "Properties": _without_defaults(tree.get("schema", {}), tree.get("schema_defaults"), include_defaults)}}
@@ -1368,6 +1503,8 @@ def _parameters_doc(record):
         row = {"Name": prop["name"], "Type": type_body(prop["type"])}
         if prop.get("supported") and "value" in prop:
             row["Value"] = prop["value"]
+        elif not prop.get("supported", True):
+            row["Value"] = VALUE_MARKER
         rows.append(row)
     return rows
 
@@ -1387,8 +1524,57 @@ _COLLECT_FACTS = []
 def _node_facts_of(record):
     """What Diff needs to compare a node the document lists with omissions: the values not at their default (name ->
     default), and whether an omitted Considered For Completion is reset."""
-    return {"Node": dict(record.get("node_reset") or {}), "Instance": dict(record.get("instance_reset") or {}),
+    return {"Node": reset_values(record, "node"), "Instance": reset_values(record, "instance"),
             "ConsideredEditable": record.get("considered_editable", True)}
+
+
+def _output_bindings_by_source(live, refs):
+    """struct id -> {output property path: "<target ref>:<target path>"} of the output bindings."""
+    out = {}
+    for binding in live.bindings:
+        if binding.get("output"):
+            target = binding["target"]
+            ref = refs.name(target["struct"])
+            out.setdefault(binding["source"]["struct"], {})[binding["source"]["path"]] = \
+                f"{ref}:{target['path']}" if target["path"] else ref
+    return out
+
+
+def _output_binding_targets(live):
+    """struct id -> {output property path: (target struct id, target path)} of the output bindings."""
+    out = {}
+    for binding in live.bindings:
+        if binding.get("output"):
+            out.setdefault(binding["source"]["struct"], {})[binding["source"]["path"]] = \
+                (binding["target"]["struct"], binding["target"]["path"])
+    return out
+
+
+def _same_bound(refs, authored, bound):
+    """A document binding reference ("<ref>:<path>", the ref by name or index) names the live (struct id, path) bound
+    (None: nothing bound, which only "" names)."""
+    if type(authored) is not str:
+        return False
+    if bound is None or not authored:
+        return bound is None and not authored
+    ref, path = _split_source(authored)
+    try:
+        struct = refs.resolve(ref, "")
+    except AssetDocumentContractError:
+        return False
+    return (struct, path) == bound
+
+
+def _node_outputs(record, outputs):
+    return {**outputs.get(record["id"], {}),
+            **{f"Node:{path}": value for path, value in outputs.get(record["node_id"], {}).items()}}
+
+
+def _same_outputs(authored, live):
+    """Output bindings of two documents compare by the struct their reference names (by name or index) and the
+    target property path."""
+    return type(authored) is dict and set(authored) == set(live) and all(_same_source(authored[key], live[key])
+                                                                        for key in live)
 
 
 def _node_doc(record, bindings, include_defaults):
@@ -1404,12 +1590,16 @@ def _node_doc(record, bindings, include_defaults):
             node[key] = record[field]
     for key, field in (("Node", "node"), ("Instance", "instance")):
         values = _without_defaults(record.get(field) or {}, record.get(field + "_defaults"), include_defaults)
+        values.update({name: VALUE_MARKER for name in record.get(field + "_marked", ())})
         if values:
             node[key] = values
     authored = {**bindings.get(record["id"], {}),
                 **{f"Node:{path}": value for path, value in bindings.get(record["node_id"], {}).items()}}
     if authored:
         node["Bindings"] = authored
+    outputs = _node_outputs(record, bindings.get(OUTPUT_BINDINGS, {}))
+    if outputs:
+        node[OUTPUT_BINDINGS] = outputs
     return node
 
 
@@ -1417,6 +1607,7 @@ def _bindings_by_target(live, refs):
     """struct id -> {target path: document source} of the authored (non-output) bindings."""
     out = {}
     nested_of = {}
+    functions = {binding["function"]["id"] for binding in live.bindings if binding.get("function") is not None}
     for binding in live.bindings:
         if binding.get("output"):
             continue
@@ -1424,19 +1615,24 @@ def _bindings_by_target(live, refs):
     for binding in live.bindings:
         if binding.get("output"):
             continue
-        function = binding.get("function")
-        if function is not None:
-            value = {"Function": function["type"]}
-            if function.get("instance"):
-                value["Instance"] = dict(function["instance"])
-            nested = {item["target"]["path"]: _source_text(item, refs) for item in nested_of.get(function["id"], [])
-                      if "function" not in item}
-            if nested:
-                value["Bindings"] = nested
-        else:
-            value = _source_text(binding, refs)
-        out.setdefault(binding["target"]["struct"], {})[binding["target"]["path"]] = value
+        if binding["target"]["struct"] in functions:
+            continue  # An input of a property function: under that function.
+        out.setdefault(binding["target"]["struct"], {})[binding["target"]["path"]] = _binding_value(binding, nested_of, refs)
     return out
+
+
+def _binding_value(binding, nested_of, refs):
+    function = binding.get("function")
+    if function is None:
+        return _source_text(binding, refs)
+    value = {"Function": function["type"]}
+    instance = {**function.get("instance", {}), **{name: VALUE_MARKER for name in function.get("instance_marked", [])}}
+    if instance:
+        value["Instance"] = instance
+    nested = {item["target"]["path"]: _binding_value(item, nested_of, refs) for item in nested_of.get(function["id"], [])}
+    if nested:
+        value["Bindings"] = nested
+    return value
 
 
 def _source_text(binding, refs):
@@ -1464,7 +1660,8 @@ def _state_doc(live, state_id, refs, bindings, include_defaults):
         if record["type"] in LINKED_TYPES:
             overridden = [prop for prop in params["props"] if prop["id"] in params.get("overrides", [])]
             if overridden or include_defaults:
-                state["ParameterValues"] = {prop["name"]: prop["value"] for prop in overridden if "value" in prop}
+                state["ParameterValues"] = {prop["name"]: prop["value"] if "value" in prop else VALUE_MARKER
+                                            for prop in overridden}
         elif params["props"] or include_defaults:
             state["Parameters"] = _parameters_doc(params)
         if bindings.get(params["id"]):
@@ -1484,6 +1681,79 @@ def _state_doc(live, state_id, refs, bindings, include_defaults):
     return state
 
 
+def _delegate_binding(live, record):
+    """(source struct id, path) of the dispatcher binding an OnDelegate transition listens to (None when none)."""
+    if record is None:
+        return None
+    binding = next((item for item in live.bindings
+                    if not item.get("output") and item["target"]["struct"] == record["id"]), None)
+    return (binding["source"]["struct"], binding["source"]["path"]) if binding is not None else None
+
+
+def _same_source(authored, live):
+    """Binding references of two documents compare by property path and by the struct the reference names: a name
+    and an index are the same reference when they name the same node of their document (``_REF_BODIES``)."""
+    if type(authored) is not str or type(live) is not str or bool(authored) != bool(live):
+        return False
+    (ref, path), (live_ref, live_path) = _split_source(authored), _split_source(live)
+    if path != live_path:
+        return False
+    if not _REF_BODIES:
+        return ref == live_ref
+    body, live_body = _REF_BODIES[-1]
+    return _doc_ref_key(ref, body) == _doc_ref_key(live_ref, live_body)
+
+
+# (authored Body, extracted Body) of the running diff: binding references resolve in their own document.
+_REF_BODIES = []
+
+
+def _doc_ref_key(ref, body):
+    """A binding reference as the position of the struct it names in body (a name or an index of a node gives the
+    same key); one that names nothing in body is itself."""
+    def node_index(nodes, key):
+        nodes = nodes if type(nodes) is list else []
+        named = [index for index, node in enumerate(nodes) if type(node) is dict and node.get("Name")
+                 and segment(node["Name"]) == key]
+        if len(named) == 1:
+            return str(named[0])
+        return key if key.isdigit() and int(key) < len(nodes) else None
+
+    parts = ref.split("/")
+    if len(parts) == 2 and parts[0] in ("Evaluators", "GlobalTasks"):
+        index = node_index(body.get(parts[0]), parts[1])
+        return f"{parts[0]}/{index}" if index is not None else ref
+    states = {}
+
+    def walk(rows, prefix, where):
+        rows = rows if type(rows) is list else []
+        for index, (state, name) in enumerate(zip(rows, segments([str(row.get("Name", "")) for row in rows
+                                                                   if type(row) is dict]))):
+            path = f"{prefix}/{name}" if prefix else name
+            states[path] = (state, f"{where}/{index}")
+            walk(state.get("Children"), path, f"{where}/{index}/Children")
+
+    walk(body.get("States"), "", "States")
+    for size in range(len(parts) - 1, 0, -1):
+        found = states.get("/".join(parts[:size]))
+        if found is None:
+            continue
+        state, where = found
+        rest = parts[size:]
+        if len(rest) == 2 and rest[0] in STATE_LISTS:
+            index = node_index(state.get(rest[0]), rest[1])
+            if index is not None:
+                return f"{where}/{rest[0]}/{index}"
+        if len(rest) == 4 and rest[0] == "Transitions" and rest[2] == "Conditions" and rest[1].isdigit():
+            transitions = state.get("Transitions") if type(state.get("Transitions")) is list else []
+            if int(rest[1]) < len(transitions) and type(transitions[int(rest[1])]) is dict:
+                index = node_index(transitions[int(rest[1])].get("Conditions"), rest[3])
+                if index is not None:
+                    return f"{where}/Transitions/{rest[1]}/Conditions/{index}"
+        return f"{where}/{'/'.join(rest)}"
+    return ref
+
+
 def _transition_doc(live, state_id, record, bindings, include_defaults):
     to = record["to"]
     target = live.paths.get(_id(to["state"]), to.get("name", "")) if to["type"] == "GotoState" else to["type"]
@@ -1499,6 +1769,10 @@ def _transition_doc(live, state_id, record, bindings, include_defaults):
         transition["Delay"] = None
     if include_defaults or not record["enabled"]:
         transition["Enabled"] = record["enabled"]
+    listener = next(iter(bindings.get(record["id"], {}).values()), None)
+    if type(listener) is str:
+        # The dispatcher an OnDelegate transition listens to (read-only).
+        transition["Delegate"] = {"Source": listener}
     conditions = [_node_doc(item, bindings, include_defaults)
                   for item in live.node_list("transition_conditions", state_id, record["id"])]
     if conditions or include_defaults:
@@ -1508,7 +1782,9 @@ def _transition_doc(live, state_id, record, bindings, include_defaults):
 
 def extract(target, read, context, include_defaults=False):
     live = Calls(context, read).live()
-    return common.document(target, STATE_TREE_CLASS, {}, body_from_live(live, include_defaults))
+    body = body_from_live(live, include_defaults)
+    markers.warn_all(body, PREFIX, "/Body")
+    return common.document(target, STATE_TREE_CLASS, {}, body)
 
 
 def _pop_facts(value, path, out):
@@ -1560,13 +1836,17 @@ def diff(authored, extracted, exact, facts=None):
     changes = common.header_diff(authored, extracted)
     body = authored.get("Body", {})
     live = extracted.get("Body", {})
-    for key in BODY_KEYS:
-        if key not in body:
-            continue
-        try:
-            _covers_body_key(key, body[key], live.get(key), exact, live, facts)
-        except _Mismatch as mismatch:
-            changes.append(_mismatch_difference(mismatch, f"/Body/{key}", body[key], key in live, live.get(key)))
+    _REF_BODIES.append((body, live))
+    try:
+        for key in BODY_KEYS:
+            if key not in body:
+                continue
+            try:
+                _covers_body_key(key, body[key], live.get(key), exact, live, facts)
+            except _Mismatch as mismatch:
+                changes.append(_mismatch_difference(mismatch, f"/Body/{key}", body[key], key in live, live.get(key)))
+    finally:
+        _REF_BODIES.pop()
     return with_diagnostics(changes, omitted_kept(body.get("States"), live.get("States")))
 
 
@@ -1665,6 +1945,8 @@ def _covers_nodes(authored, live, path, exact, facts=None):
                     _check(False, f"{where}/{key}/{_escape(name)}", known[key][name], current.get(key, {}).get(name))
         if "Bindings" in node:
             _covers_bindings(node["Bindings"], current.get("Bindings", {}), f"{where}/Bindings", exact)
+        if OUTPUT_BINDINGS in node:
+            _check(_same_outputs(node[OUTPUT_BINDINGS], current.get(OUTPUT_BINDINGS, {})), f"{where}/{OUTPUT_BINDINGS}")
 
 
 def _covers_bindings(authored, live, path, exact):
@@ -1732,6 +2014,9 @@ def _covers_transitions(authored, live, path, exact, facts=None):
                    and _same(delay.get("Variance", 0), live_delay.get("Variance", 0), exact), f"{where}/Delay")
         if "Conditions" in transition:
             _covers_nodes(transition["Conditions"], current.get("Conditions", []), f"{where}/Conditions", exact, facts)
+        if "Delegate" in transition:
+            _check(_same_source(transition["Delegate"].get("Source", ""), current.get("Delegate", {}).get("Source", "")),
+                   f"{where}/Delegate")
 
 
 # ---------------------------------------------------------------------------

@@ -103,7 +103,8 @@ def _public_graph_readback_diagnostic(diagnostic):
     elif fault == "unreachable":
         valid_path = path == "/Body/Tree/Nodes"
     else:
-        valid_path = re.fullmatch(r"/Body/Tree/Root(?:/Children/(?:0|[1-9][0-9]*)){0,64}", path) is not None
+        valid_path = re.fullmatch(r"/Body/Tree/(?:Root|Detached/(?:0|[1-9][0-9]*))(?:/Children/(?:0|[1-9][0-9]*)){0,64}",
+                                  path) is not None
     if not valid_path:
         return diagnostic
     return RuntimeDiagnostic(path, codes[fault], diagnostic.message, diagnostic.severity, diagnostic.context)

@@ -14,6 +14,7 @@ from asset_document.graphs.reconcile import pending_relayout
 from asset_document.graphs.schemas import k2
 from asset_document.tests.graph_support import ACTOR_CLASS, FakeGraphContext
 from asset_document.tests.test_graph_executor import execute, mutations, read_live
+from asset_document.tests.test_graph_extract import extract_body
 
 
 def _node(node_id, title, inputs=(), outputs=(), exec_=True):
@@ -356,6 +357,71 @@ class K2LayoutFieldTests(unittest.TestCase):
         encoded = k2.encode_node(box)
         self.assertEqual(encoded["Size"], {"Width": 640, "Height": 320})
         self.assertEqual(k2.encode_node(print_)["CommentBubbleVisible"], True)
+
+    def test_enabled_state_is_extracted_kept_when_omitted_and_set_when_stated(self):
+        context = FakeGraphContext("graph.list.v1.k2_empty_actor.json", "graph.query.v1.k2_empty_actor.json")
+        disabled = {"UbergraphPages": [{"Name": "EventGraph", "Nodes": [
+            {"Id": "Begin", "Action": "K2:BeginPlay"},
+            {"Id": "Print", "Action": "K2:PrintString", "Enabled": "Disabled"}], "Links": [{"From": "Begin:then", "To": "Print:execute"}]}]}
+        execute(context, disabled)
+        live = read_live(context)
+        nodes = [node for graph in live.graphs for node in graph.nodes]
+        printer = next(node for node in nodes if node.action_key and "PrintString" in node.action_key)
+        self.assertEqual((printer.enabled_state, printer.enabled_state_user_set), ("disabled", True))
+        self.assertEqual(k2.encode_node(self.decode(disabled["UbergraphPages"][0]).nodes[1])["Enabled"], "Disabled")
+        before = len(context.calls)
+        execute(context, disabled)
+        self.assertEqual(mutations_since(context, before), [])
+        omitted = {"UbergraphPages": [dict(disabled["UbergraphPages"][0], Nodes=[
+            {"Id": "Begin", "Action": "K2:BeginPlay"}, {"Id": "Print", "Action": "K2:PrintString"}])]}
+        before = len(context.calls)
+        execute(context, omitted)
+        self.assertEqual(mutations_since(context, before), [])
+        enabled = {"UbergraphPages": [dict(disabled["UbergraphPages"][0], Nodes=[
+            {"Id": "Begin", "Action": "K2:BeginPlay"}, {"Id": "Print", "Action": "K2:PrintString", "Enabled": "Enabled"}])]}
+        execute(context, enabled)
+        printer = next(node for graph in read_live(context).graphs for node in graph.nodes
+                       if node.action_key and "PrintString" in node.action_key)
+        self.assertEqual(printer.enabled_state, "enabled")
+        self.assertEqual(self.error({"Name": "EventGraph", "Nodes": [
+            {"Id": "Print", "Action": "K2:PrintString", "Enabled": "Off"}], "Links": []})[0], "Graph.InvalidType")
+
+    def test_enabled_state_of_a_node_placed_development_only(self):
+        # The engine places a Development Only function call (Print String) as Development Only, not set by the user.
+        def printer(context):
+            return next(node for graph in read_live(context).graphs for node in graph.nodes
+                        if node.action_key and "PrintString" in node.action_key)
+
+        def extracted_enabled(context):
+            body = extract_body(read_live(context), self_class=ACTOR_CLASS)
+            return next(node for node in body["UbergraphPages"][0]["Nodes"] if "PrintString" in node["Action"]).get("Enabled")
+
+        def graph(**fields):
+            return {"UbergraphPages": [{"Name": "EventGraph", "Nodes": [
+                {"Id": "Begin", "Action": "K2:BeginPlay"}, {"Id": "Print", "Action": "K2:PrintString", **fields}],
+                "Links": [{"From": "Begin:then", "To": "Print:execute"}]}]}
+
+        context = FakeGraphContext("graph.list.v1.k2_empty_actor.json", "graph.query.v1.k2_empty_actor.json")
+        context.placed_states = {"PrintString": "development_only"}
+        # A placed node left alone keeps its state and extracts no Enabled.
+        execute(context, graph())
+        self.assertEqual((printer(context).enabled_state, printer(context).enabled_state_user_set),
+                         ("development_only", False))
+        self.assertIsNone(extracted_enabled(context))
+        # A stated "Enabled" on that existing node is a change; it is then the user's and extracts as stated.
+        start = len(context.calls)
+        execute(context, graph(Enabled="Enabled"))
+        self.assertEqual(context.calls_of("graph.node.layout.set.v1")[-1].get("enabled_state"), "enabled")
+        self.assertEqual((printer(context).enabled_state, printer(context).enabled_state_user_set), ("enabled", True))
+        self.assertEqual(extracted_enabled(context), "Enabled")
+        start = len(context.calls)
+        execute(context, graph(Enabled="Enabled"))
+        self.assertEqual(mutations_since(context, start), [])
+        # A new Print String stating "Enabled" is placed enabled.
+        fresh = FakeGraphContext("graph.list.v1.k2_empty_actor.json", "graph.query.v1.k2_empty_actor.json")
+        fresh.placed_states = {"PrintString": "development_only"}
+        execute(fresh, graph(Enabled="Enabled"))
+        self.assertEqual((printer(fresh).enabled_state, printer(fresh).enabled_state_user_set), ("enabled", True))
 
     def test_field_errors(self):
         self.assertEqual(self.error({"Name": "EventGraph", "Nodes": [

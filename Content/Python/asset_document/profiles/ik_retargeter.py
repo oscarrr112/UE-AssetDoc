@@ -26,9 +26,14 @@ Document (MCP/schemas/assetdocument/IKRig.md)::
   when they equal what the editor fills in); ``Chains`` lists per target chain the chain settings that differ from
   the defaults; ``TargetIKRig`` appears only when an op uses another rig than the default target rig;
   ``ChainMapping`` (target chain -> source chain or null) is kept as it is when a document leaves it out.
+  An op whose type does not load is a marked element; a settings or chain-row field the document has no form for
+  reads in place as ``{"Unsupported": ..., "Text": <export text>}``. Each marker warns
+  ``IKRetargeter.Unrepresented``; apply keeps a marker left as read or omitted and refuses an edited one
+  (``IKRetargeter.UnrepresentedValue``).
 * Poses per side: ``Current`` and the named poses (``Default Pose`` always), each a vertical ``RootOffset`` and the
   local rotation offsets of ``Bones`` (quaternions; unlisted bones keep the reference pose).
-* Retarget profiles are read only (Inspect lists them; ``IKRetargeter.ProfilesNotAuthored``). Inspect adds the
+* Retarget profiles are read only (Inspect lists them with their overrides; ``IKRetargeter.ProfilesNotAuthored``;
+  Extract warns ``IKRetargeter.ProfileActive`` while one is current). Inspect adds the
   editor's automatic setup as ``Suggestions`` (auto-align, auto-map); the Body is applied by
   ``ik_retargeter_apply``.
 """
@@ -36,6 +41,8 @@ from __future__ import annotations
 
 import math
 
+from asset_document import markers
+from asset_document.diagnostics import read_warning
 from asset_document.meta import (
     ComparisonPolicy, DefaultPolicy, DeletePolicy, IdentityPolicy, OmissionPolicy, OrderPolicy, ProfileMeta,
     RegionMeta, RegionOwnership,
@@ -90,6 +97,15 @@ def _validate_ops(ops, path, names, child=False):
                     "IKRetargeter.InvalidBody")
     for index, entry in enumerate(ops):
         where = f"{path}/{index}"
+        if markers.is_marker(entry):
+            # An op whose type does not load: kept while the document lists it (and when it omits it).
+            ik.check_keys(entry, ("Name", "Type", markers.KEY, markers.TEXT), where, "op", PREFIX)
+            name = ik.name_value(entry.get("Name"), f"{where}/Name", "An op's Name", PREFIX)
+            if entry.get("Type") is not None:
+                raise error(f"{where}/Type", "A marked op has Type null (its type does not load).",
+                            "IKRetargeter.UnrepresentedValue")
+            names[name.lower()] = where
+            continue
         ik.check_keys(ik.object_value(entry, where, "An op", PREFIX), OP_KEYS, where, "op", PREFIX)
         name = ik.name_value(entry.get("Name"), f"{where}/Name", "An op's Name", PREFIX)
         ik.name_value(entry.get("Type"), f"{where}/Type", "An op's Type", PREFIX)
@@ -264,7 +280,8 @@ def assemble(records):
     """Body and Inspect facts of rig.ikretargeter.read.v1 records."""
     header = records[0]
     body = {"Source": _side(header.get("source", {})), "Target": _side(header.get("target", {}))}
-    facts = {"profiles": {"Names": header.get("profiles", []), "Current": header.get("current_profile", "")},
+    facts = {"profiles": {"Names": header.get("profiles", []), "Current": header.get("current_profile", ""),
+                          "Overrides": {}},
              "ops": {}, "chains": {}, "defaults": {},
              "sides": {"Source": header.get("source", {}), "Target": header.get("target", {})}}
     entries, order, poses = {}, [], {}
@@ -292,6 +309,8 @@ def assemble(records):
             facts["ops"][record["index"]] = record
         elif kind == "chains":
             facts["chains"][record["side"]] = {"IKRig": record.get("rig", ""), "Chains": record.get("chains", [])}
+        elif kind == "profile":
+            facts["profiles"]["Overrides"][record["name"]] = _profile_overrides(record)
     # Nest child ops under their parent (the op stack panel; the stack keeps children before their parent), keeping
     # stack order. A child whose parent is missing stays top-level and keeps its Parent.
     names = {entries[index]["Name"] for index in order}
@@ -312,12 +331,41 @@ def assemble(records):
     return body, facts
 
 
+def _profile_overrides(record):
+    """What a retarget profile changes when it is the current profile (Inspect)."""
+    out = {"Ops": []}
+    for item in record.get("overrides", []):
+        row = {"Op": item["op"]} if item.get("op") else {"Op": f"(every op with {item.get('type', '')})"}
+        row["SettingsType"] = item.get("type", "")
+        if "settings" in item:
+            row["Settings"] = item["settings"]
+        out["Ops"].append(row)
+    for key, field in (("SourcePose", "source_pose"), ("TargetPose", "target_pose")):
+        if field in record:
+            out[key] = record[field]
+    if record.get("force_all_ik_off"):
+        out["ForceAllIKOff"] = True
+    return out
+
+
 def read_body(calls, detail="document"):
     return assemble(ik.read_records(calls, ik.RETARGETER_READ, detail))
 
 
+def warn_profile(facts):
+    """A read warning when a retarget profile is current: the retargeter then runs its overrides, not only the
+    settings the document shows."""
+    current = facts["profiles"].get("Current")
+    if current:
+        read_warning("/Body", "IKRetargeter.ProfileActive",
+                     f"Retarget profile '{current}' is the current profile: its overrides (Inspect Profiles) apply over the "
+                     "op settings and poses shown here, and a document cannot change profiles.")
+
+
 def extract(target, read, context, include_defaults=True):
-    body, _ = read_body(ik.RigCalls(context, read, prefix=PREFIX))
+    body, facts = read_body(ik.RigCalls(context, read, prefix=PREFIX))
+    markers.warn_all(body.get("Ops", []), PREFIX, "/Body/Ops")
+    warn_profile(facts)
     return common.document(target, CLASS, _properties().extract(read, context, include_defaults), body)
 
 

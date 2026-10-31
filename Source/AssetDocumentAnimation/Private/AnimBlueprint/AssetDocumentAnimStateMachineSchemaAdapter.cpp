@@ -11,6 +11,10 @@
 // extras.properties holds the editable node properties that differ from a newly placed node's and, for
 // aliases, "AliasedStates" (state names), which SetNodeSetting applies; extras.property_defaults the new
 // node's value of each (an omitted setting is reset to it, as "reset to default" in the Details panel).
+// A transition whose rule or blend settings are shared (Details > Promote To Shared / Use Shared) reports
+// "SharedRules" / "SharedCrossfade", the shared name, without a default: an omitted one keeps the sharing, "" unshares.
+// A shared rule graph is the subgraph of the transition that made it (its outer) while that transition shares it;
+// the other transitions that share it report no rule graph.
 
 #include "AnimBlueprint/AssetDocumentAnimBlueprintAdapters.h"
 
@@ -79,6 +83,175 @@ TArray<UAnimStateNodeBase*> NamedStates(const UEdGraph& Graph)
 		}
 	}
 	return States;
+}
+
+// The transitions of the Blueprint, as the Use Shared menu collects them (every state machine).
+TArray<UAnimStateTransitionNode*> BlueprintTransitions(const UEdGraphNode& Node)
+{
+	TArray<UAnimStateTransitionNode*> Out;
+	if (UBlueprint* Blueprint = FBlueprintEditorUtils::FindBlueprintForNode(&Node))
+	{
+		TArray<UAnimStateNodeBase*> States;
+		FBlueprintEditorUtils::GetAllNodesOfClassEx<UAnimStateNodeBase>(Blueprint, States);
+		for (UAnimStateNodeBase* State : States)
+		{
+			if (UAnimStateTransitionNode* Transition = Cast<UAnimStateTransitionNode>(State))
+			{
+				Out.Add(Transition);
+			}
+		}
+	}
+	return Out;
+}
+
+// The transition a shared rule graph belongs to: the one that made it (its outer) while that one still uses it, else
+// the first transition of the Blueprint that uses it (one owner even when the group spans state machines).
+const UAnimStateTransitionNode* RuleGraphOwner(const UAnimStateTransitionNode& Transition)
+{
+	const UEdGraph* Rule = Transition.BoundGraph;
+	if (Rule == nullptr || !Transition.IsBoundGraphShared())
+	{
+		return &Transition;
+	}
+	const UAnimStateTransitionNode* Maker = Cast<UAnimStateTransitionNode>(Rule->GetOuter());
+	if (Maker != nullptr && Maker->BoundGraph == Rule && Maker->GetGraph() != nullptr && Maker->GetGraph()->Nodes.Contains(Maker))
+	{
+		return Maker;
+	}
+	for (const UAnimStateTransitionNode* Other : BlueprintTransitions(Transition))
+	{
+		if (Other->BoundGraph == Rule)
+		{
+			return Other;
+		}
+	}
+	return &Transition;
+}
+
+// The blend settings "Use Shared Rules" overwrites when the joined transition shares its blend settings.
+struct FCrossfadeState
+{
+	float CrossfadeDuration;
+	TEnumAsByte<ETransitionBlendMode::Type> CrossfadeMode;
+	EAlphaBlendOption BlendMode;
+	TObjectPtr<UCurveFloat> CustomBlendCurve;
+	FBlendProfileInterfaceWrapper BlendProfileWrapper;
+	bool bSharedCrossfade;
+	FString SharedCrossfadeName;
+	FGuid SharedCrossfadeGuid;
+	int32 SharedCrossfadeIdx;
+
+	explicit FCrossfadeState(const UAnimStateTransitionNode& Node)
+		: CrossfadeDuration(Node.CrossfadeDuration), CrossfadeMode(Node.CrossfadeMode_DEPRECATED), BlendMode(Node.BlendMode)
+		, CustomBlendCurve(Node.CustomBlendCurve), BlendProfileWrapper(Node.BlendProfileWrapper), bSharedCrossfade(Node.bSharedCrossfade)
+		, SharedCrossfadeName(Node.SharedCrossfadeName), SharedCrossfadeGuid(Node.SharedCrossfadeGuid), SharedCrossfadeIdx(Node.SharedCrossfadeIdx)
+	{
+	}
+
+	void Restore(UAnimStateTransitionNode& Node) const
+	{
+		Node.CrossfadeDuration = CrossfadeDuration;
+		Node.CrossfadeMode_DEPRECATED = CrossfadeMode;
+		Node.BlendMode = BlendMode;
+		Node.CustomBlendCurve = CustomBlendCurve;
+		Node.BlendProfileWrapper = BlendProfileWrapper;
+		Node.bSharedCrossfade = bSharedCrossfade;
+		Node.SharedCrossfadeName = SharedCrossfadeName;
+		Node.SharedCrossfadeGuid = SharedCrossfadeGuid;
+		Node.SharedCrossfadeIdx = SharedCrossfadeIdx;
+	}
+};
+
+// FAnimTransitionNodeDetails::AssignUniqueColorsToAllSharedNodes.
+void AssignSharedColors(UEdGraph& Graph)
+{
+	TArray<UEdGraph*> Rules;
+	for (UEdGraphNode* Node : Graph.Nodes)
+	{
+		UAnimStateTransitionNode* Transition = Cast<UAnimStateTransitionNode>(Node);
+		if (Transition != nullptr && Transition->bSharedRules)
+		{
+			const int32 Index = Rules.AddUnique(Transition->BoundGraph) + 1;
+			Transition->SharedColor = FLinearColor(Index & 1 ? 1.0f : 0.15f, Index & 2 ? 1.0f : 0.15f, Index & 4 ? 1.0f : 0.15f, 1.0f);
+		}
+	}
+}
+
+// The transition Details' sharing buttons: "Promote To Shared" (a new name), "Use Shared" (a name another transition
+// shares) and "Unshare" (""); Rules picks the transition rule, else the blend settings.
+bool SetSharing(UAnimStateTransitionNode& Transition, bool bRules, const FValue& Value, FAssetDocumentGraphError& OutError)
+{
+	const TCHAR* Setting = bRules ? TEXT("SharedRules") : TEXT("SharedCrossfade");
+	if (Value.Kind != EAssetDocumentRuntimeValueKind::String && Value.Kind != EAssetDocumentRuntimeValueKind::Null)
+	{
+		OutError.Set(TEXT("Graph.InvalidArgument"), FString::Printf(
+			TEXT("%s is the shared name of the transition's %s (another transition's name to use it, a new name to share it, \"\" to unshare)."),
+			Setting, bRules ? TEXT("rule") : TEXT("blend settings")), TEXT("/value"));
+		return false;
+	}
+	const FString Name = Value.Kind == EAssetDocumentRuntimeValueKind::String ? Value.StringValue : FString();
+	const bool bShared = bRules ? Transition.bSharedRules : Transition.bSharedCrossfade;
+	const FString& Current = bRules ? Transition.SharedRulesName : Transition.SharedCrossfadeName;
+	if ((Name.IsEmpty() && !bShared) || (!Name.IsEmpty() && bShared && Current == Name))
+	{
+		return true;
+	}
+	if (Name.IsEmpty())
+	{
+		Transition.Modify();
+		bRules ? Transition.UnshareRules() : Transition.UnshareCrossade();
+		return true;
+	}
+	const TArray<UAnimStateTransitionNode*> Transitions = BlueprintTransitions(Transition);
+	UAnimStateTransitionNode* const* Source = Transitions.FindByPredicate([&Transition, bRules, &Name](const UAnimStateTransitionNode* Other)
+	{
+		return Other != &Transition && (bRules ? Other->bSharedRules && Other->SharedRulesName == Name
+			: Other->bSharedCrossfade && Other->SharedCrossfadeName == Name);
+	});
+	if (Source != nullptr && bRules && (*Source)->GetGraph() != Transition.GetGraph())
+	{
+		// The rule graph of a group is written once, on one transition; a group spanning state machines is kept as it
+		// is but not made or joined.
+		const UEdGraph* Machine = (*Source)->GetGraph();
+		OutError.Set(TEXT("Graph.SharedRuleAcrossStateMachines"), FString::Printf(
+			TEXT("The shared rule '%s' belongs to state machine '%s'; a transition of '%s' cannot use it. Give this transition its own "
+				"shared name (one no other state machine uses), or leave SharedRules as the transition has it."),
+			*Name, Machine != nullptr ? *Machine->GetName() : TEXT(""), Transition.GetGraph() != nullptr ? *Transition.GetGraph()->GetName() : TEXT("")),
+			TEXT("/value"));
+		return false;
+	}
+	Transition.Modify();
+	if (Source != nullptr)
+	{
+		if (bRules)
+		{
+			// The editor's Use Shared Rules also takes the joined transition's shared blend settings; SharedCrossfade
+			// is a setting of its own, so the transition keeps its blend settings here.
+			const FCrossfadeState Crossfade(Transition);
+			Transition.UseSharedRules(*Source);
+			Crossfade.Restore(Transition);
+		}
+		else
+		{
+			Transition.UseSharedCrossfade(*Source);
+		}
+		return true;
+	}
+	if (bShared && (!bRules || Transition.IsBoundGraphShared()))
+	{
+		// Leaving a group for a new name: the transition shares on its own from here.
+		bRules ? Transition.UnshareRules() : Transition.UnshareCrossade();
+	}
+	if (bRules)
+	{
+		Transition.MakeRulesShareable(Name);
+		AssignSharedColors(*Transition.GetGraph());
+	}
+	else
+	{
+		Transition.MakeCrossfadeShareable(Name);
+	}
+	return true;
 }
 
 FValue AliasedStates(const UAnimStateAliasNode& Alias)
@@ -154,6 +327,17 @@ FValue CollectProperties(const UEdGraphNode& Node, FValue& OutDefaults)
 		{
 			SetField(Out, It->GetName(), EncodeAssetDocumentGraphPropertyValue(**It, Value));
 			SetField(OutDefaults, It->GetName(), EncodeAssetDocumentGraphPropertyValue(**It, Default));
+		}
+	}
+	if (const UAnimStateTransitionNode* Transition = Cast<UAnimStateTransitionNode>(&Node))
+	{
+		if (Transition->bSharedRules)
+		{
+			SetField(Out, TEXT("SharedRules"), MakeStringValue(Transition->SharedRulesName));
+		}
+		if (Transition->bSharedCrossfade)
+		{
+			SetField(Out, TEXT("SharedCrossfade"), MakeStringValue(Transition->SharedCrossfadeName));
 		}
 	}
 	if (const UAnimStateAliasNode* Alias = Cast<UAnimStateAliasNode>(&Node); Alias != nullptr && !Alias->GetAliasedStates().IsEmpty())
@@ -306,10 +490,40 @@ public:
 		return OwnerNode.IsA<UAnimStateNode>() ? TEXT("state") : TEXT("other");
 	}
 
+	virtual void GetOwnedSubgraphs(const UEdGraphNode& Node, TArray<UEdGraph*>& OutGraphs) const override
+	{
+		IAssetDocumentGraphSchemaAdapter::GetOwnedSubgraphs(Node, OutGraphs);
+		// A transition leaves a shared rule graph out of its subgraphs (UAnimStateTransitionNode::GetSubGraphs): the
+		// group's owner reports it, the others do not.
+		if (const UAnimStateTransitionNode* Transition = Cast<UAnimStateTransitionNode>(&Node); Transition != nullptr)
+		{
+			if (RuleGraphOwner(*Transition) != Transition)
+			{
+				OutGraphs.Remove(Transition->BoundGraph);
+			}
+			else if (Transition->BoundGraph != nullptr && !OutGraphs.Contains(Transition->BoundGraph))
+			{
+				OutGraphs.Insert(Transition->BoundGraph, 0);
+			}
+		}
+	}
+
 	virtual bool SetNodeSetting(UObject& Asset, UEdGraphNode& Node, FStringView Path, const FAssetDocumentRuntimeValueDto& Value,
 		bool& bOutHandled, FAssetDocumentGraphError& OutError) const override
 	{
 		bOutHandled = false;
+		if (Path == TEXTVIEW("SharedRules") || Path == TEXTVIEW("SharedCrossfade"))
+		{
+			bOutHandled = true;
+			UAnimStateTransitionNode* Transition = Cast<UAnimStateTransitionNode>(&Node);
+			if (Transition == nullptr)
+			{
+				OutError.Set(TEXT("Graph.InvalidArgument"), FString::Printf(TEXT("%.*s is a transition setting."), Path.Len(), Path.GetData()),
+					TEXT("/property_path"));
+				return false;
+			}
+			return SetSharing(*Transition, Path == TEXTVIEW("SharedRules"), Value, OutError);
+		}
 		UAnimStateAliasNode* Alias = Cast<UAnimStateAliasNode>(&Node);
 		if (Path != TEXTVIEW("AliasedStates"))
 		{

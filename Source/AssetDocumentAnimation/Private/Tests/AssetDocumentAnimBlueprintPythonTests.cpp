@@ -1419,6 +1419,77 @@ bool FAssetDocumentAnimBlueprintFunctionBindingTest::RunTest(const FString& Para
 		TestTrue(TEXT("Animation Blueprint compiles without the binding"), CompilesClean(Target.Get()));
 		TestNoDiff(*this, Removed, TEXT("after binding removal"));
 	}
+	// The binding's call site: a document written without ContextId (before call sites were read) keeps the call site,
+	// changes nothing and leaves the package clean.
+	auto WithAlpha = [&Target](const TCHAR* Entry)
+	{
+		return Document(Target, TEXT("Update"), FString::Printf(TEXT(R"json("AnimGraph":{"Nodes":[
+  {"Id":"Idle","Action":"Anim:SequencePlayer","Properties":{"Node.Sequence":"%s"}},
+  {"Id":"Walk","Action":"Anim:SequencePlayer","Properties":{"Node.Sequence":"%s"}},
+  {"Id":"Blend","Action":"Anim:TwoWayBlend","Properties":{"Bindings":{"Alpha":%s}}}],
+  "Links":[{"From":"Idle:Pose","To":"Blend:A"},{"From":"Walk:Pose","To":"Blend:B"},{"From":"Blend:Pose","To":"Output:Result"}]})json"),
+			IdleAnim, WalkAnim, Entry));
+	};
+	// The Blend node's Alpha binding entry of a document (null when absent).
+	const auto AlphaOf = [](const TSharedPtr<FJsonObject>& Extracted) -> TSharedPtr<FJsonObject>
+	{
+		const TSharedPtr<FJsonObject>* ExtractedBody = nullptr;
+		const TSharedPtr<FJsonObject>* Graph = nullptr;
+		const TArray<TSharedPtr<FJsonValue>>* Nodes = nullptr;
+		if (!Extracted.IsValid() || !Extracted->TryGetObjectField(TEXT("Body"), ExtractedBody)
+			|| !(*ExtractedBody)->TryGetObjectField(TEXT("AnimGraph"), Graph) || !(*Graph)->TryGetArrayField(TEXT("Nodes"), Nodes))
+		{
+			return nullptr;
+		}
+		for (const TSharedPtr<FJsonValue>& Node : *Nodes)
+		{
+			const TSharedPtr<FJsonObject>* Properties = nullptr;
+			const TSharedPtr<FJsonObject>* Bindings = nullptr;
+			const TSharedPtr<FJsonObject>* Alpha = nullptr;
+			FString Action;
+			if (Node->AsObject()->TryGetStringField(TEXT("Action"), Action) && Action.StartsWith(TEXT("Anim:TwoWayBlend"))
+				&& Node->AsObject()->TryGetObjectField(TEXT("Properties"), Properties)
+				&& (*Properties)->TryGetObjectField(TEXT("Bindings"), Bindings) && (*Bindings)->TryGetObjectField(TEXT("Alpha"), Alpha))
+			{
+				return *Alpha;
+			}
+		}
+		return nullptr;
+	};
+	if (TestTrue(TEXT("a binding with a call site applies"), Apply(*this, Target,
+		WithAlpha(TEXT(R"json({"Path":"Speed","ContextId":"UnBatched_ThreadSafe"})json")), TEXT("BindingCallSite")).IsSuccess()))
+	{
+		// The extract re-applies unchanged; then, as an older document, without the binding's ContextId.
+		const TSharedPtr<FJsonObject> Current = Extract(*this, Target, TEXT("BindingCallSite"));
+		if (Current.IsValid())
+		{
+			Current->SetStringField(TEXT("Action"), TEXT("Update"));
+			const FAssetDocumentResult Same = Apply(*this, Target, Serialize(Current), TEXT("BindingCallSiteAgain"));
+			if (!TestFalse(TEXT("the extract with its call site saves nothing"), Same.bSavedAsset) && Same.Payload.IsValid())
+			{
+				AddInfo(Serialize(Same.Payload));
+			}
+		}
+		const TSharedPtr<FJsonObject> Older = Extract(*this, Target, TEXT("BindingCallSite"));
+		const TSharedPtr<FJsonObject> OlderAlpha = AlphaOf(Older);
+		if (TestTrue(TEXT("the extract names the call site"), OlderAlpha.IsValid() && OlderAlpha->HasField(TEXT("ContextId"))))
+		{
+			OlderAlpha->RemoveField(TEXT("ContextId"));
+			Older->SetStringField(TEXT("Action"), TEXT("Update"));
+			const FAssetDocumentResult Reapplied = Apply(*this, Target, Serialize(Older), TEXT("BindingWithoutCallSite"));
+			TestTrue(TEXT("a binding without ContextId applies"), Reapplied.IsSuccess());
+			if (!TestFalse(TEXT("and saves nothing"), Reapplied.bSavedAsset) && Reapplied.Payload.IsValid())
+			{
+				AddInfo(Serialize(Reapplied.Payload));
+			}
+			UObject* Asset = Target.Get();
+			TestTrue(TEXT("and leaves the package clean"), Asset != nullptr && !Asset->GetOutermost()->IsDirty());
+			FString Site;
+			const TSharedPtr<FJsonObject> After = AlphaOf(Extract(*this, Target, TEXT("BindingWithoutCallSite")));
+			TestTrue(TEXT("the call site is kept"), After.IsValid() && After->TryGetStringField(TEXT("ContextId"), Site)
+				&& Site == TEXT("UnBatched_ThreadSafe"));
+		}
+	}
 	// An impure or parameterised function cannot be bound (the binding picker does not offer it).
 	const FString Impure = Document(Target, TEXT("Update"), FString::Printf(TEXT(R"json("AnimGraph":{"Nodes":[
   {"Id":"Idle","Action":"Anim:SequencePlayer","Properties":{"Node.Sequence":"%s"}},

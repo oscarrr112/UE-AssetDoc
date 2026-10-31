@@ -1233,4 +1233,286 @@ bool FAssetDocumentAnimMontageNotifyEnumSpellingsTest::RunTest(const FString&)
 	return !HasAnyErrors();
 }
 
+// Notifies placed in the Montage editor (its notify panel), not by AssetDocument: the profile shows and edits all of them.
+namespace AssetDocumentAnimMontageEditorNotifyTests
+{
+using namespace AssetDocumentAnimMontageRouteTests;
+const TCHAR* SoundClass = TEXT("/Script/Engine.AnimNotify_PlaySound");
+const TCHAR* ParticleClass = TEXT("/Script/Engine.AnimNotifyState_TimedParticleEffect");
+
+// SAnimNotifyTrack::CreateNewNotify: the notify panel's Add Notify at Time on Track. Returns the event's index.
+int32 PlaceNotify(UAnimMontage& Montage, UClass* Class, FName Name, float Time, int32 Track, float Duration = 0.f)
+{
+	const int32 Index = Montage.Notifies.Add(FAnimNotifyEvent());
+	FAnimNotifyEvent& Event = Montage.Notifies[Index];
+	Event.NotifyName = Name;
+	Event.Guid = FGuid::NewGuid();
+	Event.Link(&Montage, Time);
+	Event.TriggerTimeOffset = GetTriggerTimeOffsetForType(static_cast<UAnimSequenceBase&>(Montage).CalculateOffsetForNotify(Time));
+	Event.TrackIndex = Track;
+	if (Class)
+	{
+		UObject* NotifyObject = NewObject<UObject>(&Montage, Class, NAME_None, RF_Transactional);
+		Event.NotifyStateClass = Cast<UAnimNotifyState>(NotifyObject);
+		Event.Notify = Cast<UAnimNotify>(NotifyObject);
+		if (Event.NotifyStateClass)
+		{
+			Event.SetDuration(Duration);
+			Event.EndLink.Link(&Montage, Event.EndLink.GetTime());
+			Event.TriggerWeightThreshold = Event.NotifyStateClass->GetDefaultTriggerWeightThreshold();
+		}
+		else
+		{
+			Event.TriggerWeightThreshold = Event.Notify->GetDefaultTriggerWeightThreshold();
+		}
+	}
+	return Index;
+}
+
+// A Montage with two notify tracks, a PlaySound notify (VolumeMultiplier 0.5) at 0.2 s, a skeleton notify "Footstep" at
+// 0.4 s on track 1 with every trigger setting changed and a Relative link, and a TimedParticleEffect state 0.5..0.75 s.
+bool PlaceEditorNotifies(FAutomationTestBase& Test, FFixture& Fixture)
+{
+	UAnimMontage& Montage = *Fixture.Montage;
+	if (Montage.AnimNotifyTracks.IsEmpty()) Montage.InitializeNotifyTrack();
+	Montage.AnimNotifyTracks.Add(FAnimNotifyTrack(TEXT("2"), FLinearColor::White));
+	const int32 Sound = PlaceNotify(Montage, UAnimNotify_PlaySound::StaticClass(), TEXT("PlaySound"), .2f, 0);
+	CastChecked<UAnimNotify_PlaySound>(Montage.Notifies[Sound].Notify)->VolumeMultiplier = .5f;
+	Fixture.Skeleton->AnimationNotifies.AddUnique(TEXT("Footstep"));
+	FAnimNotifyEvent& Footstep = Montage.Notifies[PlaceNotify(Montage, nullptr, TEXT("Footstep"), .4f, 1)];
+	Footstep.ChangeLinkMethod(EAnimLinkMethod::Relative);
+	Footstep.TriggerWeightThreshold = .25f;
+	Footstep.NotifyTriggerChance = .5f;
+	Footstep.NotifyFilterType = ENotifyFilterType::LOD;
+	Footstep.NotifyFilterLOD = 2;
+	Footstep.bCanBeFilteredViaRequest = false;
+	Footstep.bTriggerOnDedicatedServer = false;
+	Footstep.bTriggerOnFollower = true;
+	Footstep.MontageTickType = EMontageNotifyTickType::BranchingPoint;
+	const int32 State = PlaceNotify(Montage, UAnimNotifyState_TimedParticleEffect::StaticClass(), TEXT("TimedParticleEffect"), .5f, 0, .25f);
+	CastChecked<UAnimNotifyState_TimedParticleEffect>(Montage.Notifies[State].NotifyStateClass)->bDestroyAtEnd = false;
+	Montage.RefreshCacheData();
+	Montage.PostEditChange();
+	return Test.TestTrue(TEXT("save the Montage with editor-placed notifies"), Save(Montage) && Fixture.Skeleton->MarkPackageDirty() && Save(*Fixture.Skeleton));
+}
+
+const FAnimNotifyEvent* Find(const UAnimMontage& Montage, TFunctionRef<bool(const FAnimNotifyEvent&)> Predicate)
+{
+	return Montage.Notifies.FindByPredicate([&Predicate](const FAnimNotifyEvent& Event) { return Predicate(Event); });
+}
+
+TSharedPtr<FJsonObject> Row(const TSharedPtr<FJsonObject>& Document, const TCHAR* Family, TFunctionRef<bool(const FJsonObject&)> Predicate)
+{
+	const TSharedPtr<FJsonObject>* Body = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* Rows = nullptr;
+	if (!Document || !Document->TryGetObjectField(TEXT("Body"), Body) || !(*Body)->TryGetArrayField(Family, Rows)) return {};
+	for (const auto& Value : *Rows)
+		if (Value->Type == EJson::Object && Predicate(*Value->AsObject())) return Value->AsObject();
+	return {};
+}
+bool HasClass(const FJsonObject& Notify, const TCHAR* Class)
+{
+	const TSharedPtr<FJsonObject>* NotifyObject = nullptr;
+	return Notify.TryGetObjectField(TEXT("Object"), NotifyObject) && (*NotifyObject)->GetStringField(TEXT("Class")) == Class;
+}
+UObject* NotifyObjectOf(const FAnimNotifyEvent& Event)
+{
+	return Event.Notify ? static_cast<UObject*>(Event.Notify) : static_cast<UObject*>(Event.NotifyStateClass);
+}
+} // namespace AssetDocumentAnimMontageEditorNotifyTests
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAnimMontageEditorNotifiesRoundTripTest,
+	"UEAssetDoc.AnimMontage.EditorNotifies.RoundTrip",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentAnimMontageEditorNotifiesRoundTripTest::RunTest(const FString&)
+{
+	using namespace AssetDocumentAnimMontageEditorNotifyTests;
+	FFixture Fixture;
+	if (!Fixture.Setup(*this) || !PlaceEditorNotifies(*this, Fixture)) return false;
+	const TSharedPtr<FJsonObject> Extracted = Fixture.Extract(*this);
+	if (!Extracted) return false;
+	// Extract shows every notify, whoever placed it.
+	const auto Sound = Row(Extracted, TEXT("Notifies"), [](const FJsonObject& R) { return HasClass(R, SoundClass); });
+	const auto Footstep = Row(Extracted, TEXT("Notifies"), [](const FJsonObject& R) { return R.HasField(TEXT("Name")); });
+	const auto State = Row(Extracted, TEXT("NotifyStates"), [](const FJsonObject& R) { return HasClass(R, ParticleClass); });
+	if (!TestTrue(TEXT("the notify, the skeleton notify and the state are extracted"), Sound && Footstep && State)) return false;
+	TestEqual(TEXT("notify time"), Sound->GetNumberField(TEXT("Time")), .2);
+	TestEqual(TEXT("notify property"), Sound->GetObjectField(TEXT("Object"))->GetObjectField(TEXT("Properties"))->GetNumberField(TEXT("VolumeMultiplier")), .5);
+	TestFalse(TEXT("default trigger settings are omitted"), Sound->HasField(TEXT("NotifyTriggerChance")) || Sound->HasField(TEXT("LinkMethod")));
+	TestEqual(TEXT("skeleton notify name"), Footstep->GetStringField(TEXT("Name")), FString(TEXT("Footstep")));
+	TestEqual(TEXT("skeleton notify track"), Footstep->GetNumberField(TEXT("TrackIndex")), 1.0);
+	TestEqual(TEXT("link method"), Footstep->GetNumberField(TEXT("LinkMethod")), 1.0);
+	TestEqual(TEXT("TriggerWeightThreshold"), Footstep->GetNumberField(TEXT("TriggerWeightThreshold")), .25);
+	TestEqual(TEXT("NotifyTriggerChance"), Footstep->GetNumberField(TEXT("NotifyTriggerChance")), .5);
+	TestEqual(TEXT("NotifyFilterType"), Footstep->GetStringField(TEXT("NotifyFilterType")), FString(TEXT("LOD")));
+	TestEqual(TEXT("NotifyFilterLOD"), Footstep->GetNumberField(TEXT("NotifyFilterLOD")), 2.0);
+	TestFalse(TEXT("bCanBeFilteredViaRequest"), Footstep->GetBoolField(TEXT("bCanBeFilteredViaRequest")));
+	TestFalse(TEXT("bTriggerOnDedicatedServer"), Footstep->GetBoolField(TEXT("bTriggerOnDedicatedServer")));
+	TestTrue(TEXT("bTriggerOnFollower"), Footstep->GetBoolField(TEXT("bTriggerOnFollower")));
+	TestEqual(TEXT("MontageTickType"), Footstep->GetStringField(TEXT("MontageTickType")), FString(TEXT("BranchingPoint")));
+	TestEqual(TEXT("state duration"), State->GetNumberField(TEXT("Duration")), .25);
+	TestFalse(TEXT("state property"), State->GetObjectField(TEXT("Object"))->GetObjectField(TEXT("Properties"))->GetBoolField(TEXT("bDestroyAtEnd")));
+
+	// Extract -> Apply unchanged is a no-op.
+	const TArray<uint8> PackageBytes = Bytes(PackageFile(*Fixture.Montage));
+	const FAssetDocumentResult Unchanged = Fixture.ApplyDocument(*this, Copy(Extracted));
+	TestTrue(TEXT("unchanged document applies"), Unchanged.IsSuccess());
+	TestFalse(TEXT("unchanged document saves nothing"), Unchanged.bSavedAsset);
+	TestTrue(TEXT("package bytes unchanged"), Bytes(PackageFile(*Fixture.Montage)) == PackageBytes);
+
+	// The whole document applied again (with another change, so its notify families are replaced) keeps every notify:
+	// the same objects and guids, and reads back as the same document.
+	TArray<TPair<UObject*, FGuid>> Before;
+	for (const FAnimNotifyEvent& Event : Fixture.Montage->Notifies) Before.Emplace(NotifyObjectOf(Event), Event.Guid);
+	const TSharedPtr<FJsonObject> Whole = Copy(Extracted);
+	Whole->GetObjectField(TEXT("Properties"))->SetNumberField(TEXT("RateScale"), 2.0);
+	const FAssetDocumentResult Reapplied = Fixture.ApplyDocument(*this, Whole);
+	if (!TestTrue(TEXT("the whole document applies"), Reapplied.IsSuccess())) return false;
+	TestEqual(TEXT("RateScale applied"), Fixture.Montage->RateScale, 2.f);
+	TestEqual(TEXT("notify count kept"), Fixture.Montage->Notifies.Num(), Before.Num());
+	for (const TPair<UObject*, FGuid>& Kept : Before)
+		TestNotNull(TEXT("each notify keeps its object and guid"), Find(*Fixture.Montage, [&Kept](const FAnimNotifyEvent& Event)
+		{
+			return Event.Guid == Kept.Value && NotifyObjectOf(Event) == Kept.Key;
+		}));
+	const TSharedPtr<FJsonObject> Again = Fixture.Extract(*this);
+	TestEqual(TEXT("the Body reads back unchanged"), Json(Again ? Again->GetObjectField(TEXT("Body")) : nullptr), Json(Extracted->GetObjectField(TEXT("Body"))));
+
+	// Recreated from the document: removing every notify, then applying the extracted rows, gives the same document.
+	TSharedRef<FJsonObject> Cleared = MakeShared<FJsonObject>();
+	Cleared->SetArrayField(TEXT("Notifies"), {});
+	Cleared->SetArrayField(TEXT("NotifyStates"), {});
+	if (!TestTrue(TEXT("remove every notify"), Fixture.ApplySparse(*this, Cleared).IsSuccess())) return false;
+	TestEqual(TEXT("no notify left"), Fixture.Montage->Notifies.Num(), 0);
+	TSharedRef<FJsonObject> Rows = MakeShared<FJsonObject>();
+	Rows->SetArrayField(TEXT("Notifies"), Extracted->GetObjectField(TEXT("Body"))->GetArrayField(TEXT("Notifies")));
+	Rows->SetArrayField(TEXT("NotifyStates"), Extracted->GetObjectField(TEXT("Body"))->GetArrayField(TEXT("NotifyStates")));
+	if (!TestTrue(TEXT("apply the extracted rows to the empty Montage"), Fixture.ApplySparse(*this, Rows).IsSuccess())) return false;
+	const TSharedPtr<FJsonObject> Recreated = Fixture.Extract(*this);
+	if (!Recreated) return false;
+	for (const TCHAR* Family : {TEXT("Notifies"), TEXT("NotifyStates")})
+	{
+		auto Sorted = [Family](const TSharedPtr<FJsonObject>& Document)
+		{
+			TArray<FString> Out;
+			for (const auto& Value : Document->GetObjectField(TEXT("Body"))->GetArrayField(Family)) Out.Add(Json(Value->AsObject()));
+			Out.Sort();
+			return Out;
+		};
+		TestEqual(*FString::Printf(TEXT("%s recreated exactly"), Family), Sorted(Recreated), Sorted(Extracted));
+	}
+	const FAnimNotifyEvent* New = Find(*Fixture.Montage, [](const FAnimNotifyEvent& Event) { return Event.Notify != nullptr; });
+	if (TestNotNull(TEXT("recreated notify"), New))
+	{
+		TestEqual(TEXT("a new notify is named as the notify panel names it"), New->NotifyName, FName(TEXT("PlaySound")));
+		TestTrue(TEXT("a new notify object has an engine-style name"), New->Notify->GetName().StartsWith(TEXT("AnimNotify_PlaySound_")));
+		TestEqual(TEXT("a new notify object belongs to the Montage"), New->Notify->GetOuter(), static_cast<UObject*>(Fixture.Montage.Get()));
+	}
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAnimMontageEditorNotifiesEditTest,
+	"UEAssetDoc.AnimMontage.EditorNotifies.EditAndDelete",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentAnimMontageEditorNotifiesEditTest::RunTest(const FString&)
+{
+	using namespace AssetDocumentAnimMontageEditorNotifyTests;
+	FFixture Fixture;
+	if (!Fixture.Setup(*this) || !PlaceEditorNotifies(*this, Fixture)) return false;
+	const TSharedPtr<FJsonObject> Extracted = Fixture.Extract(*this);
+	if (!Extracted) return false;
+	const FAnimNotifyEvent* OldSound = Find(*Fixture.Montage, [](const FAnimNotifyEvent& Event) { return Event.Notify != nullptr; });
+	const FAnimNotifyEvent* OldState = Find(*Fixture.Montage, [](const FAnimNotifyEvent& Event) { return Event.NotifyStateClass != nullptr; });
+	if (!TestTrue(TEXT("placed notifies"), OldSound && OldState)) return false;
+	const TWeakObjectPtr<UObject> SoundObject = OldSound->Notify, StateObject = OldState->NotifyStateClass;
+	const FGuid SoundGuid = OldSound->Guid, StateGuid = OldState->Guid;
+
+	// Move the editor-placed notify, change its property, and delete the skeleton notify (the row is left out).
+	const TSharedPtr<FJsonObject> Sound = Copy(Row(Extracted, TEXT("Notifies"), [](const FJsonObject& R) { return HasClass(R, SoundClass); }));
+	if (!TestTrue(TEXT("extracted notify row"), Sound.IsValid())) return false;
+	Sound->SetNumberField(TEXT("Time"), .3);
+	Sound->GetObjectField(TEXT("Object"))->GetObjectField(TEXT("Properties"))->SetNumberField(TEXT("VolumeMultiplier"), .75);
+	TSharedRef<FJsonObject> Edit = MakeShared<FJsonObject>();
+	Edit->SetArrayField(TEXT("Notifies"), {MakeShared<FJsonValueObject>(Sound)});
+	if (!TestTrue(TEXT("edit and delete apply"), Fixture.ApplySparse(*this, Edit).IsSuccess())) return false;
+	const FAnimNotifyEvent* Moved = Find(*Fixture.Montage, [](const FAnimNotifyEvent& Event) { return Event.Notify != nullptr; });
+	if (TestNotNull(TEXT("the notify is still there"), Moved))
+	{
+		TestTrue(TEXT("its object is edited in place"), Moved->Notify == SoundObject.Get());
+		TestEqual(TEXT("it keeps its guid"), Moved->Guid, SoundGuid);
+		TestEqual(TEXT("it keeps its name"), Moved->NotifyName, FName(TEXT("PlaySound")));
+		TestEqual(TEXT("moved"), Moved->GetTime(), .3f);
+		TestEqual(TEXT("property written"), CastChecked<UAnimNotify_PlaySound>(Moved->Notify)->VolumeMultiplier, .75f);
+	}
+	TestNull(TEXT("the skeleton notify is deleted"), Find(*Fixture.Montage, [](const FAnimNotifyEvent& Event) { return Event.NotifyName == TEXT("Footstep"); }));
+	const FAnimNotifyEvent* Kept = Find(*Fixture.Montage, [](const FAnimNotifyEvent& Event) { return Event.NotifyStateClass != nullptr; });
+	TestTrue(TEXT("the unlisted state family is kept as it was"), Kept && Kept->NotifyStateClass == StateObject.Get() && Kept->Guid == StateGuid
+		&& Kept->GetTime() == .5f && Kept->GetDuration() == .25f);
+	const FAssetDocumentResult Again = Fixture.ApplySparse(*this, Edit);
+	TestTrue(TEXT("the same edit again is a no-op"), Again.IsSuccess() && !Again.bSavedAsset);
+
+	// Change the editor-placed state's duration and property.
+	const TSharedPtr<FJsonObject> State = Copy(Row(Extracted, TEXT("NotifyStates"), [](const FJsonObject& R) { return HasClass(R, ParticleClass); }));
+	if (!TestTrue(TEXT("extracted state row"), State.IsValid())) return false;
+	State->SetNumberField(TEXT("Duration"), .2);
+	State->GetObjectField(TEXT("Object"))->GetObjectField(TEXT("Properties"))->SetBoolField(TEXT("bDestroyAtEnd"), true);
+	TSharedRef<FJsonObject> StateEdit = MakeShared<FJsonObject>();
+	StateEdit->SetArrayField(TEXT("NotifyStates"), {MakeShared<FJsonValueObject>(State)});
+	if (!TestTrue(TEXT("state edit applies"), Fixture.ApplySparse(*this, StateEdit).IsSuccess())) return false;
+	Kept = Find(*Fixture.Montage, [](const FAnimNotifyEvent& Event) { return Event.NotifyStateClass != nullptr; });
+	if (TestNotNull(TEXT("the state is still there"), Kept))
+	{
+		TestTrue(TEXT("its object is edited in place"), Kept->NotifyStateClass == StateObject.Get() && Kept->Guid == StateGuid);
+		TestEqual(TEXT("new duration"), Kept->GetDuration(), .2f);
+		TestTrue(TEXT("property written"), CastChecked<UAnimNotifyState_TimedParticleEffect>(Kept->NotifyStateClass)->bDestroyAtEnd);
+	}
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAnimMontageEditorNotifiesUnrepresentableTest,
+	"UEAssetDoc.AnimMontage.EditorNotifies.Unrepresentable",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentAnimMontageEditorNotifiesUnrepresentableTest::RunTest(const FString&)
+{
+	using namespace AssetDocumentAnimMontageEditorNotifyTests;
+	FFixture Fixture;
+	if (!Fixture.Setup(*this)) return false;
+	UAnimMontage& Montage = *Fixture.Montage;
+	// A second slot track: a notify linked to it would be relinked to the first when the Montage loads.
+	Fixture.Skeleton->RegisterSlotNode(TEXT("Other"));
+	auto& Other = Montage.SlotAnimTracks.AddDefaulted_GetRef();
+	Other.SlotName = TEXT("Other");
+	Other.AnimTrack.AnimSegments = Montage.SlotAnimTracks[0].AnimTrack.AnimSegments;
+	if (Montage.AnimNotifyTracks.IsEmpty()) Montage.InitializeNotifyTrack();
+	if (!TestTrue(TEXT("save the two-slot Montage"), Fixture.Skeleton->MarkPackageDirty() && Save(*Fixture.Skeleton) && Save(Montage))) return false;
+	for (const TCHAR* Slot : {TEXT("Other"), TEXT("NoSuchSlot")})
+	{
+		TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+		Body->SetArrayField(TEXT("Notifies"), {Obj(Object({{TEXT("Time"), Num(.2)}, {TEXT("Name"), Str(TEXT("Footstep"))}, {TEXT("SlotName"), Str(Slot)}}))});
+		const FAssetDocumentResult Refused = Fixture.ApplySparse(*this, Body);
+		TestFalse(*FString::Printf(TEXT("SlotName '%s' is refused"), Slot), Refused.IsSuccess());
+		TestTrue(*FString::Printf(TEXT("SlotName '%s': the diagnostic names the field"), Slot), Refused.Diagnostics.ContainsByPredicate([](const FAssetDocumentDiagnostic& D)
+		{
+			return D.Path == TEXT("/Body/Notifies/0/SlotName");
+		}));
+		TestEqual(*FString::Printf(TEXT("SlotName '%s': nothing changed"), Slot), Montage.Notifies.Num(), 0);
+	}
+	// A notify object another object owns cannot be shown as this Montage's notify: Extract fails naming the notify.
+	const int32 Index = PlaceNotify(Montage, nullptr, TEXT("Borrowed"), .2f, 0);
+	Montage.Notifies[Index].Notify = NewObject<UAnimNotify_PlaySound>(GetTransientPackage());
+	FAssetDocumentExtractRequest Request;
+	Request.AssetPath = Montage.GetPathName();
+	Request.bDiffOnly = false;
+	Request.bIncludeAllWritable = true;
+	const FAssetDocumentResult Extracted = Service().Extract(Request);
+	Report(*this, Extracted);
+	TestFalse(TEXT("Extract refuses a notify it cannot represent"), Extracted.IsSuccess());
+	TestTrue(TEXT("the diagnostic names the notify's object"), Extracted.Diagnostics.ContainsByPredicate([](const FAssetDocumentDiagnostic& D)
+	{
+		return D.Path.Contains(TEXT("/Montage/Notifies/0/Object")) || D.Message.Contains(TEXT("/Montage/Notifies/0/Object"));
+	}));
+	Montage.Notifies.Reset();
+	return !HasAnyErrors();
+}
+
 #endif

@@ -7,8 +7,11 @@
 //
 // Args {offset?, detail?: "document" | "inspect", token?}. Records (paged under the value budget; offset 0 builds
 // the records and returns a token, later pages with that token reuse them):
-//   {kind: "header", rig_type, parent_class, source_hierarchy_import, source_curve_import, module?, modular_settings?, primary_connectors?, counts{...}, skipped?{Components}, facts?}
-//   {kind: "variable", entry: {Name, Type, Default?, Public?, ReadOnly?, ExposeToCinematics?, Category?, Tooltip?}}
+//   {kind: "header", rig_type, parent_class, source_hierarchy_import, source_curve_import, module?, modular_settings?, primary_connectors?, counts{...}, skipped?{Components}, components?, facts?}
+//     components: [{element, name, type}] the hierarchy components (element key text, component name, struct name);
+//     a document does not hold them (Rig / Module only, like skipped.Components)
+//   {kind: "variable", entry: {Name, Type, Default?, Public?, ReadOnly?, ExposeToCinematics?, Category?, Tooltip?,
+//     ExposeOnSpawn?, Private?, SliderRange? {Min?, Max?}, ValueRange? {Min?, Max?}}}   (range bounds as metadata text)
 //   {kind: "element", entry: {Type, Name, ...}, global?}           (Rig / Module only; design §3.4)
 //   {kind: "graph", name}                                          (one per model, default model "Rig")
 //   {kind: "function", name, entry: {Public?, Mutable?, ..., Inputs, Outputs, LocalVariables?}}
@@ -29,6 +32,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "ModularRigModel.h"
 #include "Rigs/RigHierarchy.h"
+#include "Rigs/RigHierarchyComponents.h"
 #include "Rigs/RigHierarchyElements.h"
 #include "Rigs/RigHierarchyMetadata.h"
 #include "Rigs/RigModuleDefines.h"
@@ -412,20 +416,38 @@ bool AddControl(URigHierarchy& Hierarchy, FRigControlElement& Control, FObjectBu
 	{
 		Entry.Add(TEXT("Value"), MoveTemp(Value));
 	}
+	// Minimum / Maximum: both while a limit is on; otherwise each one that holds a value other than the type's zero or
+	// identity (the slider range of a float control, a range kept for when the limit is turned on).
 	bool bLimited = false;
 	for (const FRigControlLimitEnabled& Limit : Settings.LimitEnabled)
 	{
 		bLimited = bLimited || Limit.IsOn();
 	}
-	if (bLimited)
+	const FValue Zero = EncodeControlValue(FRigControlValue(), Settings);
+	const FValue Identity = IdentityControlValue(Settings);
+	for (const TPair<const TCHAR*, ERigControlValueType>& Limit : {TPair<const TCHAR*, ERigControlValueType>(TEXT("Minimum"), ERigControlValueType::Minimum),
+		TPair<const TCHAR*, ERigControlValueType>(TEXT("Maximum"), ERigControlValueType::Maximum)})
 	{
-		Entry.Add(TEXT("Minimum"), EncodeControlValue(Hierarchy.GetControlValue(&Control, ERigControlValueType::Minimum), Settings));
-		Entry.Add(TEXT("Maximum"), EncodeControlValue(Hierarchy.GetControlValue(&Control, ERigControlValueType::Maximum), Settings));
+		FValue Bound = EncodeControlValue(Hierarchy.GetControlValue(&Control, Limit.Value), Settings);
+		if (bLimited || (!SameValue(Bound, Zero) && !SameValue(Bound, Identity)))
+		{
+			Entry.Add(Limit.Key, MoveTemp(Bound));
+		}
 	}
 	const TArray<FRigElementKeyWithLabel>& Spaces = Settings.Customization.AvailableSpaces;
 	if (!Spaces.IsEmpty())
 	{
 		Entry.Add(Control.IsAnimationChannel() ? TEXT("Hosts") : TEXT("Spaces"), SpaceList(Spaces));
+	}
+	// Spaces the space picker hides for this control (the Customization's removed spaces).
+	if (!Settings.Customization.RemovedSpaces.IsEmpty())
+	{
+		TArray<FString> Removed;
+		for (const FRigElementKey& Key : Settings.Customization.RemovedSpaces)
+		{
+			Removed.Add(KeyString(Key));
+		}
+		Entry.Add(TEXT("RemovedSpaces"), MakeStringArray(Removed));
 	}
 	return true;
 }
@@ -620,6 +642,47 @@ bool AddElements(UControlRigBlueprint& Blueprint, bool bInspect, FCall& Call, TA
 
 // ---- variables -------------------------------------------------------------------------------------------------
 
+// The variable Details' Expose on Spawn and Private check boxes and its Slider Range / Value Range boxes (metadata of the
+// variable description, as the Details panel writes it): ExposeOnSpawn / Private when checked, and SliderRange /
+// ValueRange {Min?, Max?} with the text each box holds (an empty box is left out; the profile reads numbers).
+void AddVariableMetadata(const FBPVariableDescription& Description, FObjectBuilder& Entry)
+{
+	auto Flag = [&Description](const TCHAR* Key)
+	{
+		return Description.HasMetaData(FName(Key)) && Description.GetMetaData(FName(Key)).Equals(TEXT("true"), ESearchCase::IgnoreCase);
+	};
+	if (Flag(TEXT("ExposeOnSpawn")))
+	{
+		Entry.AddBool(TEXT("ExposeOnSpawn"), true);
+	}
+	if (Flag(TEXT("BlueprintPrivate")))
+	{
+		Entry.AddBool(TEXT("Private"), true);
+	}
+	auto Range = [&Description, &Entry](const TCHAR* Name, const TCHAR* MinKey, const TCHAR* MaxKey)
+	{
+		FObjectBuilder Bounds;
+		bool bAny = false;
+		auto Bound = [&Description, &Bounds, &bAny](const TCHAR* Field, const TCHAR* MetadataKey)
+		{
+			const FName Key(MetadataKey);
+			if (Description.HasMetaData(Key) && !Description.GetMetaData(Key).IsEmpty())
+			{
+				Bounds.AddString(Field, Description.GetMetaData(Key));
+				bAny = true;
+			}
+		};
+		Bound(TEXT("Min"), MinKey);
+		Bound(TEXT("Max"), MaxKey);
+		if (bAny)
+		{
+			Entry.Add(Name, Bounds.Build());
+		}
+	};
+	Range(TEXT("SliderRange"), TEXT("UIMin"), TEXT("UIMax"));
+	Range(TEXT("ValueRange"), TEXT("ClampMin"), TEXT("ClampMax"));
+}
+
 bool AddVariables(UControlRigBlueprint& Blueprint, FTextValues& Values, TArray<FValue>& Records, int32& OutCount)
 {
 	const UObject* ClassDefaults = Blueprint.GeneratedClass != nullptr ? Blueprint.GeneratedClass->GetDefaultObject(false) : nullptr;
@@ -682,6 +745,10 @@ bool AddVariables(UControlRigBlueprint& Blueprint, FTextValues& Values, TArray<F
 		if (!Tooltip.IsEmpty())
 		{
 			Entry.AddString(TEXT("Tooltip"), Tooltip);
+		}
+		if (Description != nullptr)
+		{
+			AddVariableMetadata(*Description, Entry);
 		}
 		FObjectBuilder Record;
 		Record.AddString(TEXT("kind"), TEXT("variable"));
@@ -967,7 +1034,7 @@ bool BuildRecords(UControlRigBlueprint& Blueprint, bool bInspect, FCall& Call, T
 	Header.AddString(TEXT("kind"), TEXT("header"));
 	Header.AddString(TEXT("rig_type"), RigType);
 	Header.AddString(TEXT("parent_class"), PathOf(Blueprint.ParentClass));
-	// Class Settings import sources: duplicate-transient, so not generic Properties (the profile writes them there).
+	// Class Settings import sources: the profile shows them in Properties and writes them before the hierarchy.
 	Header.AddString(TEXT("source_hierarchy_import"), Blueprint.GetSourceHierarchyImport().ToSoftObjectPath().ToString());
 	Header.AddString(TEXT("source_curve_import"), Blueprint.GetSourceCurveImport().ToSoftObjectPath().ToString());
 	if (RigType == TEXT("Module"))
@@ -1015,6 +1082,18 @@ bool BuildRecords(UControlRigBlueprint& Blueprint, bool bInspect, FCall& Call, T
 		FObjectBuilder Skipped;
 		Skipped.AddInt(TEXT("Components"), Components);
 		Header.Add(TEXT("skipped"), Skipped.Build());
+		TArray<FValue> ComponentEntries;
+		for (const FRigComponentKey& ComponentKey : Hierarchy->GetAllComponentKeys())
+		{
+			const FRigBaseComponent* Component = Hierarchy->GetComponent(Hierarchy->GetComponentIndex(ComponentKey));
+			const UScriptStruct* ComponentType = Component != nullptr ? Component->GetScriptStruct() : nullptr;
+			FObjectBuilder ComponentEntry;
+			ComponentEntry.AddString(TEXT("element"), ElementKeyText(ComponentKey.ElementKey));
+			ComponentEntry.AddString(TEXT("name"), ComponentKey.Name.ToString());
+			ComponentEntry.AddString(TEXT("type"), ComponentType != nullptr ? ComponentType->GetName() : FString());
+			ComponentEntries.Add(ComponentEntry.Build());
+		}
+		Header.Add(TEXT("components"), MakeArray(MoveTemp(ComponentEntries)));
 	}
 	if (bInspect)
 	{

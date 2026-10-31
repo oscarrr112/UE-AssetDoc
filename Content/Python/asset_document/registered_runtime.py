@@ -9,7 +9,9 @@ from dataclasses import dataclass, replace
 from typing import Protocol
 
 from asset_document.canonical.document_codec import DocumentCodec
-from asset_document.diagnostics import AssetDocumentContractError, RuntimeDiagnostic, collecting_read_warnings, contract_error
+from asset_document.diagnostics import (
+    AssetDocumentContractError, RuntimeDiagnostic, collecting_read_warnings, contract_error, with_diagnostics,
+)
 from asset_document.diff import semantic_compare
 from asset_document.mutation_intent_projection import (
     SNAPSHOT_COVERED, SNAPSHOT_COVERED_KIND, build_mutation_intent_projection,
@@ -22,6 +24,8 @@ from asset_document.dto import PrimitiveRequirement
 from asset_document.profile_runtime import RuntimeTargetPolicy
 from asset_document.profiles import data_table_common as common
 from asset_document.read_only_extract import extract_document, inspect_live, is_live_inspect_path
+from asset_document.graphs import node_layout
+from asset_document import class_routing, markers, tolerance
 from asset_document.registry import FrozenProfileRegistry
 from asset_document.regions.primitive_catalog import NamedOpaqueHandleArgument, PrimitiveOutcomeStatus, _NativePrimitiveContext, _optional_handle, _single_handle, _runtime_to_native
 
@@ -86,9 +90,19 @@ class _Dispatch:
                 # Sidecar mirroring evidence: a pure function of the document text, served without a profile.
                 return _project_native_result(dispatch_sync(typed, getattr(context, "runtime_revision", revision)))
             binding = self.registry.resolve_runtime_exact(typed.requested_asset_class_path)
+            profile_class = typed.requested_profile_class_path
+            routed = binding is None and profile_class != ''
+            if routed:
+                # A Blueprint subclass without a profile of its own: the native route names the ancestor class whose
+                # profile reads it (class_routing).
+                binding = self.registry.resolve_runtime_exact(profile_class)
             if binding is None:
                 return legacy.dispatch(request, context)
-            return _project_native_result(_dispatch_registered(typed, context, binding))
+            with markers.target(typed.target_asset_path):
+                if not routed:
+                    return _project_native_result(_dispatch_registered(typed, context, binding))
+                with class_routing.routed(typed.requested_asset_class_path, profile_class):
+                    return _project_native_result(_dispatch_registered(typed, context, binding))
         except AssetDocumentContractError as error:
             return _project_native_failure(request_id, revision, error.diagnostic, error.additional)
         except Exception as failure:
@@ -250,12 +264,14 @@ def _trial_apply(request, document, binding, context):
     target decision and create context as Apply; the real asset is only read."""
     handler = binding.handler
     if binding.target_lifecycle is not None and getattr(handler, 'preflight_scratch', True) is not False:
-        # No trial copy: a Profile may still check an existing target read-only (validate_checks).
+        # No trial copy: a Profile may still check an existing target read-only (validate_checks, which raises
+        # the errors it finds and returns its warnings).
         checks = getattr(handler, 'validate_checks', None)
+        found = ()
         if checks is not None:
             exists, read, _ = _resolve(request, binding, context)
             if exists and read is not None:
-                checks(document, read, context)
+                found = checks(document, read, context)
             elif not exists and _decision(_check_action(binding.target_policy, document), exists):
                 # A new target: the same read-only checks on a trial target the Profile names the create
                 # context of (validate_trial_context; () = no such check, e.g. a type it has no maker for).
@@ -270,8 +286,9 @@ def _trial_apply(request, document, binding, context):
                     except AssetDocumentContractError:
                         trial = None  # an early check only: Apply creates the target and reports
                     if trial is not None:
-                        checks(document, trial, context)
-        return ()
+                        found = checks(document, trial, context)
+        # The checks' warnings (a Blueprint's link and layout warnings) come back with the Validate result.
+        return with_diagnostics((), getattr(found, 'diagnostics', ()))
     action = _check_action(binding.target_policy, document)
     exists, read, _ = _resolve(request, binding, context)
     if _decision(action, exists):
@@ -304,6 +321,12 @@ def _preflight_result(request, revision, canonical, steps):
         raise _error('GenericRuntime.InvalidPreflightProjection', str(error)) from None
     # Canonical bytes/hash describe the document, never the preparation envelope.
     return replace(evidence, canonical_value=OptionalJsonValue(True, projection))
+
+
+def _layout_requested(request):
+    """An Extract that asks for its graph nodes' drawn sizes (the HTTP extract's include_layout)."""
+    options = request.canonical_document
+    return request.operation is Op.EXTRACT and type(options) is dict and options.get('include_layout') is True
 
 
 def _accepts_authored(function):
@@ -422,7 +445,9 @@ def _dispatch_registered(request, native, binding):
     context = _NativePrimitiveContext(native, phase)
     handler = binding.handler
     if request.operation is Op.SCHEMA:
-        return legacy._evidence_result(request, revision, _profile_projection(binding))
+        projection = _profile_projection(binding)
+        projection['Class'] = class_routing.document_class(projection['Class'])
+        return legacy._evidence_result(request, revision, projection)
     if request.operation is Op.TEMPLATE:
         return legacy._evidence_result(request, revision, handler.create_template(legacy._read_only_target(request)))
     if request.operation is Op.INSPECT:
@@ -430,12 +455,41 @@ def _dispatch_registered(request, native, binding):
             inspected = _inspect_registered(request, binding, context)
         return legacy._evidence_result(request, revision, inspected, tuple(warnings))
     if request.operation in (Op.EXTRACT, Op.REGENERATE_SIDECAR):
-        with collecting_read_warnings() as warnings:
+        with collecting_read_warnings() as warnings, node_layout.collecting(_layout_requested(request)) as sizes:
             extracted = _extract(request, binding, context)
+        layout = node_layout.layout_value(sizes)
+        if layout is not None:
+            # Beside the document, never part of it: the native Extract moves it to the result's "layout".
+            extracted = {**extracted, node_layout.KEY: layout}
         return legacy._evidence_result(request, revision, extracted, tuple(warnings))
-    canonical = handler.canonicalize(request.canonical_document)
+    with tolerance.authoring() as findings:
+        canonical = handler.canonicalize(request.canonical_document)
     if phase is Phase.VALIDATE:
+        # No read of the asset here: authored-rule findings are settled by the first phase that reads it.
         return legacy._evidence_result(request, revision, canonical)
+    with tolerance.settled():
+        return _dispatch_canonical(request, phase, binding, context, canonical, findings)
+
+
+def _current_document(request, binding, context):
+    """The current asset's canonical document (None when it does not exist), read as it is."""
+    exists, _, _ = _resolve(request, binding, context)
+    if not exists:
+        return None
+    return _extract(request, binding, context, include_defaults=True)
+
+
+def _dispatch_canonical(request, phase, binding, context, canonical, findings):
+    """The phases after canonicalize. Authored-rule findings are settled against the current asset first: an
+    unchanged value the asset already holds is accepted, a new or changed one fails.
+
+    Preflight settles them before anything changes; every Apply and Validate runs it before their Apply phase
+    (Validate's trial apply included), so Apply and Repair do not read the asset again (a Profile's read may not be
+    admitted while the asset is being changed). Verify settles against its own read."""
+    handler = binding.handler
+    revision = request.expected_runtime_revision
+    if findings and phase is Phase.PREFLIGHT:
+        tolerance.settle(findings, request.canonical_document, _current_document(request, binding, context))
     if request.operation is Op.VALIDATE:
         changes = _trial_apply(request, canonical, binding, context)
         return legacy._success_result(request, revision, changed_set=tuple(changes),
@@ -448,22 +502,28 @@ def _dispatch_registered(request, native, binding):
         except AssetDocumentContractError as error:
             if request.operation is not Op.DIFF or error.diagnostic.code not in legacy._TARGET_MISSING_CODES:
                 raise
+            tolerance.settle(findings, request.canonical_document, None)
             return legacy._evidence_result(request, revision, legacy._would_create_diff(canonical))
+        tolerance.settle(findings, request.canonical_document, actual)
+        # Marker text names objects inside the asset by the target's path on both sides (the document may come from
+        # before a move); the comparison sees the rebased documents, the result keeps the authored one.
+        authored = markers.rebase(canonical, request.target_asset_path)
+        actual = markers.rebase(actual, request.target_asset_path)
         # The Diff operation may ask a handler for its exact comparison (an empty
         # Diff then proves an apply would change nothing); verification stays lenient.
         exact = getattr(handler, 'diff_exact', None) if request.operation is Op.DIFF else None
         if 'defaults' in live_defaults:
-            differences = handler.diff_with_defaults(canonical, actual, live_defaults['defaults'], exact is not None)
+            differences = handler.diff_with_defaults(authored, actual, live_defaults['defaults'], exact is not None)
         else:
-            differences = (exact or handler.diff)(canonical, actual)
+            differences = (exact or handler.diff)(authored, actual)
         # Notes of the comparison (e.g. an omitted field the profile keeps): Info diagnostics of the Diff result.
         notes = tuple(getattr(differences, 'diagnostics', ()))
-        differences = _properties_as_authored(request, binding, context, canonical, differences, exact is not None)
+        differences = _properties_as_authored(request, binding, context, authored, differences, exact is not None)
         refine =getattr(handler, 'refine_diff', None) if request.operation is Op.DIFF else None
         if refine is not None and differences:
             # The Profile may read the asset again for the current value of a difference.
             _, read, _ = _resolve(request, binding, context)
-            differences = refine(tuple(differences), canonical, actual, read, context)
+            differences = refine(tuple(differences), authored, actual, read, context)
         if request.operation is Op.DIFF:
             return legacy._evidence_result(request, revision, {'changed': [legacy._difference_projection(item) for item in differences], 'unchanged': [], 'skipped': [], 'failed': []}, notes)
         if differences:

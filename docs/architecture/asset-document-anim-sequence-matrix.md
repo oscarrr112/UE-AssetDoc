@@ -56,6 +56,7 @@ a different value fails with a stable diagnostic), **Unsupported** (not in the d
 | Add/move/delete a notify (class-based `UAnimNotify`) | `Notifies` | ✅ (managed objects only) | ✅ (all notifies) | Supported | authoring edit (raw edit like `SAnimNotifyPanel`) |
 | Skeleton (named) notify | `Notifies[]` with `Name`, no `Class` | ➖ | ✅ | Supported | as above; the Skeleton's notify-name list is not edited (it is another package) |
 | Notify object properties (e.g. PlaySound `Sound`, `VolumeMultiplier`, the notify's `NotifyColor`) | `Notifies[].Properties` | ✅ | ✅ | Supported | admitted editor codecs + hard object references |
+| Notify / notify state / metadata / user-data Details values with no document form (e.g. a field path) | `<row>.Properties.<name>` marker `{"Unsupported", "Text"}` | ➖ | ✅ (marker) | Kept | read as a marker (with `AnimSequence.Unrepresented`) when it differs from the class default; apply keeps it on the row's kept object and never writes it; an edited marker, a value over a marker or a marker on a new row is refused (`AnimSequence.UnrepresentedValue`) |
 | Notify trigger settings (chance, weight threshold, filter type/LOD, dedicated server, follower, montage tick type, filterable by request) | `Notifies[]` / `NotifyStates[]` fields | ➖ | ✅ | Supported | authoring edit |
 | Notify states (`UAnimNotifyState`) with duration | `NotifyStates` | ✅ (managed objects only) | ✅ | Supported | authoring edit |
 | Sync markers (add / move / delete / rename, per track) | `SyncMarkers` | ✅ | ✅ | Supported | authoring edit (`AuthoredSyncMarkers` + `RefreshSyncMarkerDataFromAuthored`) |
@@ -64,10 +65,11 @@ a different value fails with a stable diagnostic), **Unsupported** (not in the d
 | Float curve color / comment | `Curves[].Color`, `.Comment` | ➖ | ✅ | Supported | `SetCurveColor`, `SetCurveComment` |
 | Bone tracks present on the sequence | `BoneTracks` | ➖ | ✅ (names) | Read-only | Extract lists the animated bones; authoring a different list fails (`AnimSequence.ReadOnlyRegion`) |
 | Raw bone-track keys (position/rotation/scale per frame) | — | ➖ | ➖ | Unsupported | see §3 |
-| Transform curves / additive layer tracks (Persona "Key" on a bone) | — | ➖ | ➖ | Unsupported | see §3 |
-| Custom attribute curves (`AttributeCurves`) | — | ➖ | ➖ | Unsupported | see §3 |
+| Transform curves / additive layer tracks (Persona "Key" on a bone) | `TransformCurves` | ➖ | ✅ (bone, key count, first / last key time) | Read-only | listed when the sequence has any; authoring a different list fails (`AnimSequence.ReadOnlyRegion`); apply keeps them |
+| Animated bone attributes (custom attributes, e.g. imported timecode) | `Attributes` | ➖ | ✅ (bone, name, value type, key count, first / last key time) | Read-only | as `TransformCurves` |
 | Notify link method / slot (`FAnimLinkableElement`) | — | ➖ | ➖ | Unsupported | Montage-only concept; sequence notifies are absolute-time |
-| Notify / marker GUIDs, notify track colors | — | ➖ | ➖ | Unsupported | editor identity/display state the panels regenerate (GUIDs are kept for reused rows; new tracks are white like the panel's) |
+| Notify GUIDs (row identity) | `Notifies[].Guid` / `NotifyStates[].Guid` | ➖ | ✅ (identity only, never written or compared) | Supported | a row keeps the notify its GUID names; a new notify gets a new GUID |
+| Sync marker GUIDs, notify track colors | — | ➖ | ➖ | Unsupported | editor identity/display state the panels regenerate (new tracks are white like the panel's) |
 
 ### Document operations
 
@@ -81,7 +83,7 @@ a different value fails with a stable diagnostic), **Unsupported** (not in the d
 | `Definitions` / `DefinitionRef` | ✅ | ➖ (`AnimSequence.UnsupportedDefinitions`) |
 | Legacy input spellings | — | accepted: `{Kind: AssetRef\|ClassRef, Path}` wrappers, `{Kind: EmbeddedObject, Class, Properties}` rows, `TrackName` for `Track`; Extract writes the plain forms |
 
-Counts (rows of the two surface tables): **Supported 33, Read-only 2, Unsupported 9.**
+Counts (rows of the two surface tables): **Supported 34, Read-only 2, Unsupported 9.**
 
 ## 2. Region semantics
 
@@ -104,8 +106,17 @@ Counts (rows of the two surface tables): **Supported 33, Read-only 2, Unsupporte
 - Notify / marker times must lie in `[0, PlayLength]`, a state's `Time + Duration` too
   (`AnimationProvider.Authoring.TimeOutOfRange`). `Playback.NumberOfFrames`/`FrameRate` are
   applied first, so one document can lengthen the sequence and place notifies in the new range.
-- Notify, metadata and user-data rows reuse the existing object at the same index when the class
-  matches (properties written in place, GUIDs kept), like editing in the details panel.
+- Notify, notify state, metadata and user-data rows keep the existing object they stand for
+  (properties written in place, GUID and unrepresented Details values kept), like editing in the
+  details panel; inserting, removing or reordering rows does not move objects between rows. A
+  notify row keeps a notify of its class (a named notify: its name). A row whose `Guid` names one
+  live notify of its family keeps it (Extract writes `Guid` only where it names one notify; a
+  `Guid` two rows carry, a zero one, or one no notify has names nothing). The other rows and
+  notifies pair nearest first over all of them (time distance, then the same track, then the
+  earlier notify, then the earlier row), not in document order. The edit names a kept notify by
+  GUID, or, when its GUID is zero or shared, by its position in its family with the GUID it
+  holds. A metadata / user-data row keeps an equal object of its class, then the next of its
+  class. Any other row is a new object (a new GUID; a kept notify without one gets one).
 - Apply order: the Editor property batch (plain fields) first, then one authoring edit — as a
   human sets the additive type before picking the base pose, which UE would otherwise clear.
 - Curve key tangents are compared only where they are authored state (`TangentMode` User/Break
@@ -118,8 +129,8 @@ Counts (rows of the two surface tables): **Supported 33, Read-only 2, Unsupporte
 | Surface | Why |
 |---|---|
 | Raw bone-track keys | Dense per-frame transform data produced by import (FBX/USD), Control Rig/Sequencer baking or retargeting, not by hand-editing in the sequence editor. A JSON key dump would be megabytes, useless for an AI author, and unsafe against the compressed-data/DDC pipeline. Reimport or bake tools are the right channel. Bone *names* are exposed read-only. |
-| Transform curves / additive layer tracks | Persona's bone "Key" tool writes temporary additive transform curves that are baked into bone tracks; same data class as raw keys. |
-| Custom attribute curves | Import-produced typed attribute keys with no editor key UI. |
+| Transform curve keys (values) | Persona's bone "Key" tool writes temporary additive transform curves that are baked into bone tracks; same data class as raw keys. The curves are listed read-only (`TransformCurves`). |
+| Animated bone attribute keys (values) | Import-produced typed attribute keys with no editor key UI. The attributes are listed read-only (`Attributes`). |
 | Changing the Skeleton of an existing sequence | That is "Replace Skeleton"/retarget, an asset-level operation that remaps every track; not a field edit. Authoring a different skeleton fails with `AnimSequence.SkeletonMismatch`. |
 | Import data, platform frame rate, parent asset, thumbnail | VisibleAnywhere (not editable by a human either). |
 | Skeleton notify-name registry | Adding a named notify in Persona also adds the name to the Skeleton asset. That is another package; snapshot-covered requests may only mutate their target. The named notify still fires. |

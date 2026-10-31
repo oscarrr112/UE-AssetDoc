@@ -10,6 +10,7 @@ from asset_document.diagnostics import (
     AssetDocumentContractError,
     DiagnosticContext,
     RuntimeDiagnostic,
+    collecting_read_warnings,
 )
 from asset_document.dto import OptionalJsonValue, RuntimePhase
 from asset_document.regions.primitive_catalog import (
@@ -842,6 +843,20 @@ class PropertySemanticTests(unittest.TestCase):
         self.assertEqual([call.requirement.primitive_id for call in calls], [READ_ID] * 4)
         expected_handles = [item.property_handle for item in admitted if item.writable]
         self.assertEqual([call.handle_arguments[1].handle for call in calls], expected_handles)
+
+    def test_a_property_that_cannot_be_read_is_a_marker_and_the_read_goes_on(self) -> None:
+        context = MockPrimitiveContext(RuntimePhase.PREFLIGHT)
+        adapter, admitted, _ = enumerate_properties(context)
+        asset = context.issue_handle()
+        context.queue_outcomes(READ_ID, success_outcome(value={"value": 1}), failed_outcome("TypedValueCodec.ConversionFailed"),
+                               success_outcome(value={"value": 2.0}), success_outcome(value={"value": "visible"}))
+        with collecting_read_warnings() as warnings:
+            extracted = adapter.extract(asset, admitted, context, include_defaults=False)
+        marked = [name for name, value in extracted.items() if type(value) is dict and "Unsupported" in value]
+        self.assertEqual(len(marked), 1)
+        self.assertIn("TypedValueCodec.ConversionFailed", extracted[marked[0]]["Unsupported"])
+        self.assertEqual(extracted["Title"], "visible")
+        self.assertEqual([item.code for item in warnings], ["Generic.Unrepresented"])
 
     def test_extract_include_defaults_and_scalar_type_distinction(self) -> None:
         context = MockPrimitiveContext(RuntimePhase.PREFLIGHT)

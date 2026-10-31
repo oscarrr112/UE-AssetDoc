@@ -22,7 +22,7 @@ namespace AssetDocumentModuleGraphTests
 const TCHAR* const GraphModule = TEXT("AssetDocumentGraph");
 const TCHAR* const ProviderModules[] = {
 	TEXT("AssetDocumentAI"), TEXT("AssetDocumentAnimation"),
-	TEXT("AssetDocumentUMG"), TEXT("AssetDocumentWidget"), TEXT("AssetDocumentData"), TEXT("AssetDocumentNiagara")};
+	TEXT("AssetDocumentWidget"), TEXT("AssetDocumentData"), TEXT("AssetDocumentNiagara")};
 
 // Engine modules that only a provider module may link.
 const TCHAR* const ProviderEngineModules[] = {

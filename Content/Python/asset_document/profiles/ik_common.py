@@ -9,6 +9,7 @@ document diff for the sparse, name-keyed regions of both documents.
 """
 from __future__ import annotations
 
+from asset_document import markers
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.dto import PrimitiveRequirement
 from asset_document.profiles import data_table_common as common
@@ -119,11 +120,12 @@ def path_or_null(value, path, what, prefix):
 # ---------------------------------------------------------------------------
 def value_diff(path, authored, live, exact, changes, defaults=None):
     """Differences of one authored value from the live one. Objects compare key by key (a key missing on one side
-    takes its value from ``defaults`` when it has one there, else it is an add / remove); everything else compares
-    as a value (numbers as float32 unless exact)."""
+    takes its value from ``defaults`` when it has one there, else it is an add / remove; a live marker the document
+    omits is kept, so it is no difference); everything else compares as a value (numbers as float32 unless
+    exact)."""
     if type(authored) is dict and type(live) is dict:
         defaults = defaults or {}
-        for key in list(authored) + [key for key in live if key not in authored]:
+        for key in list(authored) + [key for key in live if key not in authored and not markers.is_marker(live[key])]:
             where = f"{path}/{escape(key)}"
             if key in authored and key in live:
                 value_diff(where, authored[key], live[key], exact, changes)
@@ -147,9 +149,9 @@ def sparse_diff(path, authored, live, defaults, exact, changes):
     matches a live read that omits it (nested objects compare field by field the same way). Without a default a
     missing field is an add / remove, as in ``value_diff``. Strings compare ignoring case: settings strings are
     names (a bone written "root" reads back as the name table's "Root"), enum values and object paths, all
-    case-insensitive in the engine."""
+    case-insensitive in the engine. A live marker the document omits is kept, so it is no difference."""
     defaults = defaults if type(defaults) is dict else {}
-    for key in list(authored) + [key for key in live if key not in authored]:
+    for key in list(authored) + [key for key in live if key not in authored and not markers.is_marker(live[key])]:
         where = f"{path}/{escape(key)}"
         mine = authored[key] if key in authored else defaults.get(key, _ABSENT)
         theirs = live[key] if key in live else defaults.get(key, _ABSENT)
@@ -164,6 +166,33 @@ def sparse_diff(path, authored, live, defaults, exact, changes):
                 changes.append(Difference(where, DiffKind.REPLACE, True, mine, True, theirs))
         elif not common.same(mine, theirs, exact):
             changes.append(Difference(where, DiffKind.REPLACE, True, mine, True, theirs))
+
+
+def without_omitted_markers(authored, live):
+    """``live`` without the markers ``authored`` leaves out (at any depth): apply keeps what an omitted marker stands
+    for, so comparing ``authored`` with the result finds only what apply would write."""
+    if type(authored) is dict and type(live) is dict and not markers.is_marker(authored):
+        return {key: without_omitted_markers(authored[key], value) if key in authored else value
+                for key, value in live.items() if key in authored or not markers.is_marker(value)}
+    if type(authored) is list and type(live) is list:
+        return [without_omitted_markers(authored[index], value) if index < len(authored) else value
+                for index, value in enumerate(live)]
+    return live
+
+
+def require_markers_unchanged(path, authored, live, prefix):
+    """Refuses a marker in ``authored`` (at any depth) that is not the live read's marker at the same place
+    (``<prefix>.UnrepresentedValue``): an edited marker, or one where the asset reads a value."""
+    if markers.is_marker(authored):
+        markers.require_unchanged(path, authored, live, prefix)
+    elif type(authored) is dict:
+        for key, value in authored.items():
+            require_markers_unchanged(f"{path}/{escape(key)}", value, live.get(key) if type(live) is dict else None,
+                                      prefix)
+    elif type(authored) is list:
+        for index, value in enumerate(authored):
+            require_markers_unchanged(f"{path}/{index}", value,
+                                      live[index] if type(live) is list and index < len(live) else None, prefix)
 
 
 def sparse_map_diff(path, authored, live, row_defaults, exact, changes, missing_is_default=True):

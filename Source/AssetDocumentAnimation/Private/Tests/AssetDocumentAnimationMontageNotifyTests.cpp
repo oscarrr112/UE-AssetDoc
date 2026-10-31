@@ -93,7 +93,8 @@ bool FMontageNotifyStaging::RunTest(const FString&)
     Created.Emplace(Object);
     TestTrue(TEXT("correct direct outer"), Object->GetOuter() == Target.Get());
     TestTrue(TEXT("transactional object"), Object->HasAnyFlags(RF_Transactional));
-    TestTrue(TEXT("legacy-compatible managed prefix"), Object->GetName().StartsWith(bStates ? TEXT("AssetDocumentManaged_NotifyState_") : TEXT("AssetDocumentManaged_Notify_")));
+    // The notify panel's Add Notify names the object as NewObject does (NAME_None): the class name and a number.
+    TestTrue(TEXT("engine-style object name"), Object->GetName().StartsWith(Class->GetName() + TEXT("_")));
    }
    TestFalse(TEXT("prepared staging cannot execute twice"), Testing::StageNative(State.ToSharedRef(), Transaction, Objects).bValid);
   }

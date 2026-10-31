@@ -3,8 +3,10 @@
 #include "Provider/BehaviorTree/AssetDocumentAIBehaviorTreeScratchAuthoring.h"
 #include "Provider/AssetDocumentAIProviderContracts.h"
 #include "Provider/BehaviorTree/AssetDocumentAIBehaviorTreeAuthoredReadbackInternal.h"
+#include "Provider/BehaviorTree/AssetDocumentAIBehaviorTreeAuthoredGraphValidation.h"
 #include "BehaviorTree/AssetDocumentAIBehaviorTreeDecoratorInput.h"
 #include "AIGraphNode.h"
+#include "Algo/StableSort.h"
 #include "AIGraphSchema.h"
 #include "AIGraphTypes.h"
 #include "BehaviorTree/BehaviorTree.h"
@@ -15,6 +17,8 @@
 #include "BehaviorTreeGraphNode_Root.h"
 #include "BehaviorTreeGraphNode_SimpleParallel.h"
 #include "BehaviorTreeGraphNode_CompositeDecorator.h"
+#include "BehaviorTreeGraphNode_Decorator.h"
+#include "BehaviorTreeGraphNode_Service.h"
 #include "BehaviorTreeDecoratorGraphNode_Decorator.h"
 #include "BehaviorTreeDecoratorGraphNode_Logic.h"
 #include "EdGraphSchema_BehaviorTree.h"
@@ -58,6 +62,8 @@ struct FBuilder
  FString Error;
  TSet<FGuid> Ids;
  int32 Budget = 4096;
+ // Each parent's main children in document order.
+ TArray<TPair<UEdGraphNode*, TArray<UEdGraphNode*>>> ChildOrder;
 
  bool Reject(const TCHAR* Message) { Error = Message; return false; }
  bool SetGuid(UObject& Object, FName Name, const FValue* Value)
@@ -102,7 +108,7 @@ struct FBuilder
   const auto* Properties = Field(Value, TEXT("authored_properties"));
   if (!Properties || Properties->Kind != EKind::Object || !SetGuid(Node, TEXT("NodeGuid"), Field(Value, TEXT("stable_node_id")))) return false;
   if (!Editor(Node, Field(Value, TEXT("editor")))) return false;
-  if (Instance) return WriteProperties(*Instance, *Properties, Error);
+  if (Instance) return WriteProperties(*Instance, *Properties, Error, FScopedReplacedTexts::FindInstance(Node.NodeGuid));
   return Properties->ObjectKeys.IsEmpty() || Reject(TEXT("Non-instance node has authored properties"));
  }
  bool Connect(UEdGraph& Graph, UEdGraphNode& From, UEdGraphNode& To, int32 InputIndex = 0, FName OutputName = NAME_None)
@@ -270,22 +276,68 @@ struct FBuilder
   }
   return Comments(*Graph, Field(*Value, TEXT("comments")));
  }
- bool Main(const FValue& Value, UEdGraphNode& Parent, int32 Depth, int32 ChildIndex = 0)
+ // A node DTO carrying "unsupported" stands for a node whose class is missing. It is recreated from the replaced tree's
+ // node of the same id, which must have the same missing class: the stock new-node action places a template holding
+ // that node's class data (as a decorator or service of Parent when given), and the node keeps no instance. The kept
+ // node must have the graph node class Role: the role it is placed in.
+ UBehaviorTreeGraphNode* RecreateMissingClass(const FValue& Value, UAIGraphNode* Parent, const UClass& Role)
  {
-  if (--Budget < 0 || Depth > 64 || !HasAssetDocumentAIBehaviorTreeExactFields(Value,
-   {TEXT("authored_properties"), TEXT("children"), TEXT("decorators"), TEXT("editor"), TEXT("node_class_path"), TEXT("services"), TEXT("stable_node_id")})) return Reject(TEXT("Invalid main-node DTO"));
+  FGuid Id;
+  FString ClassPath, Reason;
+  if (!Guid(Field(Value, TEXT("stable_node_id")), Id) || !String(Field(Value, TEXT("node_class_path")), ClassPath)
+   || !String(Field(Value, TEXT("unsupported")), Reason))
+  { Reject(TEXT("Invalid marked node DTO")); return nullptr; }
+  const UAIGraphNode* Kept = FScopedReplacedTexts::FindMissingClassNode(Id);
+  if (!Kept || !Kept->IsA(&Role) || Kept->IsSubNode() != (Parent != nullptr) || Readback::MissingNodeClassPath(*Kept) != ClassPath)
+  { Reject(TEXT("A marked node is kept only from the same node, in the same role and of the same missing class, in the replaced tree")); return nullptr; }
+  UAIGraphNode* Template = NewObject<UAIGraphNode>(Lease.Graph, Kept->GetClass());
+  Template->ClassData = Kept->ClassData;
+  UEdGraphNode* Created = nullptr;
+  if (Parent)
+  {
+   FAISchemaAction_NewSubNode Action;
+   Action.NodeTemplate = Template;
+   Action.ParentNode = Parent;
+   Action.PerformAction(Lease.Graph, nullptr, FVector2f::ZeroVector, false);
+   if (Parent->SubNodes.Contains(Template)) Created = Template;
+  }
+  else
+  {
+   FAISchemaAction_NewNode Action;
+   Action.NodeTemplate = Template;
+   Created = Action.PerformAction(Lease.Graph, nullptr, FVector2f::ZeroVector, false);
+  }
+  auto* Node = Cast<UBehaviorTreeGraphNode>(Created);
+  if (!Node || Node->GetGraph() != Lease.Graph || !Readback::IsMissingClassNode(*Node)
+   || Readback::MissingNodeClassPath(*Node) != ClassPath)
+  { Reject(TEXT("Stock new-node action did not keep the marked node's class data")); return nullptr; }
+  return Node;
+ }
+ static bool IsMarkedNode(const FValue& Value) { return Field(Value, TEXT("unsupported")) != nullptr; }
+ // A null Parent creates a detached branch head: the node keeps its input open.
+ bool Main(const FValue& Value, UEdGraphNode* Parent, int32 Depth, int32 ChildIndex = 0)
+ {
+  const bool bMarked = IsMarkedNode(Value);
+  if (--Budget < 0 || Depth > 64 || !(bMarked
+   ? HasAssetDocumentAIBehaviorTreeExactFields(Value,
+    {TEXT("authored_properties"), TEXT("children"), TEXT("decorators"), TEXT("editor"), TEXT("node_class_path"), TEXT("services"), TEXT("stable_node_id"), TEXT("unsupported")})
+   : HasAssetDocumentAIBehaviorTreeExactFields(Value,
+    {TEXT("authored_properties"), TEXT("children"), TEXT("decorators"), TEXT("editor"), TEXT("node_class_path"), TEXT("services"), TEXT("stable_node_id")}))) return Reject(TEXT("Invalid main-node DTO"));
   FString ClassPath;
   const auto* Children = Field(Value, TEXT("children"));
   const auto* Decorators = Field(Value, TEXT("decorators"));
   const auto* Services = Field(Value, TEXT("services"));
   if (!String(Field(Value, TEXT("node_class_path")), ClassPath) || !Array(Children) || !Array(Decorators) || !Array(Services)) return false;
-  auto* Node = Cast<UBehaviorTreeGraphNode>(CreateMain(*Lease.Graph, ClassPath, 0, 0));
+  auto* Node = bMarked ? RecreateMissingClass(Value, nullptr, *UBehaviorTreeGraphNode::StaticClass()) : Cast<UBehaviorTreeGraphNode>(CreateMain(*Lease.Graph, ClassPath, 0, 0));
   if (!Node || !Initialize(*Node, Node->NodeInstance, Value)) return Reject(Error.IsEmpty() ? TEXT("Stock main-node action failed") : *Error);
   for (const auto& Decorator : Decorators->Elements)
   {
    FString Kind;
-   if (!HasAssetDocumentAIBehaviorTreeExactFields(Decorator, {TEXT("authored_properties"), TEXT("bound_graph"), TEXT("editor"), TEXT("kind"), TEXT("node_class_path"), TEXT("stable_node_id")})
-    || !String(Field(Decorator, TEXT("kind")), Kind)) return false;
+   const bool bMarkedDecorator = IsMarkedNode(Decorator);
+   if (!(bMarkedDecorator
+    ? HasAssetDocumentAIBehaviorTreeExactFields(Decorator, {TEXT("authored_properties"), TEXT("bound_graph"), TEXT("editor"), TEXT("kind"), TEXT("node_class_path"), TEXT("stable_node_id"), TEXT("unsupported")})
+    : HasAssetDocumentAIBehaviorTreeExactFields(Decorator, {TEXT("authored_properties"), TEXT("bound_graph"), TEXT("editor"), TEXT("kind"), TEXT("node_class_path"), TEXT("stable_node_id")}))
+    || !String(Field(Decorator, TEXT("kind")), Kind) || (bMarkedDecorator && Kind != TEXT("simple"))) return false;
    if (Kind == TEXT("composite"))
    {
     if (Field(Decorator, TEXT("node_class_path"))->Kind != EKind::Null) return false;
@@ -296,7 +348,8 @@ struct FBuilder
    {
     FString Path;
     if (!String(Field(Decorator, TEXT("node_class_path")), Path) || Field(Decorator, TEXT("bound_graph"))->Kind != EKind::Null) return false;
-    auto* Sub = Cast<UBehaviorTreeGraphNode>(CreateSubnode(*Lease.Graph, *Node, Path, true));
+    auto* Sub = bMarkedDecorator ? RecreateMissingClass(Decorator, Node, *UBehaviorTreeGraphNode_Decorator::StaticClass())
+     : Cast<UBehaviorTreeGraphNode>(CreateSubnode(*Lease.Graph, *Node, Path, true));
     if (!Sub || !Initialize(*Sub, Sub->NodeInstance, Decorator)) return false;
    }
    else return Reject(TEXT("Unknown decorator kind"));
@@ -304,25 +357,39 @@ struct FBuilder
   for (const auto& Service : Services->Elements)
   {
    FString Path;
-   if (!HasAssetDocumentAIBehaviorTreeExactFields(Service, {TEXT("authored_properties"), TEXT("editor"), TEXT("node_class_path"), TEXT("stable_node_id")})
+   const bool bMarkedService = IsMarkedNode(Service);
+   if (!(bMarkedService
+    ? HasAssetDocumentAIBehaviorTreeExactFields(Service, {TEXT("authored_properties"), TEXT("editor"), TEXT("node_class_path"), TEXT("stable_node_id"), TEXT("unsupported")})
+    : HasAssetDocumentAIBehaviorTreeExactFields(Service, {TEXT("authored_properties"), TEXT("editor"), TEXT("node_class_path"), TEXT("stable_node_id")}))
     || !String(Field(Service, TEXT("node_class_path")), Path)) return false;
-   auto* Sub = Cast<UBehaviorTreeGraphNode>(CreateSubnode(*Lease.Graph, *Node, Path, false));
+   auto* Sub = bMarkedService ? RecreateMissingClass(Service, Node, *UBehaviorTreeGraphNode_Service::StaticClass())
+    : Cast<UBehaviorTreeGraphNode>(CreateSubnode(*Lease.Graph, *Node, Path, false));
    if (!Sub || !Initialize(*Sub, Sub->NodeInstance, Service)) return false;
   }
-  FName OutputName = NAME_None;
-  if (Parent.IsA<UBehaviorTreeGraphNode_SimpleParallel>())
+  if (Parent)
   {
-   if (ChildIndex < 0 || ChildIndex > 1) return Reject(TEXT("SimpleParallel requires its Task and Out child slots"));
-   OutputName = ChildIndex == 0 ? TEXT("Task") : TEXT("Out");
+   FName OutputName = NAME_None;
+   if (Parent->IsA<UBehaviorTreeGraphNode_SimpleParallel>())
+   {
+    if (ChildIndex < 0 || ChildIndex > 1) return Reject(TEXT("SimpleParallel requires its Task and Out child slots"));
+    OutputName = ChildIndex == 0 ? TEXT("Task") : TEXT("Out");
+   }
+   if (!Connect(*Lease.Graph, *Parent, *Node, 0, OutputName)) return Reject(TEXT("Main graph schema connection rejected"));
+   TPair<UEdGraphNode*, TArray<UEdGraphNode*>>* Entry = ChildOrder.FindByPredicate(
+    [Parent](const TPair<UEdGraphNode*, TArray<UEdGraphNode*>>& Candidate) { return Candidate.Key == Parent; });
+   (Entry != nullptr ? Entry : &ChildOrder.Emplace_GetRef(Parent, TArray<UEdGraphNode*>()))->Value.Add(Node);
   }
-  if (!Connect(*Lease.Graph, Parent, *Node, 0, OutputName)) return Reject(TEXT("Main graph schema connection rejected"));
   for (int32 Index = 0; Index < Children->Elements.Num(); ++Index)
-   if (!Main(Children->Elements[Index], *Node, Depth + 1, Index)) return false;
+   if (!Main(Children->Elements[Index], Node, Depth + 1, Index)) return false;
   return true;
  }
  bool Run(const FValue& Tree)
  {
-  if (!HasAssetDocumentAIBehaviorTreeExactFields(Tree, {TEXT("comments"), TEXT("graph_guid"), TEXT("graph_state"), TEXT("root")})
+  const auto* Detached = Field(Tree, TEXT("detached"));
+  if (!(Detached
+    ? HasAssetDocumentAIBehaviorTreeExactFields(Tree, {TEXT("comments"), TEXT("detached"), TEXT("graph_guid"), TEXT("graph_state"), TEXT("root")})
+    : HasAssetDocumentAIBehaviorTreeExactFields(Tree, {TEXT("comments"), TEXT("graph_guid"), TEXT("graph_state"), TEXT("root")}))
+   || (Detached && (!Array(Detached) || Detached->Elements.IsEmpty()))
    || !Field(Tree, TEXT("graph_state")) || Field(Tree, TEXT("graph_state"))->StringValue != TEXT("present")) return Reject(TEXT("Invalid complete lowered tree DTO"));
   UBehaviorTreeGraphNode_Root* Root = nullptr;
   if (Lease.Graph->Nodes.IsEmpty()) Lease.Graph->GetSchema()->CreateDefaultNodesForGraph(*Lease.Graph);
@@ -347,8 +414,33 @@ struct FBuilder
   }
   else if (!SetGuid(*Lease.Graph, TEXT("GraphGuid"), GraphGuid)) return false;
   const auto* DesiredRoot = Field(Tree, TEXT("root"));
-  if (DesiredRoot->Kind != EKind::Null && !Main(*DesiredRoot, *Root, 0)) return false;
-  return Comments(*Lease.Graph, Field(Tree, TEXT("comments")));
+  if (DesiredRoot->Kind != EKind::Null && !Main(*DesiredRoot, Root, 0)) return false;
+  if (Detached)
+   for (const auto& Branch : Detached->Elements) if (!Main(Branch, nullptr, 0)) return false;
+  if (!Comments(*Lease.Graph, Field(Tree, TEXT("comments")))) return false;
+  OrderChildLinks();
+  return true;
+ }
+ // Each node added updates the tree, which sorts every node's child links by X with an unstable sort and so permutes
+ // children at the same X. The links are put back in document order; the readback and later rebuilds keep the order
+ // of children at the same X.
+ void OrderChildLinks()
+ {
+  for (const TPair<UEdGraphNode*, TArray<UEdGraphNode*>>& Entry : ChildOrder)
+  {
+   const auto Rank = [&Entry](const UEdGraphPin* Link)
+   {
+    const int32 Index = Link != nullptr ? Entry.Value.IndexOfByKey(Link->GetOwningNode()) : INDEX_NONE;
+    return Index == INDEX_NONE ? MAX_int32 : Index;
+   };
+   for (UEdGraphPin* Pin : Entry.Key->Pins)
+   {
+    if (Pin != nullptr && Pin->Direction == EGPD_Output && Pin->LinkedTo.Num() > 1)
+    {
+     Algo::StableSortBy(Pin->LinkedTo, Rank);
+    }
+   }
+  }
  }
 };
 }
@@ -384,6 +476,7 @@ FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBehaviorTreeAuthorScratch(
   NSLOCTEXT("AssetDocumentAI", "ScratchAuthoring", "Build authored BehaviorTree scratch"));
  ON_SCOPE_EXIT { if (ScratchUndo) ScratchUndo->Cancel(); };
  FBuilder Builder{Lease, *Transaction};
+ const FScopedReplacedTexts ReplacedTexts(FindObject<UBehaviorTree>(nullptr, *Lease.LiveBehaviorTreePath));
  if (!Builder.Run(*FindAssetDocumentAIBehaviorTreeField(Invocation.ValueArguments, TEXT("tree"))))
  {
   // The aggregate rollback owns all native allocations. Failure consumes the

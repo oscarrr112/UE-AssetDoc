@@ -11,7 +11,7 @@ from asset_document.graphs.live import decode_live_asset
 from asset_document.graphs.reconcile import reconcile
 from asset_document.graphs.schemas import k2
 from asset_document.tests.graph_support import (
-    ACTOR_CLASS, N_BEGIN, N_BRANCH, N_ENTRY, N_PRINT, fixture, live_asset,
+    ACTOR_CLASS, GHOST_COMMENT, N_BEGIN, N_BRANCH, N_ENTRY, N_OVERLAP, N_PRINT, fixture, live_asset,
 )
 
 
@@ -93,15 +93,21 @@ class GraphExtractTests(unittest.TestCase):
                 # Directly and through the Body codec (what the sidecar stores and the AI edits).
                 assert_round_trip(self, live_asset(query, listing))
 
-    def test_extracted_body_shape_uses_alias_ids_and_skips_ghost_nodes(self):
+    def test_extracted_body_shape_uses_alias_ids_and_marks_ghost_nodes(self):
         body = extract_body(live_asset("graph.query.v1.k2_branch.json"))
         graph = body["UbergraphPages"][0]
-        # Ghost ActorBeginOverlap/Tick (extras.ghost) are not extracted; actions use their alias form.
-        self.assertEqual([(node["Id"], node["Action"]) for node in graph["Nodes"]],
-                         [("BeginPlay", "K2:BeginPlay"), ("Branch", "K2:Branch"), ("PrintString", "K2:PrintString")])
+        # Actions use their alias form; the editor's ghost ActorBeginOverlap/Tick (extras.ghost) are nodes
+        # of the graph, marked "Ghost" and placed where the editor put them.
+        self.assertEqual([(node["Id"], node["Action"], node.get("Ghost")) for node in graph["Nodes"]],
+                         [("BeginPlay", "K2:BeginPlay", None), ("ActorBeginOverlap", "K2:ActorBeginOverlap", True),
+                          ("Tick", "K2:Tick", True), ("Branch", "K2:Branch", None),
+                          ("PrintString", "K2:PrintString", None)])
+        self.assertEqual(graph["Nodes"][1], {
+            "Id": "ActorBeginOverlap", "Action": "K2:ActorBeginOverlap", "NodeGuid": N_OVERLAP,
+            "Comment": GHOST_COMMENT, "Position": {"X": 0, "Y": 208}, "CommentBubbleVisible": True, "Ghost": True})
         self.assertEqual(graph["Links"], [{"From": "BeginPlay:then", "To": "Branch:execute"},
                                           {"From": "Branch:then", "To": "PrintString:execute"}])
-        printer = graph["Nodes"][2]
+        printer = graph["Nodes"][4]
         self.assertEqual(printer, {
             "Id": "PrintString", "Action": "K2:PrintString", "NodeGuid": N_PRINT, "Position": {"X": 640, "Y": 0},
             "PinOverrides": [{"Pin": "InString", "DefaultValue": "Hello from AssetDocument"}]})
@@ -116,8 +122,9 @@ class GraphExtractTests(unittest.TestCase):
             {"Id": "Start", "Action": "K2:BeginPlay", "NodeGuid": N_BEGIN},
             {"Id": "Check", "Action": "K2:Branch", "NodeGuid": N_BRANCH}]}]})
         graph = extract_body(live_asset("graph.query.v1.k2_branch.json"), hints)["UbergraphPages"][0]
-        self.assertEqual([node["Id"] for node in graph["Nodes"]], ["Start", "Check", "PrintString"])
-        self.assertEqual(graph["Nodes"][1]["Action"], "K2:Branch")
+        self.assertEqual([node["Id"] for node in graph["Nodes"]],
+                         ["Start", "ActorBeginOverlap", "Tick", "Check", "PrintString"])
+        self.assertEqual(graph["Nodes"][3]["Action"], "K2:Branch")
         self.assertEqual(graph["Links"][0], {"From": "Start:then", "To": "Check:execute"})
 
     def test_function_signature_is_extracted_from_entry_and_result(self):
@@ -145,6 +152,17 @@ class GraphExtractTests(unittest.TestCase):
             "Pure": True, "Access": "private", "Category": "Health"})
         assert_round_trip(self, live)
 
+    def test_details_flags_and_instance_color_are_extracted(self):
+        def edit(value):
+            find_node(value, N_ENTRY)["extras"]["signature_flags"].update(
+                thread_safe=True, exec=True, compact_node_title="+", instance_color={"R": 1.0, "G": 0.5, "B": 0.0, "A": 1.0})
+        live = edited_live("graph.query.v1.k2_function_signature.json", "graph.list.v1.k2_function.json", edit)
+        function = next(graph for graph in extract_body(live)["FunctionGraphs"] if graph["Name"] == "AddHealth")
+        self.assertEqual({key: function["Signature"][key] for key in ("ThreadSafe", "Exec", "CompactNodeTitle", "InstanceColor")},
+                         {"ThreadSafe": True, "Exec": True, "CompactNodeTitle": "+",
+                          "InstanceColor": {"R": 1.0, "G": 0.5, "B": 0.0, "A": 1.0}})
+        assert_round_trip(self, live)
+
     def test_single_precision_pins_promotable_operators_and_field_owners(self):
         health = f"K2:VariableGet:{ACTOR_CLASS}:Health"
 
@@ -164,11 +182,29 @@ class GraphExtractTests(unittest.TestCase):
         live = edited_live("graph.query.v1.k2_branch.json", "graph.list.v1.k2_empty_actor.json", edit_branch)
         nodes = extract_body(live, self_class=ACTOR_CLASS)["UbergraphPages"][0]["Nodes"]
         self.assertEqual([(node["Id"], node["Action"]) for node in nodes], [
-            ("Get_Health", "K2:Get:Health"), ("Multiply", "K2:Multiply"),
+            ("Get_Health", "K2:Get:Health"), ("ActorBeginOverlap", "K2:ActorBeginOverlap"), ("Tick", "K2:Tick"),
+            ("Multiply", "K2:Multiply"),
             ("ForEachElementInEnum_EMovementMode", "K2:ForEachElementInEnum:/Script/Engine.EMovementMode")])
         assert_round_trip(self, live, ACTOR_CLASS)
         # Without the asset class the canonical owner is kept.
         self.assertEqual(extract_body(live)["UbergraphPages"][0]["Nodes"][0]["Action"], health)
+
+    def test_nodes_of_unknown_classes_extract_without_raising(self):
+        # A node class no schema knows (no action key, or a key of an unknown kind) is extracted as its
+        # class or its key rather than failing the whole graph.
+        def edit(value):
+            print_node = find_node(value, N_PRINT)
+            print_node["class"] = "/Script/SomePlugin.K2Node_NotKnownAnywhere"
+            print_node["action_key"] = None
+            print_node["extras"] = {"unresolved": "Missing"}
+            find_node(value, N_BRANCH)["action_key"] = "K2:NoSuchKind:Whatever:Thing"
+        live = edited_live("graph.query.v1.k2_branch.json", "graph.list.v1.k2_empty_actor.json", edit)
+        nodes = extract_body(live, self_class=ACTOR_CLASS)["UbergraphPages"][0]["Nodes"]
+        unknown = next(node for node in nodes if node["NodeGuid"] == N_PRINT)
+        self.assertNotIn("Action", unknown)
+        self.assertEqual(unknown["Extras"], {"Class": "/Script/SomePlugin.K2Node_NotKnownAnywhere",
+                                             "Unresolved": "Missing"})
+        self.assertIn("K2:NoSuchKind:Whatever:Thing", [node.get("Action") for node in nodes])
 
 
 if __name__ == "__main__":

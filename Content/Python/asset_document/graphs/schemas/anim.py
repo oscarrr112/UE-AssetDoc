@@ -51,7 +51,7 @@ from dataclasses import replace
 import re
 
 from asset_document.diagnostics import contract_error
-from asset_document.graphs.actions import action_kind
+from asset_document.graphs.actions import action_kind, getter_without_source
 from asset_document.graphs.live import LiveGraph, LiveNode
 from asset_document.graphs.model import Endpoint, GraphDoc, LinkDoc, NodeDoc, NodeProperties, thaw_json
 from asset_document.graphs.schemas import SchemaAdapter, sanitize_id
@@ -256,7 +256,8 @@ class AnimSchemaAdapter(K2SchemaAdapter):
     def missing_pin_hint(self, node, pin):
         if not (node.action_key or "").startswith("Anim:"):
             return super().missing_pin_hint(node, pin)
-        return (f' An animation node shows an optional pin (a Control Rig node: a public variable or control of its rig) '
+        return (f' An animation node shows an optional pin (a Control Rig node: a public variable or control of its rig; '
+                f'a Linked Anim Graph or Layer node: a variable of the class it runs) '
                 f'once its Properties have "ShowPin.{pin}": true.')
 
     def hides_pin(self, action, container, key, value):
@@ -276,7 +277,48 @@ class AnimSchemaAdapter(K2SchemaAdapter):
             live, defaults = rig_reference_spelling(live), rig_reference_spelling(defaults)
         return omitted_anim_settings(live, defaults, doc.properties.node, linked_pins)
 
+    def property_order(self, doc):
+        # Transitions that share one rule: the one that holds the rule's Graph shares it first, so the others use
+        # that rule graph (the shared graph is written once, on one of them).
+        holders = {sub.owner for sub in doc.subgraphs if sub.owner is not None and sub.role == "transition"}
+        first = tuple(node for node in doc.nodes if node.id in holders and _base(node.action) == TRANSITION
+                      and node.properties.node.get("SharedRules"))
+        ids = {node.id for node in first}
+        return first + tuple(node for node in doc.nodes if node.id not in ids) if first else doc.nodes
+
+    def live_value_as_authored(self, action, container, key, have, wanted):
+        # A binding written without ContextId keeps the call site it has (documents written before call sites were read).
+        if container != "node" or key != "Bindings" or type(have) is not dict or type(wanted) is not dict:
+            return have
+        out = {}
+        for name, entry in have.items():
+            authored = wanted.get(name)
+            if type(entry) is dict and type(authored) is dict and "ContextId" not in authored:
+                entry = {field: value for field, value in entry.items() if field != "ContextId"}
+            out[name] = entry
+        return out
+
+    def property_items(self, action, properties):
+        # A transition's sharing first (rule, then blend settings): joining a group takes the group's settings, and
+        # the blend settings the document states are written over them afterwards.
+        items = tuple(properties.items())
+        if _base(action) != TRANSITION:
+            return items
+        rank = {"SharedRules": 0, "SharedCrossfade": 1}
+        return tuple(sorted(items, key=lambda item: rank.get(item[1], 2) if item[0] == "node" else 3))
+
+    def owned_subgraph_follows_settings(self, node, live):
+        # Sharing a rule, using another transition's or unsharing gives the transition another rule graph.
+        if _base(node.action or (live.action_key if live is not None else None)) != TRANSITION \
+                or "SharedRules" not in node.properties.node:
+            return False
+        have = (live.extras.get("properties") or {}).get("SharedRules", "") if live is not None else ""
+        return thaw_json(node.properties.node["SharedRules"]) != thaw_json(have)
+
     def extract_properties(self, node, hint):
+        if not is_anim_action(node.action_key):
+            # An event graph's K2 node: its settings that differ from a new node's, as in a Blueprint.
+            return super().extract_properties(node, hint)
         properties = node.extras.get("properties")
         if properties is None or not hasattr(properties, "items"):
             return None
@@ -317,6 +359,43 @@ class AnimSchemaAdapter(K2SchemaAdapter):
 
 
 ANIM_ADAPTER = AnimSchemaAdapter()
+
+
+def resolve_getter_sources(authored: tuple[GraphDoc, ...], extracted: tuple[GraphDoc, ...]) -> tuple[GraphDoc, ...]:
+    """The authored graphs with each animation getter written without its source (the older key form) read as the
+    getter it names (graphs and subgraphs paired by name): the getter with the node's NodeGuid, else the graph's one
+    getter of that function. The comparison then sees the node apply keeps; a key that names none of
+    several getters stays as written."""
+    have = {graph.name.casefold(): graph for graph in extracted}
+    return tuple(_resolve_getters(graph, have.get(graph.name.casefold())) for graph in authored)
+
+
+def _resolve_getters(authored: GraphDoc, extracted: GraphDoc | None) -> GraphDoc:
+    if extracted is None:
+        return authored
+    sourced: dict[str, list[str]] = {}
+    by_guid: dict[str, str] = {}
+    for node in extracted.nodes:
+        key = getter_without_source(node.action)
+        if key is not None:
+            sourced.setdefault(key, []).append(node.action)
+            if node.guid:
+                by_guid[node.guid.casefold()] = node.action
+    nodes = []
+    for node in authored.nodes:
+        options = sourced.get(node.action) if node.action and "@" not in node.action else None
+        if options:
+            # The getter the node names: the one with its NodeGuid, else the graph's only one.
+            kept = by_guid.get(node.guid.casefold()) if node.guid else None
+            if kept is not None and getter_without_source(kept) == node.action:
+                node = replace(node, action=kept)
+            elif len(options) == 1:
+                node = replace(node, action=options[0])
+        nodes.append(node)
+    subgraphs = resolve_getter_sources(authored.subgraphs, extracted.subgraphs)
+    if tuple(nodes) == authored.nodes and subgraphs == authored.subgraphs:
+        return authored
+    return replace(authored, nodes=tuple(nodes), subgraphs=subgraphs)
 
 
 def anim_label(node: NodeDoc) -> tuple:
@@ -426,9 +505,16 @@ def _decode_graph(value: object, path: str, *, graph_id: str, role: str, name: s
             if implicit is not None and endpoint.node not in declared:
                 nodes.append(NodeDoc(id=endpoint.node, implicit=implicit))
                 declared.add(endpoint.node)
-    subgraphs, names = [], {}
+    subgraphs, names, shared_rules = [], {}, {}
     for index, (node, extra) in enumerate(decoded):
         node_path = f"{path}/Nodes/{index}"
+        shared = node.properties.node.get("SharedRules") if _base(node.action) == TRANSITION else None
+        if "Graph" in extra and type(shared) is str and shared:
+            if shared in shared_rules:
+                raise contract_error(f"{node_path}/Graph", "Graph.SharedRuleGraph",
+                                     f"Transitions sharing the rule '{shared}' hold one rule graph: write its Graph on one "
+                                     f"of them ({shared_rules[shared]}), not on each.")
+            shared_rules[shared] = node_path
         if _base(node.action) == TRANSITION:
             ends = []
             for side in ("From", "To"):
@@ -478,6 +564,32 @@ def _decode_graph(value: object, path: str, *, graph_id: str, role: str, name: s
         if hasattr(error, "diagnostic"):
             raise k2._rebase(error, path) from None
         raise
+
+
+def check_shared_rules(graphs) -> None:
+    """A shared rule's Graph is written on one transition of the Blueprint. The editor lists every state machine's
+    shared rules, but a group is made and joined here only within one state machine: the same name holding a Graph
+    in two state machines is refused (each would be a rule graph of its own under one name)."""
+    holders = {}
+
+    def walk(graph):
+        owned = {sub.owner for sub in graph.subgraphs if sub.role == "transition"}
+        for node in graph.nodes:
+            shared = node.properties.node.get("SharedRules") if _base(node.action) == TRANSITION else None
+            if node.id not in owned or type(shared) is not str or not shared:
+                continue
+            path = f"{graph.node_path(node.id)}/Graph"
+            if shared in holders and holders[shared][0] != graph.id:
+                raise contract_error(path, "Graph.SharedRuleAcrossStateMachines",
+                                     f"The shared rule '{shared}' already holds its Graph in another state machine "
+                                     f"({holders[shared][1]}); a shared rule belongs to one state machine. Give one of "
+                                     "them another SharedRules name.")
+            holders.setdefault(shared, (graph.id, path))
+        for sub in graph.subgraphs:
+            walk(sub)
+
+    for graph in graphs:
+        walk(graph)
 
 
 def decode_anim_graph(value: object, *, self_class: str | None = None) -> GraphDoc:
@@ -565,5 +677,5 @@ def encode_anim_graph(graph: GraphDoc) -> dict:
     return _encode_graph(graph, top=True)
 
 
-__all__ = ("ANIM_ADAPTER", "ANIM_ROLES", "AnimSchemaAdapter", "decode_anim_graph", "decode_anim_layers",
-           "encode_anim_graph", "is_anim_action", "is_blend_space_action", "anim_label", "sample_name")
+__all__ = ("ANIM_ADAPTER", "ANIM_ROLES", "AnimSchemaAdapter", "check_shared_rules", "decode_anim_graph",
+           "decode_anim_layers", "encode_anim_graph", "is_anim_action", "is_blend_space_action", "anim_label", "sample_name")

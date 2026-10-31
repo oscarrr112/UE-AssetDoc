@@ -3,7 +3,7 @@
 
 import unittest
 
-from asset_document import bootstrap
+from asset_document import bootstrap, tolerance
 from asset_document.diagnostics import AssetDocumentContractError
 from asset_document.mutation_intent_projection import SNAPSHOT_COVERED
 from asset_document.profiles import widget_blueprint_animation as animation
@@ -94,6 +94,10 @@ class Simulator:
             parent = values.get("parent", "")
             slot = None if "index" in values else values.get("slot_name", "")
             self._put(name, parent, slot, values.get("index"))
+
+    def detached(self):
+        """Widgets that exist but sit nowhere (detached and not placed again)."""
+        return sorted(name for name in self.classes if name not in self.parent)
 
     def tree(self):
         def build(name):
@@ -210,6 +214,7 @@ class TreePlanTests(unittest.TestCase):
         simulator = Simulator(rows)
         simulator.apply(ops)
         self.assertEqual(shape(simulator.tree()), shape(effective))
+        self.assertEqual(simulator.detached(), [], "every detached widget is placed again")
         return ops
 
     def test_unchanged_tree_plans_nothing(self):
@@ -243,6 +248,37 @@ class TreePlanTests(unittest.TestCase):
         self.assertEqual(ops[0], ("umg.tree.move.v1", {"name": "Old", "detach": True}, "/Body/WidgetTree/RootWidget"))
         self.assertIn(("umg.tree.move.v1", {"name": "Label", "detach": True},
                        "/Body/WidgetTree/RootWidget/Children/0/Children/0/Children/0"), ops)
+
+    def test_moved_widgets_are_detached_then_placed_again(self):
+        size_box, overlay = "/Script/UMG.SizeBox", "/Script/UMG.Overlay"
+        capacity = {"Root": "one", "ChildA": "one", "ChildB": "one"}
+        live = {"RootWidget": node("Root", size_box, node("Wrap", overlay, node("ChildA", size_box), node("ChildB", size_box))),
+                "NamedSlotBindings": {}}
+        cases = {
+            "wrap replaced, swapped": node("Root", size_box, node("Stack", VBOX, node("ChildB", size_box), node("ChildA", size_box))),
+            "wrap replaced": node("Root", size_box, node("Stack", VBOX, node("ChildA", size_box), node("ChildB", size_box))),
+            "root holds one": node("Root", size_box, node("ChildA", size_box)),
+            "wrap wrapped": node("Root", size_box, node("Stack", VBOX, node("Wrap", overlay, node("ChildA", size_box),
+                                                                             node("ChildB", size_box)))),
+            "wrap class change": node("Root", size_box, node("Wrap", VBOX, node("ChildA", size_box), node("ChildB", size_box))),
+            "root wrapped": node("Outer", VBOX, live["RootWidget"]),
+        }
+        for label, root in cases.items():
+            with self.subTest(label):
+                ops = self.plan(live, {"RootWidget": root}, capacity)
+                detached = [values["name"] for primitive, values, _ in ops if values.get("detach")]
+                self.assertTrue(detached)
+                for name in detached:
+                    later = ops[[values.get("detach") and values["name"] for _, values, _ in ops].index(name) + 1:]
+                    self.assertTrue(any(primitive == "umg.tree.move.v1" and values["name"] == name and not values.get("detach")
+                                        for primitive, values, _ in later), name)
+
+    def test_widgets_left_detached_are_removed(self):
+        paths = {"ChildA": "/Body/WidgetTree/RootWidget/Children/0"}
+        self.assertEqual(tree.plan_detached_removes([], paths), [])
+        self.assertEqual(tree.plan_detached_removes(["ChildA", "Gone"], paths),
+                         [("umg.tree.remove.v1", {"name": "ChildA"}, "/Body/WidgetTree/RootWidget/Children/0"),
+                          ("umg.tree.remove.v1", {"name": "Gone"}, "/Body/WidgetTree")])
 
     def test_case_only_name_change_is_a_rename_of_the_same_widget(self):
         live = {"RootWidget": node("Root", CANVAS, node("okbutton", BUTTON, node("Label", TEXT))), "NamedSlotBindings": {}}
@@ -314,6 +350,21 @@ class TreePlanTests(unittest.TestCase):
         self.assertEqual(ops[1][1], {"widget": "Bar", "property": "Percent", "kind": "Property", "source_path": ["Health"]})
         self.assertEqual(tree.plan_bindings(tree.canonical_bindings(tree.bindings_from_live(live)), live), [])
 
+    def test_held_duplicate_and_empty_bindings_read_and_plan_nothing(self):
+        live = [{"widget": "L", "property": "Text", "kind": "Property", "source_path": ["A"]},
+                {"widget": "L", "property": "Text", "kind": "Property", "source_path": ["B"]},
+                {"widget": "L", "property": "ToolTipText", "kind": "Property", "source_path": []}]
+        rows = tree.bindings_from_live(live)
+        with self.assertRaises(AssetDocumentContractError):
+            tree.canonical_bindings(rows)
+        with tolerance.authoring() as findings:
+            desired = tree.canonical_bindings(rows)
+        self.assertEqual([(item.path, item.code) for item in findings],
+                         [("/Body/Bindings/1", "Widget.DuplicateBinding"),
+                          ("/Body/Bindings/2/SourcePath", "Widget.InvalidBinding")])
+        self.assertEqual(desired, rows)
+        self.assertEqual(tree.plan_bindings(desired, live), [])
+
 
 class AnimationTests(unittest.TestCase):
     DETAIL = {"name": "Intro", "display_rate": {"numerator": 30, "denominator": 1}, "playback": {"start": 0, "end": 30},
@@ -363,6 +414,118 @@ class AnimationTests(unittest.TestCase):
         self.assertEqual([op[0] for op in animation.plan_tracks(edited, live, "/x")], ["umg.anim.track.set.v1"])
         removed = {**live, "Tracks": live["Tracks"][1:]}
         self.assertEqual([op[0] for op in animation.plan_tracks(removed, live, "/x")], ["umg.anim.track.remove.v1"])
+
+    def test_root_material_deactivated_and_read_only_tracks(self):
+        detail = {**self.DETAIL, "tracks": [
+            {"widget": "", "target": "root", "property": "RenderOpacity", "type": "Float", "supported": True,
+             "deactivated": True, "channels": [{"name": "Value", "kind": "float", "keys": [{"frame": 0, "value": 1.0}]}]},
+            {"widget": "Glow", "target": "widget", "property": "Brush", "type": "Material", "supported": True,
+             "parameters": [{"name": "Pulse", "kind": "Scalar"}, {"name": "Tint", "kind": "Color"}],
+             "channels": [{"name": "Pulse", "kind": "float", "keys": [{"frame": 0, "value": 0.0}]}]},
+            {"widget": "", "target": "widget", "property": "", "type": "/Script/MovieSceneTracks.MovieSceneEventTrack",
+             "supported": False, "reason": "track is not bound to a widget", "channels": [],
+             "sections": [{"channels": [{"name": "Value", "kind": "event", "keys": [{"frame": 10, "value": "OnShown"}]}]}]}]}
+        extracted = animation.animation_from_live(detail)
+        root, material, events = extracted["Tracks"]
+        self.assertEqual((root["Target"], "Widget" in root, root["Deactivated"]), ("Root", False, True))
+        self.assertEqual(material["Parameters"], {"Pulse": "Scalar", "Tint": "Color"})
+        self.assertEqual(events["Sections"], [{"Channels": [{"Name": "Value", "Kind": "event",
+                                                             "Keys": [{"Frame": 10, "Value": "OnShown"}]}]}])
+        live = animation.canonical_animations([extracted])[0]
+        self.assertEqual(animation.plan_tracks(live, live, "/x"), [])
+        self.assertEqual(animation.diff_animations([live], [live]), [])
+        # Reactivate the root track, add a material parameter; read-only keys cannot change.
+        edited = animation.canonical_animations([{**extracted, "Tracks": [
+            {k: v for k, v in root.items() if k != "Deactivated"},
+            {**material, "Parameters": {"Pulse": "Scalar", "Tint": "Color", "Offset": "Vector2D"}}, events]}])[0]
+        ops = animation.plan_tracks(edited, live, "/x")
+        self.assertEqual([(op[1]["target"], op[1].get("deactivated"), op[1].get("parameters")) for op in ops],
+                         [("root", False, None),
+                          ("widget", None, [{"name": "Offset", "kind": "Vector2D"}, {"name": "Pulse", "kind": "Scalar"},
+                                            {"name": "Tint", "kind": "Color"}])])
+        changed = animation.canonical_animations([{**extracted, "Tracks": [root, material, {**events, "Sections": []}]}])[0]
+        with self.assertRaises(AssetDocumentContractError) as caught:
+            animation.plan_tracks(changed, live, "/x")
+        self.assertEqual(caught.exception.diagnostic.code, "Widget.UnsupportedTrack")
+        # An older document lists a now-represented track as Unsupported (no content): it is kept.
+        older = animation.canonical_animations([{**extracted, "Tracks": [
+            {"Target": "Root", "Property": "RenderOpacity", "Type": "Float", "Unsupported": "muted"}, material,
+            {k: v for k, v in events.items() if k != "Sections"}]}])[0]
+        self.assertEqual(animation.plan_tracks(older, live, "/x"), [])
+        with self.assertRaises(AssetDocumentContractError):
+            animation.canonical_animations([{"Name": "A", "Tracks": [{"Widget": "T", "Target": "Root", "Property": "P",
+                                                                      "Type": "Float"}]}])
+
+    def test_an_earlier_extracts_root_and_material_rows_reapply_unchanged(self):
+        # An earlier extract listed a track on the user widget under the root binding's name and a material track by
+        # its class path, both Unsupported; the live tracks now have other identities.
+        detail = {**self.DETAIL, "tracks": [
+            {"widget": "", "target": "root", "property": "RenderOpacity", "type": "Float", "supported": True,
+             "channels": [{"name": "Value", "kind": "float", "keys": [{"frame": 0, "value": 1.0}]}]},
+            {"widget": "Glow", "target": "widget", "property": "Brush", "type": "Material", "supported": True,
+             "parameters": [{"name": "Pulse", "kind": "Scalar"}],
+             "channels": [{"name": "Pulse", "kind": "float", "keys": [{"frame": 0, "value": 0.0}]}]},
+            self.DETAIL["tracks"][1]]}
+        live = animation.canonical_animations([animation.animation_from_live(detail)])[0]
+        old = animation.canonical_animations([{"Name": "Intro", "Tracks": [
+            {"Widget": "WBP_Card", "Property": "RenderOpacity", "Type": "Float",
+             "Unsupported": "the track animates the user widget itself"},
+            {"Widget": "Glow", "Property": "", "Type": "/Script/UMG.MovieSceneWidgetMaterialTrack",
+             "Unsupported": "MovieSceneWidgetMaterialTrack is not a property track"},
+            {"Widget": "", "Property": "", "Type": "/Script/MovieSceneTracks.MovieSceneEventTrack",
+             "Unsupported": "track is not bound to a widget"}]}])[0]
+        self.assertEqual(animation.plan_tracks(old, live, "/x"), [])
+        self.assertEqual(animation.diff_animations([old], [live]), [])
+        # Without the old rows the tracks are removed, as for any unlisted track.
+        dropped = {**old, "Tracks": old["Tracks"][2:]}
+        self.assertEqual([op[1]["type"] for op in animation.plan_tracks(dropped, live, "/x")], ["Float", "Material"])
+
+    def test_section_settings_are_read_kept_when_omitted_and_set_when_stated(self):
+        track = {**self.DETAIL["tracks"][0], "section": {"start": 0, "end": 10, "when_finished": "KeepState"}}
+        extracted = animation.animation_from_live({**self.DETAIL, "tracks": [track]})
+        self.assertEqual(extracted["Tracks"][0]["Section"], {"StartFrame": 0, "EndFrame": 10, "WhenFinished": "KeepState"})
+        live = animation.canonical_animations([extracted])[0]
+        self.assertEqual(animation.plan_tracks(live, live, "/x"), [])
+        omitted = {k: v for k, v in extracted["Tracks"][0].items() if k != "Section"}
+        self.assertEqual(animation.plan_tracks(animation.canonical_animations([{**extracted, "Tracks": [omitted]}])[0],
+                                               live, "/x"), [])
+        infinite = animation.canonical_animations([{**extracted, "Tracks": [{**omitted, "Section": {"Active": True}}]}])[0]
+        ops = animation.plan_tracks(infinite, live, "/x")
+        self.assertEqual([op[1]["section"] for op in ops], [{}])
+        with self.assertRaises(AssetDocumentContractError):
+            animation.canonical_animations([{**extracted, "Tracks": [{**omitted, "Section": {"WhenFinished": "Loop"}}]}])
+
+
+class AnimationOrderTests(unittest.TestCase):
+    class Umg:
+        def __init__(self, names):
+            self.names, self.calls = list(names), []
+
+        def query(self, primitive, values=None, path="/Body"):
+            return {"animations": [{"name": name} for name in self.names]}
+
+        def run(self, ops):
+            self.calls.extend(ops)
+            self.names.extend(values["name"] for primitive, values, _ in ops if primitive == "umg.anim.set.v1")
+            return [None] * len(ops)
+
+    def test_new_animations_are_created_before_the_graphs_header_only(self):
+        # A graph may get an animation (its member variable) the same document creates; the header is made
+        # first, the tracks are written with the other animations afterwards.
+        from asset_document.profiles.widget_blueprint_runtime import _create_animations
+        body = {"Animations": animation.canonical_animations([
+            {"Name": "Intro", "FrameRate": {"Numerator": 30, "Denominator": 1}},
+            {"Name": "FloatUp", "Tracks": [{"Widget": "T", "Property": "RenderOpacity", "Type": "Float",
+                                            "Keys": [{"Frame": 0, "Value": 0.0}]}]}])}
+        umg = self.Umg(["Intro"])
+        _create_animations(body, umg)
+        self.assertEqual(umg.calls, [("umg.anim.set.v1", animation.header_values(body["Animations"][1], None),
+                                      "/Body/Animations/1")])
+        self.assertNotIn("umg.anim.track.set.v1", [call[0] for call in umg.calls])
+        # Once created it is an existing animation: a second pass creates nothing.
+        umg.calls.clear()
+        _create_animations(body, umg)
+        self.assertEqual(umg.calls, [])
 
 
 class DiffTests(unittest.TestCase):
@@ -423,3 +586,51 @@ class DiffTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExtensionWarningTests(unittest.TestCase):
+    def test_a_saved_editor_extension_is_reported_with_its_lists(self):
+        from asset_document.diagnostics import collecting_read_warnings
+        from asset_document.profiles.widget_blueprint_runtime import warn_extensions
+        with collecting_read_warnings() as warnings:
+            warn_extensions([{"class": "/Script/ModelViewViewModelBlueprint.MVVMWidgetBlueprintExtension_View",
+                              "lists": {"BlueprintView.Bindings": 2, "BlueprintView.AvailableViewModels": 1}}])
+        self.assertEqual([(item.path, item.code) for item in warnings], [("/Body", "UBlueprint.Unrepresented")])
+        self.assertIn("MVVMWidgetBlueprintExtension_View (BlueprintView.AvailableViewModels: 1, BlueprintView.Bindings: 2)",
+                      warnings[0].message)
+
+
+class NavigationMethodTests(unittest.TestCase):
+    PROXIMITY = "/Script/SlateCore.NavigationMethodProximity"
+
+    def plan(self, live_navigation, desired_navigation):
+        rows = [{"name": "Root", "class": CANVAS, "parent": "", "slot_name": "", "index": 0, "is_variable": False,
+                 "capacity": "many", "properties": {}, "navigation": live_navigation}]
+        desired = {"RootWidget": node("Root", CANVAS, **({"Navigation": desired_navigation}
+                                                          if desired_navigation is not None else {}))}
+        canonical, paths = tree.canonical_tree(desired)
+        return [op for op in tree.plan_values(canonical, rows, paths) if op[0] == "umg.widget.navigation.set.v1"]
+
+    def test_a_navigation_method_reads_and_re_applies_unchanged(self):
+        live = {"navigation_method": {"struct": self.PROXIMITY, "properties": {"SearchAngleDegrees": 30.0}}}
+        extracted = tree.navigation_from_live(live)
+        self.assertEqual(extracted, {"NavigationMethod": {"Struct": self.PROXIMITY,
+                                                          "Properties": {"SearchAngleDegrees": 30.0}}})
+        self.assertEqual(self.plan(live, extracted), [])
+
+    def test_an_omitted_method_is_kept_and_null_clears_it(self):
+        live = {"navigation_method": {"struct": self.PROXIMITY, "properties": {}}}
+        self.assertEqual(self.plan(live, None), [])
+        self.assertEqual(self.plan(live, {"Up": "Stop"}), [("umg.widget.navigation.set.v1", {
+            "name": "Root", "navigation": {"Up": {"rule": "Stop"}}}, "/Body/WidgetTree/RootWidget/Navigation")])
+        self.assertEqual(self.plan(live, {"NavigationMethod": None})[0][1]["navigation"],
+                         {"navigation_method": {"struct": ""}})
+
+    def test_a_new_method_is_set_with_its_values(self):
+        ops = self.plan({}, {"NavigationMethod": {"Struct": self.PROXIMITY, "Properties": {"AlignmentFactor": 0.5}}})
+        self.assertEqual(ops[0][1]["navigation"], {"navigation_method": {
+            "struct": self.PROXIMITY, "properties": {"AlignmentFactor": 0.5}}})
+
+    def test_a_malformed_method_is_refused(self):
+        with self.assertRaises(AssetDocumentContractError):
+            tree.canonical_tree({"RootWidget": node("Root", CANVAS, Navigation={"NavigationMethod": "Proximity"})})

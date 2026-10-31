@@ -22,12 +22,13 @@ from __future__ import annotations
 import json
 import math
 
-from asset_document.graphs.actions import action_kind, preferred_alias, split_disambiguator
+from asset_document import text_forms
+from asset_document.graphs.actions import action_kind, names_factory_class, preferred_alias, split_disambiguator
 from asset_document.graphs.model import GraphDoc, NodeDoc, thaw_json
 from asset_document.graphs.pin_names import node_pin_key
 from asset_document.graphs.reconcile import type_zero
 from asset_document.graphs.schemas.k2 import (
-    NAMED_KINDS, SIGNATURE_FLAG_DEFAULTS, decode_section, encode_pin_type, node_identity_action,
+    NAMED_KINDS, FLAG_DEFAULTS_BY_ROLE, FLAGS_KEPT_BY_ROLE, decode_section, encode_pin_type, node_identity_action,
 )
 
 _ROUNDS = 8
@@ -60,7 +61,7 @@ def _overrides(node: NodeDoc, strict: bool = False, extracted: bool = False) -> 
         facts.add(("@Inputs", tuple((pin.name.casefold(), pin.type) for pin in user_pins)))
     # A Select's Index type (PinTypes): compared where the document states it.
     facts |= {("@PinType", pin.casefold(), item) for pin, item in node.pin_types}
-    return frozenset(facts | _metadata(node)) if strict else frozenset(facts)
+    return frozenset(facts | _metadata(node, extracted)) if strict else frozenset(facts)
 
 
 def _round_numbers(value):
@@ -79,7 +80,25 @@ def _json(value) -> str:
     return json.dumps(_round_numbers(thaw_json(value)), sort_keys=True, separators=(",", ":"))
 
 
-def _metadata(node: NodeDoc) -> set:
+# An animation node's binding fields an entry may leave out, with the value a read-back entry without them holds: an
+# entry without ContextId keeps the binding's call site.
+_BINDING_IMPLIED = {"ContextId": "", "OnlyUpdateWhenActive": False}
+
+
+def _binding_facts(bindings, extracted: bool) -> set:
+    """An animation node's ``Bindings`` as facts: the bound names, then each entry's fields (a field the document
+    leaves out is not compared; a read-back entry states its implied fields)."""
+    facts = {("@Property", "node", "Bindings", _json(sorted(bindings)))}
+    for name, entry in bindings.items():
+        if type(entry) is not dict:
+            facts.add(("@Property", "node", f"Bindings/{name}", _json(entry)))
+            continue
+        fields = {**_BINDING_IMPLIED, **entry} if extracted else entry
+        facts |= {("@Property", "node", f"Bindings/{name}/{field}", _json(value)) for field, value in fields.items()}
+    return facts
+
+
+def _metadata(node: NodeDoc, extracted: bool = False) -> set:
     """Strict-mode facts of a node: its stated metadata, layout and property values."""
     facts = set()
     if node.position is not None:
@@ -89,9 +108,15 @@ def _metadata(node: NodeDoc) -> set:
             facts.add((key, value))
     if node.comment_bubble_visible:  # extract states a shown bubble only
         facts.add(("@CommentBubbleVisible",))
+    if node.enabled is not None:  # extract states the state the user set
+        facts.add(("@Enabled", node.enabled))
     if node.size is not None:
         facts.add(("@Size", node.size.width, node.size.height))
     for container, key, value in node.properties.items():
+        bindings = thaw_json(value) if container == "node" and key == "Bindings" else None
+        if type(bindings) is dict and (node.action or "").startswith("Anim:"):
+            facts |= _binding_facts(bindings, extracted)
+            continue
         facts.add(("@Property", container, key, _json(value)))
     for key, value in node.extras.items():
         facts.add(("@Extra", key, _json(value)))
@@ -107,7 +132,7 @@ def _implicit_metadata_match(authored: GraphDoc, extracted: GraphDoc) -> bool:
     for node in authored.nodes:
         if node.implicit is None or not _metadata(node):
             continue
-        if not any(_metadata(node) <= _metadata(other) for other in have.get(node.implicit, ())):
+        if not any(_metadata(node) <= _metadata(other, True) for other in have.get(node.implicit, ())):
             return False
     return True
 
@@ -149,13 +174,25 @@ def _refine(sides, intern, label=_label):
     return colours
 
 
+def _adopt_texts(wanted: frozenset, have: frozenset) -> frozenset:
+    """``wanted`` with each text pin value that names the text a pin of ``have`` holds (its display string,
+    ``text_forms.same_text``) replaced by that pin's form."""
+    adopted = set()
+    for fact in wanted:
+        if len(fact) == 4 and fact[2] == "text" and fact not in have:
+            fact = next((item for item in have if len(item) == 4 and item[:3] == fact[:3]
+                         and text_forms.same_text(fact[3], item[3])), fact)
+        adopted.add(fact)
+    return frozenset(adopted)
+
+
 def _overrides_match(authored: list, extracted: list) -> bool:
     """Every authored node finds a distinct extracted node of its colour with the same overrides."""
     remaining = list(extracted)
     for wanted in sorted(authored, key=len, reverse=True):
-        found = next((index for index, have in enumerate(remaining) if have == wanted), None)
+        found = next((index for index, have in enumerate(remaining) if _adopt_texts(wanted, have) == have), None)
         if found is None:
-            found = next((index for index, have in enumerate(remaining) if wanted <= have), None)
+            found = next((index for index, have in enumerate(remaining) if _adopt_texts(wanted, have) <= have), None)
         if found is None:
             return False
         remaining.pop(found)
@@ -188,14 +225,23 @@ def graphs_match(authored: GraphDoc, extracted: GraphDoc, strict: bool = False, 
     return _subgraphs_match(authored.subgraphs, extracted.subgraphs, strict, label)
 
 
-def _signature_key(graph: GraphDoc):
+def _signature_key(graph: GraphDoc, authored: GraphDoc):
+    """(inputs, outputs, flags) of a function graph, (no pins, flags) of a macro graph, else None. A flag kept when
+    omitted counts only when ``authored`` states it."""
     signature = graph.signature
-    if graph.role != "function":
+    defaults = FLAG_DEFAULTS_BY_ROLE.get(graph.role)
+    if defaults is None:
         return None
+    stated = authored.signature.flags if authored.signature else {}
+    kept = FLAGS_KEPT_BY_ROLE[graph.role]
+    flags = {key: value for key, value in defaults.items() if key not in kept or key in stated}
+    flags.update({key: thaw_json(value) for key, value in (signature.flags.items() if signature else ())
+                  if key in flags})
+    flags = {key: _json(value) if type(value) is dict else value for key, value in flags.items()}
+    if graph.role != "function":
+        return (), (), tuple(sorted(flags.items()))
     inputs = tuple((pin.name.casefold(), pin.type) for pin in signature.inputs) if signature else ()
     outputs = tuple((pin.name.casefold(), pin.type) for pin in signature.outputs) if signature else ()
-    flags = dict(SIGNATURE_FLAG_DEFAULTS)
-    flags.update(dict(signature.flags) if signature else {})
     return inputs, outputs, tuple(sorted(flags.items()))
 
 
@@ -218,13 +264,13 @@ def _default_differences(authored: GraphDoc, extracted: GraphDoc) -> list[tuple[
 
 
 def _signatures_match(authored: GraphDoc, extracted: GraphDoc) -> bool:
-    if _signature_key(authored) != _signature_key(extracted):
+    if _signature_key(authored, authored) != _signature_key(extracted, authored):
         return False
     return not _default_differences(authored, extracted)
 
 
 def _signature_difference(authored: GraphDoc, extracted: GraphDoc) -> str:
-    wanted, have = _signature_key(authored), _signature_key(extracted)
+    wanted, have = _signature_key(authored, authored), _signature_key(extracted, authored)
     defaults = "; ".join(f"{name} Default {mine!r}, read back {theirs!r}"
                          for name, mine, theirs in _default_differences(authored, extracted))
     if wanted is None or have is None:
@@ -275,10 +321,13 @@ def resolve_short_members(authored: GraphDoc, extracted: GraphDoc, self_class: s
     locals_ = frozenset(item.name for item in (extracted.local_variables or ())) \
         if authored.local_variables is None else frozenset()
     have = {split_disambiguator(node.action)[0] for node in extracted.nodes if node.action}
+    by_guid = {node.guid.casefold(): node.action for node in extracted.nodes if node.guid and node.action}
     nodes = []
     for node in authored.nodes:
         action = node.action
-        if action:
+        if action and node.guid and names_factory_class(action, by_guid.get(node.guid.casefold())):
+            action = by_guid[node.guid.casefold()]  # the older async-task key form of the same node
+        elif action:
             action = localize_action(action, locals_, graph=authored.name, self_class=self_class)
             base, sep, suffix = action.partition("#")
             parts = base.split(":")

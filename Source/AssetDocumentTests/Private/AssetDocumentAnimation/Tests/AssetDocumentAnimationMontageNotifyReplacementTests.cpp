@@ -109,6 +109,8 @@ public:
 FAssetDocumentRuntimeValueDto Object() { FAssetDocumentRuntimeValueDto V; V.Kind = EAssetDocumentRuntimeValueKind::Object; return V; }
 FAssetDocumentRuntimeValueDto Text(const FString& S) { auto V = Object(); V.Kind = EAssetDocumentRuntimeValueKind::String; V.StringValue = S; return V; }
 FAssetDocumentRuntimeValueDto Number(double N) { auto V = Object(); V.Kind = EAssetDocumentRuntimeValueKind::Number; V.NumberValue = N; return V; }
+FAssetDocumentRuntimeValueDto Integer(int64 N) { auto V = Object(); V.Kind = EAssetDocumentRuntimeValueKind::Integer; V.IntegerValue = N; return V; }
+FAssetDocumentRuntimeValueDto Null() { auto V = Object(); V.Kind = EAssetDocumentRuntimeValueKind::Null; return V; }
 void Field(FAssetDocumentRuntimeValueDto& V, const TCHAR* Name, FAssetDocumentRuntimeValueDto E) { V.ObjectKeys.Add(Name); V.Elements.Add(MoveTemp(E)); }
 
 struct FFixture
@@ -137,6 +139,7 @@ struct FFixture
   auto& Seg = Slot.AnimTrack.AnimSegments.AddDefaulted_GetRef(); Seg.SetAnimReference(Source.Get()); Seg.AnimStartTime = 0.f; Seg.AnimEndTime = 1.f; Seg.StartPos = 0.f; Seg.AnimPlayRate = 1.f; Seg.LoopingCount = 1;
   Target->AnimNotifyTracks.Reset(); Target->AnimNotifyTracks.Add(FAnimNotifyTrack(TEXT("Events"), FLinearColor::White)); Target->AnimNotifyTracks.Add(FAnimNotifyTrack(TEXT("States"), FLinearColor::White));
   Target->Notifies.Reset();
+  // Notifies named as an earlier AssetDocument version named its own are ordinary notifies.
   auto& E = Target->Notifies.AddDefaulted_GetRef(); E.NotifyName = TEXT("AssetDocument.Notify"); E.Guid = FGuid::NewGuid(); E.TrackIndex = 0;
   E.Notify = NewObject<UAnimNotify_PlaySound>(Target.Get(), TEXT("AssetDocumentManaged_Notify_Old"), RF_Transactional); E.Link(Target.Get(), .7f, 0);
   auto& N = Target->Notifies.AddDefaulted_GetRef(); N.NotifyName = TEXT("AssetDocument.NotifyState"); N.Guid = FGuid::NewGuid(); N.TrackIndex = 1;
@@ -173,7 +176,11 @@ FAssetDocumentMutationIntent Intent(bool States, bool Empty, bool InvalidPropert
   auto Item = Object(); UClass* Class = States ? UAnimNotifyState_TimedParticleEffect::StaticClass() : UAnimNotify_PlaySound::StaticClass();
   Field(Item, TEXT("class"), Text(Class->GetPathName())); auto Properties = Object();
   if (InvalidProperty) Field(Properties, TEXT("DefinitelyNotAnAdmittedProperty"), Number(7));
-  Field(Item, TEXT("properties"), MoveTemp(Properties)); Field(Row, TEXT("object"), MoveTemp(Item)); Rows.Elements.Add(MoveTemp(Row));
+  Field(Item, TEXT("properties"), MoveTemp(Properties)); Field(Row, TEXT("object"), MoveTemp(Item));
+  Field(Row, TEXT("trigger"), Object());
+  auto Link = Object(); Field(Link, TEXT("method"), Integer(0)); Field(Link, TEXT("slot_name"), Null());
+  if (States) { Field(Link, TEXT("end_method"), Integer(0)); Field(Link, TEXT("end_slot_name"), Null()); }
+  Field(Row, TEXT("link"), MoveTemp(Link)); Rows.Elements.Add(MoveTemp(Row));
   if (!InvalidProperty) { auto Later = Rows.Elements[0]; Later.Elements[0] = Number(.4); Rows.Elements.Add(MoveTemp(Later)); }
  }
  Field(I.Intent, States ? TEXT("notify_states") : TEXT("notifies"), MoveTemp(Rows)); return I;
@@ -240,7 +247,9 @@ bool FMontageNotifyOwnerReplacementTest::RunTest(const FString&)
   TArray<TWeakObjectPtr<UObject>> NewObjects; TArray<UObject*> Children; GetObjectsWithOuter(F.Target.Get(), Children, AssetDocumentObjects::DirectOnly);
   for (auto* Child : Children)
    if ((Child->IsA<UAnimNotify>() || Child->IsA<UAnimNotifyState>()) && Child != F.Before[0].Notify && Child != F.Before[1].NotifyStateClass) NewObjects.Emplace(Child);
-  TestEqual(TEXT("only nonempty replacement allocates its expected new objects"), NewObjects.Num(), Case == 1 ? 0 : (Case == 0 ? 2 : 1));
+  // The family's first row stands for its existing notify (same class, nearest in time) and reuses it; only the
+  // second row of the nonempty case needs a new object.
+  TestEqual(TEXT("only rows without an existing notify allocate"), NewObjects.Num(), Case == 0 ? 1 : 0);
   if (Case != 2)
   {
    if (TestEqual(TEXT("expected mixed published rows"), F.Target->Notifies.Num(), Case == 1 ? 1 : 3))
@@ -252,10 +261,20 @@ bool FMontageNotifyOwnerReplacementTest::RunTest(const FString&)
      TestTrue(TEXT("first new event has GUID"), F.Target->Notifies[0].Guid.IsValid());
      TestTrue(TEXT("second new event has GUID"), F.Target->Notifies[1].Guid.IsValid());
      TestNotEqual(TEXT("new events have distinct GUIDs"), F.Target->Notifies[0].Guid, F.Target->Notifies[1].Guid);
-     TestTrue(TEXT("early new event sorted before retained later row"), FMath::IsNearlyEqual(F.Target->Notifies[0].GetTime(), .1f));
-     UObject* New = States ? static_cast<UObject*>(F.Target->Notifies[0].NotifyStateClass.Get()) : static_cast<UObject*>(F.Target->Notifies[0].Notify.Get());
+     TestTrue(TEXT("early row sorted before retained later row"), FMath::IsNearlyEqual(F.Target->Notifies[0].GetTime(), .1f));
+     UObject* Moved = States ? static_cast<UObject*>(F.Target->Notifies[0].NotifyStateClass.Get()) : static_cast<UObject*>(F.Target->Notifies[0].Notify.Get());
+     UObject* Old = States ? static_cast<UObject*>(F.Before[1].NotifyStateClass.Get()) : static_cast<UObject*>(F.Before[0].Notify.Get());
+     TestTrue(TEXT("the existing notify is moved, not replaced"), Moved == Old);
+     TestEqual(TEXT("the moved notify keeps its guid"), F.Target->Notifies[0].Guid, F.Before[States ? 1 : 0].Guid);
+     TestEqual(TEXT("the moved notify keeps its name"), F.Target->Notifies[0].NotifyName, F.Before[States ? 1 : 0].NotifyName);
+     UObject* New = States ? static_cast<UObject*>(F.Target->Notifies[1].NotifyStateClass.Get()) : static_cast<UObject*>(F.Target->Notifies[1].Notify.Get());
      if (TestNotNull(TEXT("new concrete notify object published"), New))
+     {
       TestEqual(TEXT("new object belongs to exact target"), New->GetOuter(), static_cast<UObject*>(F.Target.Get()));
+      TestTrue(TEXT("new object has an engine-style name"), New->GetName().StartsWith(New->GetClass()->GetName() + TEXT("_")));
+      TestEqual(TEXT("new notify named as the notify panel names it"), F.Target->Notifies[1].NotifyName,
+       FName(States ? TEXT("TimedParticleEffect") : TEXT("PlaySound")));
+     }
     }
    }
   }
@@ -275,8 +294,10 @@ bool FMontageNotifyOwnerCallbackRollbackTest::RunTest(const FString&)
  FFixture F; if (!TestTrue(TEXT("callback regression has actual mixed baseline"), F.Setup())) return false;
  FStagingTransaction Transaction; FResolver Resolver; Resolver.Token = Transaction.Token;
  auto Owner = CreateMontageNotifyRequestOwner(); auto Edit = Intent(false, false, false);
- // First new object rejects placement after configuring; second remains staged.
- Edit.Intent.Elements[0].Elements[0].Elements.Last().Elements[0] = Text(UAssetDocumentMontageNotifyCallbackTestObject::StaticClass()->GetPathName());
+ // Both rows name a class no existing notify has, so both stage new objects: the first rejects placement after
+ // configuring; the second remains staged. A row's object is its third field.
+ for (auto& Row : Edit.Intent.Elements[0].Elements)
+  Row.Elements[2].Elements[0] = Text(UAssetDocumentMontageNotifyCallbackTestObject::StaticClass()->GetPathName());
  FAssetDocumentRuntimeRequestDto Request; Request.RequestId = Transaction.Token.RequestId; Request.ExpectedRuntimeRevision = Transaction.Token.RuntimeRevision;
  Request.Operation = EAssetDocumentRuntimeOperation::Apply; Request.TargetAssetPath = F.Target->GetPathName(); Request.RequestedAssetClassPath = TEXT("/Script/Engine.AnimMontage");
  FAssetDocumentPreparedMutationBatch Batch;
@@ -375,9 +396,9 @@ bool FMontageProfileSnapshotTest::RunTest(const FString&)
  auto* Sound = CastChecked<UAnimNotify_PlaySound>(F.Target->Notifies[0].Notify.Get());
  auto Volume = [&](const FAssetDocumentPrimitiveOutcome& Out, double& Value)
  {
-  if (Out.Value.Elements.Num() != 7) return false;
+  if (Out.Value.Elements.Num() != 9) return false;
   const auto& Rows = Out.Value.Elements[5].Elements;
-  if (Rows.Num() != 1 || Rows[0].Elements.Num() != 3) return false;
+  if (Rows.Num() != 1 || Rows[0].Elements.Num() != 5 || Rows[0].ObjectKeys[2] != TEXT("object")) return false;
   const auto& Item = Rows[0].Elements[2];
   if (Item.Elements.Num() != 2) return false;
   const auto& Properties = Item.Elements[1];
@@ -392,8 +413,8 @@ bool FMontageProfileSnapshotTest::RunTest(const FString&)
  for (int32 Family : {5, 6})
  {
   const auto& Rows = Before.Value.Elements[Family].Elements;
-  if (TestEqual(TEXT("one actual row per managed family"), Rows.Num(), 1))
-   TestTrue(TEXT("actual managed event time observed"), FMath::IsNearlyEqual(float(Rows[0].Elements[0].NumberValue), F.Target->Notifies[Family - 5].GetTime()));
+  if (TestEqual(TEXT("one actual row per family"), Rows.Num(), 1))
+   TestTrue(TEXT("actual event time observed"), FMath::IsNearlyEqual(float(Rows[0].Elements[0].NumberValue), F.Target->Notifies[Family - 5].GetTime()));
  }
  Sound->VolumeMultiplier = 0.375f;
  Invoke.Phase = EAssetDocumentRuntimeRequestPhase::Verify;

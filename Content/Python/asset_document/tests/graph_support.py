@@ -28,6 +28,15 @@ RANDOM_BOOL = "K2:CallFunction:/Script/Engine.KismetMathLibrary:RandomBool"
 G_EVENT, G_UCS, G_FUNC = "A0000000000000000000000000000001", "A0000000000000000000000000000002", "A0000000000000000000000000000003"
 N_BEGIN, N_OVERLAP, N_TICK, N_BRANCH, N_PRINT = ("B00000000000000000000000000000%02d" % i for i in range(1, 6))
 N_ENTRY, N_RESULT = "D0000000000000000000000000000001", "D0000000000000000000000000000002"
+OVERLAP_EVENT = "K2:Event:/Script/Engine.Actor:ReceiveActorBeginOverlap"
+TICK_EVENT = "K2:Event:/Script/Engine.Actor:ReceiveTick"
+
+
+def ghost_removals(graph="UbergraphPages/EventGraph"):
+    """The plan briefs removing the fixture's ghost ActorBeginOverlap and Tick events, which a document that
+    does not list them deletes like any other unlisted node."""
+    return [("graph.node.remove", graph, {"node_guid": N_OVERLAP, "action_key": OVERLAP_EVENT}),
+            ("graph.node.remove", graph, {"node_guid": N_TICK, "action_key": TICK_EVENT})]
 
 
 def fixture(name: str):
@@ -51,6 +60,7 @@ def pin(name, direction, type_, default="", obj="", autogen=True, hidden=False):
 
 
 EXEC = ptype("exec")
+GHOST_COMMENT = "This node is disabled and will not be called.\nDrag off pins to build functionality."
 WILDCARD = ptype("wildcard")
 
 
@@ -65,7 +75,9 @@ def _captured(query, node_guid, *, keep_user_pins=False):
             if node["node_guid"] != node_guid:
                 continue
             node = deepcopy(node)
-            node["extras"].pop("ghost", None)
+            if node["extras"].pop("ghost", None):
+                node["comment"] = ""
+                node.pop("comment_bubble_visible", None)
             if node["enabled_state"] == "disabled":
                 node["enabled_state"] = "enabled"
             user = set(node["extras"].get("user_pins", ()))
@@ -85,6 +97,8 @@ TEMPLATES = {
     "K2:IfThenElse": fixture("graph.node.spawn.v1.k2_branch.json")["node"],
     PRINT: _captured("graph.query.v1.k2_branch.json", N_PRINT),
     BEGIN_PLAY: _captured("graph.query.v1.k2_empty_actor.json", N_BEGIN),
+    OVERLAP_EVENT: _captured("graph.query.v1.k2_empty_actor.json", N_OVERLAP),
+    TICK_EVENT: _captured("graph.query.v1.k2_empty_actor.json", N_TICK),
     "K2:FunctionEntry": _captured(SIGNATURE_QUERY, N_ENTRY),
     "K2:FunctionResult": _captured(SIGNATURE_QUERY, N_RESULT),
     "K2:Select": {**_template("K2:Select", None, True, pin("Option 0", "input", WILDCARD),
@@ -125,6 +139,9 @@ class FakeGraphContext:
         self.new_function_flags = {}
         # Action keys of nodes a new function comes with (an override's "Parent: <function>" call).
         self.new_function_placed = []
+        # The state a node of an action key containing this text is placed with, not set by the user (the engine
+        # places a Development Only function call as Development Only).
+        self.placed_states = {}
         self.finalize_failure = None
         # Runtime value budget emulation: page_size nodes per graph page (truncated=true),
         # too_large_above refuses queries whose node_limit is absent or larger (Graph.ResultTooLarge).
@@ -227,6 +244,9 @@ class FakeGraphContext:
         node.update(deepcopy({key: value for key, value in template.items() if key != "node_guid"}))
         node["node_guid"] = self._new_guid()
         node["position"] = position or {"x": 0, "y": 0}
+        for text, state in self.placed_states.items():
+            if text in node["action_key"]:
+                node["enabled_state"], node["enabled_state_user_set"] = state, False
         return node
 
     @staticmethod
@@ -303,10 +323,18 @@ class FakeGraphContext:
 
     def _graph_node_layout_set_v1(self, args):
         _, node = self._find(args["node_guid"])
+        if args.get("enabled_state") == "ghost" and not node["extras"].get("ghost"):
+            node["extras"]["ghost"] = True
+            node["enabled_state"], node["enabled_state_user_set"] = "disabled", False
+            node["comment"] = GHOST_COMMENT
         if "position" in args:
             node["position"] = args["position"]
         if "comment" in args:
             node["comment"] = args["comment"]
+        if "comment_bubble_visible" in args:
+            node["comment_bubble_visible"] = args["comment_bubble_visible"]
+        if "enabled_state" in args and args["enabled_state"] != "ghost":
+            node["enabled_state"], node["enabled_state_user_set"] = args["enabled_state"], True
         return ok({"schema_version": 1})
 
     def _graph_node_user_pins_set_v1(self, args):

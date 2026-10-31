@@ -19,6 +19,15 @@
 //                                as the editor compiles it with a warning).
 //   KeepsAuthoredIds   extract writes the document's node Ids and action spellings back (IfActive, K2:Min),
 //                                also after save and reload, and the next edit by those Ids changes the same nodes.
+//   ValidateClassPickLink  a class picked on a function input (SelectClass's A) does not hide its refused link:
+//                                Validate reports Graph.ConnectDisallowed, as Apply would.
+//   ConstFunctionReadOnlyReference  a member read in a const function into a by-reference input is the
+//                                Graph.ReadOnlyReference warning of Validate; a non-const function has none.
+//   GhostEvents        a new Actor Blueprint's placeholder events are extracted as Ghost nodes and applied back
+//                                unchanged; an omitted one is removed, the others stay placeholders; a new Blueprint
+//                                whose document lists its EventGraph has none.
+//   DuplicateKeepsIds  the copy of a duplicated Blueprint extracts the source's node Ids, and the source's
+//                                document applies to it without changes.
 
 #include "AssetDocumentModule.h"
 #include "AssetDocumentService.h"
@@ -37,6 +46,7 @@
 #include "Engine/StaticMeshSocket.h"
 #include "HAL/FileManager.h"
 #include "K2Node_EnumEquality.h"
+#include "K2Node_Event.h"
 #include "K2Node_VariableGet.h"
 #include "K2Node_VariableSet.h"
 #include "Misc/AutomationTest.h"
@@ -833,6 +843,202 @@ bool FAssetDocumentBlueprintAuthoringKeepsAuthoredIdsTest::RunTest(const FString
 	TestEqual(TEXT("Clamp's B changed"), FCString::Atod(*ClampB), 120.0);
 	IFileManager::Get().Delete(*Blueprint.SidecarPath, false, true);
 	TestAuthoredIds(*this, Fixture.Extract(Blueprint, TEXT("extract after edit")), TEXT("after edit"));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentBlueprintAuthoringValidateClassPickLinkTest,
+	"UEAssetDoc.Blueprint.Authoring.ValidateClassPickLink",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentBlueprintAuthoringValidateClassPickLinkTest::RunTest(const FString&)
+{
+	using namespace AssetDocumentBlueprintAuthoringTests;
+	FAuthoringFixture Fixture(*this);
+	const FAuthoredAsset& Blueprint = Fixture.Add(TEXT("BP_ClassPick"));
+	// SelectClass returns a Class of Object whatever class A holds; ApplyDamage's DamageTypeClass takes a Class
+	// of DamageType, so the editor refuses the link.
+	const FString Body = TEXT(R"JSON("ParentClass":"/Script/Engine.Actor",
+"UbergraphPages":[{"Name":"EventGraph","Nodes":[{"Id":"Begin","Action":"K2:BeginPlay"},
+ {"Id":"Pick","Action":"K2:CallFunction:/Script/Engine.KismetMathLibrary:SelectClass",
+  "PinOverrides":[{"Pin":"A","DefaultObject":"/Script/Engine.DamageType"}]},
+ {"Id":"Damage","Action":"K2:CallFunction:/Script/Engine.GameplayStatics:ApplyDamage"}],
+ "Links":[{"From":"Begin:then","To":"Damage:execute"},{"From":"Pick:ReturnValue","To":"Damage:DamageTypeClass"}]}])JSON");
+	const FAssetDocumentResult Result = Fixture.Validate(Fixture.Blueprint(Blueprint, TEXT("Create"), Body), TEXT("class pick"));
+	TestFalse(TEXT("Validate refuses the document"), Result.IsSuccess());
+	TestTrue(TEXT("the refused link is reported at its row"), HasDiagnostic(Result, TEXT("Graph.ConnectDisallowed"), TEXT("/Links/1"), TEXT("DamageTypeClass")));
+	TestNull(TEXT("Validate creates nothing"), Blueprint.Find());
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentBlueprintAuthoringConstFunctionReadOnlyReferenceTest,
+	"UEAssetDoc.Blueprint.Authoring.ConstFunctionReadOnlyReference",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentBlueprintAuthoringConstFunctionReadOnlyReferenceTest::RunTest(const FString&)
+{
+	using namespace AssetDocumentBlueprintAuthoringTests;
+	FAuthoringFixture Fixture(*this);
+	const FAuthoredAsset& Blueprint = Fixture.Add(TEXT("BP_ConstRead"));
+	// Vector_Normalize normalizes its by-reference A in place; Velocity is read-only inside a const function, which
+	// the compiler reports when the Blueprint is compiled.
+	const FString Body = TEXT(R"JSON("ParentClass":"/Script/Engine.Actor",
+"Variables":[{"Name":"Velocity","Type":"struct:/Script/CoreUObject.Vector"}],
+"FunctionGraphs":[{"Name":"Tidy","Signature":{"Const":%s},
+ "Nodes":[{"Id":"Get","Action":"K2:Get:Velocity"},{"Id":"Call","Action":"K2:CallFunction:/Script/Engine.KismetMathLibrary:Vector_Normalize"}],
+ "Links":[{"From":"Entry:then","To":"Call:execute"},{"From":"Get:Velocity","To":"Call:A"}]}])JSON");
+	const FAssetDocumentResult Const = Fixture.Validate(Fixture.Blueprint(Blueprint, TEXT("Create"), Body.Replace(TEXT("%s"), TEXT("true"))), TEXT("const"));
+	TestTrue(TEXT("const: Validate passes"), Const.IsSuccess());
+	TestTrue(TEXT("const: the read-only member into the by-reference input is warned at its link"),
+		HasDiagnostic(Const, TEXT("Graph.ReadOnlyReference"), TEXT("/FunctionGraphs/0/Links/1")));
+	const FAssetDocumentResult Mutable = Fixture.Validate(Fixture.Blueprint(Blueprint, TEXT("Create"), Body.Replace(TEXT("%s"), TEXT("false"))), TEXT("not const"));
+	TestTrue(TEXT("not const: Validate passes"), Mutable.IsSuccess());
+	TestFalse(TEXT("not const: no warning"), HasDiagnostic(Mutable, TEXT("Graph.ReadOnlyReference"), TEXT("")));
+	return !HasAnyErrors();
+}
+
+namespace AssetDocumentBlueprintAuthoringTests
+{
+TArray<TSharedPtr<FJsonValue>>* EventGraphNodes(const TSharedPtr<FJsonObject>& Document)
+{
+	const TSharedPtr<FJsonObject>* Body = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* Pages = nullptr;
+	if (!Document.IsValid() || !Document->TryGetObjectField(TEXT("Body"), Body) || !(*Body)->TryGetArrayField(TEXT("UbergraphPages"), Pages))
+	{
+		return nullptr;
+	}
+	for (const TSharedPtr<FJsonValue>& Page : *Pages)
+	{
+		const TSharedPtr<FJsonObject> Graph = Page->AsObject();
+		const TArray<TSharedPtr<FJsonValue>>* Nodes = nullptr;
+		if (Graph.IsValid() && Graph->GetStringField(TEXT("Name")) == TEXT("EventGraph") && Graph->TryGetArrayField(TEXT("Nodes"), Nodes))
+		{
+			return const_cast<TArray<TSharedPtr<FJsonValue>>*>(Nodes);
+		}
+	}
+	return nullptr;
+}
+
+// The EventGraph's nodes and how many of them are the editor's placeholder (ghost) nodes.
+void CountEventNodes(const FAuthoredAsset& Asset, int32& Nodes, int32& Ghosts)
+{
+	Nodes = Ghosts = -1;
+	UEdGraph* Graph = Asset.Blueprint() != nullptr ? FindGraph(*Asset.Blueprint(), TEXT("EventGraph")) : nullptr;
+	if (Graph != nullptr)
+	{
+		Nodes = Graph->Nodes.Num();
+		Ghosts = 0;
+		for (const UEdGraphNode* Node : Graph->Nodes)
+		{
+			Ghosts += Node != nullptr && Node->IsAutomaticallyPlacedGhostNode() ? 1 : 0;
+		}
+	}
+}
+} // namespace AssetDocumentBlueprintAuthoringTests
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentBlueprintAuthoringGhostEventsTest,
+	"UEAssetDoc.Blueprint.Authoring.GhostEvents",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentBlueprintAuthoringGhostEventsTest::RunTest(const FString&)
+{
+	using namespace AssetDocumentBlueprintAuthoringTests;
+	FAuthoringFixture Fixture(*this);
+	const FAuthoredAsset& Blueprint = Fixture.Add(TEXT("BP_Ghosts"));
+	// No EventGraph in the document: the editor places BeginPlay, ActorBeginOverlap and Tick as disabled placeholders.
+	if (!Fixture.ApplyOk(Blueprint, Fixture.Blueprint(Blueprint, TEXT("Create"), TEXT(R"JSON("ParentClass":"/Script/Engine.Actor")JSON")), TEXT("create")))
+	{
+		return false;
+	}
+	int32 Nodes = 0;
+	int32 Ghosts = 0;
+	CountEventNodes(Blueprint, Nodes, Ghosts);
+	TestEqual(TEXT("the editor placed three placeholder events"), Ghosts, 3);
+	IFileManager::Get().Delete(*Blueprint.SidecarPath, false, true);
+	const TSharedPtr<FJsonObject> Extracted = Fixture.Extract(Blueprint, TEXT("extract"));
+	TArray<TSharedPtr<FJsonValue>>* Rows = EventGraphNodes(Extracted);
+	if (!TestNotNull(TEXT("extract lists the EventGraph's nodes"), Rows))
+	{
+		return false;
+	}
+	TArray<FString> Ids;
+	for (const TSharedPtr<FJsonValue>& Row : *Rows)
+	{
+		const TSharedPtr<FJsonObject> Node = Row->AsObject();
+		bool bGhost = false;
+		Node->TryGetBoolField(TEXT("Ghost"), bGhost);
+		TestTrue(FString::Printf(TEXT("%s is marked Ghost"), *Node->GetStringField(TEXT("Id"))), bGhost);
+		TestTrue(FString::Printf(TEXT("%s has its Position"), *Node->GetStringField(TEXT("Id"))), Node->HasField(TEXT("Position")));
+		Ids.Add(Node->GetStringField(TEXT("Id")));
+	}
+	TestEqual(TEXT("the three placeholders are extracted"), FString::Join(Ids, TEXT(",")), FString(TEXT("BeginPlay,ActorBeginOverlap,Tick")));
+	if (!Fixture.ReapplyExtract(Blueprint, TEXT("reapply extract")))
+	{
+		return false;
+	}
+
+	// Leaving Tick out removes it; the other two stay placeholders.
+	Rows->RemoveAll([](const TSharedPtr<FJsonValue>& Row) { return Row->AsObject()->GetStringField(TEXT("Id")) == TEXT("Tick"); });
+	Extracted->SetStringField(TEXT("Action"), TEXT("Update"));
+	const FAssetDocumentResult Removed = Fixture.Apply(Blueprint, SerializeJson(Extracted), TEXT("omit Tick"));
+	TestTrue(TEXT("omitting a placeholder applies and changes the asset"), Removed.IsSuccess() && Removed.bSavedAsset);
+	CountEventNodes(Blueprint, Nodes, Ghosts);
+	TestEqual(TEXT("Tick is removed"), Nodes, 2);
+	TestEqual(TEXT("BeginPlay and ActorBeginOverlap stay placeholders"), Ghosts, 2);
+	IFileManager::Get().Delete(*Blueprint.SidecarPath, false, true);
+	Fixture.ReapplyExtract(Blueprint, TEXT("reapply after removal"));
+
+	// A new Blueprint whose document lists its EventGraph gets only the listed nodes.
+	const FAuthoredAsset& Listed = Fixture.Add(TEXT("BP_NoGhosts"));
+	const FString Body = TEXT(R"JSON("ParentClass":"/Script/Engine.Actor",
+"UbergraphPages":[{"Name":"EventGraph","Nodes":[{"Id":"Begin","Action":"K2:BeginPlay"},
+ {"Id":"Say","Action":"K2:CallFunction:/Script/Engine.KismetSystemLibrary:PrintString"}],
+ "Links":[{"From":"Begin:then","To":"Say:execute"}]}])JSON");
+	if (!Fixture.ValidateApplyReapply(Listed, Fixture.Blueprint(Listed, TEXT("Create"), Body), TEXT("listed EventGraph")))
+	{
+		return false;
+	}
+	CountEventNodes(Listed, Nodes, Ghosts);
+	TestEqual(TEXT("listed EventGraph: two nodes"), Nodes, 2);
+	TestEqual(TEXT("listed EventGraph: no placeholders"), Ghosts, 0);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentBlueprintAuthoringDuplicateKeepsIdsTest,
+	"UEAssetDoc.Blueprint.Authoring.DuplicateKeepsIds",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FAssetDocumentBlueprintAuthoringDuplicateKeepsIdsTest::RunTest(const FString&)
+{
+	using namespace AssetDocumentBlueprintAuthoringTests;
+	FAuthoringFixture Fixture(*this);
+	const FAuthoredAsset& Source = Fixture.Add(TEXT("BP_DupSource"));
+	const FAuthoredAsset& Copy = Fixture.Add(TEXT("BP_DupCopy"));
+	// Ids unlike the names extract would give the nodes (BeginPlay, PrintString).
+	const FString Body = TEXT(R"JSON("ParentClass":"/Script/Engine.Actor",
+"UbergraphPages":[{"Name":"EventGraph","Nodes":[{"Id":"Start","Action":"K2:BeginPlay"},
+ {"Id":"Say","Action":"K2:CallFunction:/Script/Engine.KismetSystemLibrary:PrintString","PinOverrides":[{"Pin":"InString","DefaultValue":"Hi"}]}],
+ "Links":[{"From":"Start:then","To":"Say:execute"}]}])JSON");
+	if (!Fixture.ApplyOk(Source, Fixture.Blueprint(Source, TEXT("Create"), Body), TEXT("source")))
+	{
+		return false;
+	}
+	FAssetDocumentDuplicateRequest Request;
+	Request.Source = Source.ObjectPath;
+	Request.Target = Copy.PackageName;
+	const FAssetDocumentResult Duplicated = FAssetDocumentModule::Get().GetService().Duplicate(Request);
+	Fixture.Report(TEXT("duplicate"), Duplicated);
+	if (!TestTrue(TEXT("duplicate succeeds"), Duplicated.IsSuccess()) || !TestNotNull(TEXT("copy"), Copy.Blueprint()))
+	{
+		return false;
+	}
+	IFileManager::Get().Delete(*Copy.SidecarPath, false, true);
+	TMap<FString, FString> Nodes;
+	TSet<FString> Links;
+	ReadEventGraph(Fixture.Extract(Copy, TEXT("extract copy")), Nodes, Links);
+	TestEqual(TEXT("the copy's BeginPlay keeps Id Start"), Nodes.FindRef(TEXT("Start")), FString(TEXT("K2:BeginPlay")));
+	TestTrue(TEXT("the copy's PrintString keeps Id Say"), Nodes.Contains(TEXT("Say")));
+	TestEqual(TEXT("two nodes"), Nodes.Num(), 2);
+	TestTrue(TEXT("links name the source's Ids"), Links.Contains(TEXT("Start:then>Say:execute")));
+	// The source's document names the copy's nodes: applying it to the copy changes nothing.
+	IFileManager::Get().Delete(*Copy.SidecarPath, false, true);
+	const FAssetDocumentResult Again = Fixture.Apply(Copy, Fixture.Blueprint(Copy, TEXT("Update"), Body), TEXT("source document on the copy"));
+	TestTrue(TEXT("the source's document applies to the copy without changes"), Again.IsSuccess() && !Again.bSavedAsset);
 	return !HasAnyErrors();
 }
 

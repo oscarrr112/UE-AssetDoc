@@ -47,6 +47,8 @@ from asset_document.profiles.blackboard_data import (
 from asset_document.meta import DocumentAction, ProfileMeta
 from asset_document import inspect_summary as inspect_outline
 from asset_document.read_only_extract import extract_document, inspect_live, is_live_inspect_path
+from asset_document import class_routing, markers, tolerance
+from asset_document.diagnostics import collecting_read_warnings
 from asset_document.registry import FrozenProfileRegistry, ProfileRegistryBuilder
 from asset_document.regions.target_lifecycle import GENERIC_FACTORY_LIFECYCLE
 from asset_document.regions.primitive_catalog import (
@@ -102,7 +104,9 @@ def _clear_behavior_tree_expected():
 
 
 def _behavior_tree_expected_identity(request):
-    canonical = BehaviorTreeProfile().canonicalize(request.canonical_document)
+    # The request's authored rules were settled by its Preflight; the identity only names the document.
+    with tolerance.settled():
+        canonical = BehaviorTreeProfile().canonicalize(request.canonical_document)
     return _relay_identity(request) + (_evidence(canonical)[1],)
 
 
@@ -526,6 +530,17 @@ def _apply(
     )
 
 
+def _adopt_former_properties(document, actual):
+    """``document`` with each marker of its Properties that a read gave before the value's type had a document form
+    replaced by the value the asset holds there (``markers.adopt_former``): the apply keeps that value."""
+    if type(document) is not dict or type(actual) is not dict:
+        return document
+    properties, live = document.get("Properties"), actual.get("Properties")
+    if type(properties) is not dict or type(live) is not dict:
+        return document
+    return {**document, "Properties": markers.adopt_former(properties, live)}
+
+
 def _comparison_projection(value: dict) -> dict:
     return {
         "Target": value["Target"],
@@ -607,6 +622,11 @@ def _verify(
             include_defaults=True,
         )
     actual = profile.canonicalize(extracted)
+    # Marker text names objects inside the asset by the target's path on both sides (the document may come from
+    # before a move).
+    document = markers.rebase(document, request.target_asset_path)
+    actual = markers.rebase(actual, request.target_asset_path)
+    document = _adopt_former_properties(document, actual)
     if _is_blackboard_profile(profile):
         codec = DocumentCodec()
         expected_projection = codec.decode(codec.encode(document))
@@ -856,29 +876,40 @@ def _read_only_result(
     context: GenericPrimitiveContext,
 ) -> RuntimeResultDto:
     authored = None
+    findings = []
     if request.operation is RuntimeOperation.DIFF:
         # An invalid authored document keeps its public diagnostic even when a
         # Create document has no target available for extraction, and Diff
         # rejects what Apply would reject.
-        authored = profile.canonicalize(request.canonical_document)
-        if _is_behavior_tree_profile(profile):
-            profile.validate(authored, context=context)
-        elif type(profile) is GenericProfileCandidate:
-            profile.validate_authored_properties(request.canonical_document, context)
+        with tolerance.authoring() as findings:
+            authored = profile.canonicalize(request.canonical_document)
+            if _is_behavior_tree_profile(profile):
+                profile.validate(authored, context=context)
+            elif type(profile) is GenericProfileCandidate:
+                profile.validate_authored_properties(request.canonical_document, context)
     try:
-        extracted = extract_document(
-            _read_only_target(request), lambda: _extract_existing(request, profile, context), profile.canonicalize,
-            read_only=request.operation is RuntimeOperation.EXTRACT)
+        with collecting_read_warnings() as warnings:
+            extracted = extract_document(
+                _read_only_target(request), lambda: _extract_existing(request, profile, context), profile.canonicalize,
+                read_only=request.operation is RuntimeOperation.EXTRACT)
     except AssetDocumentContractError as error:
         if request.operation is not RuntimeOperation.DIFF or error.diagnostic.code not in _TARGET_MISSING_CODES:
             raise
+        tolerance.settle(findings, request.canonical_document, None)
         return _evidence_result(request, revision, _would_create_diff(authored))
     if request.operation is RuntimeOperation.EXTRACT:
-        return _evidence_result(request, revision, extracted)
-    if _is_behavior_tree_profile(profile):
-        return _evidence_result(request, revision, _public_diff_payload(profile.diff_payload(
-            authored, extracted, context=context, validated=True)))
-    differences = profile.diff(authored, extracted)
+        return _evidence_result(request, revision, extracted, tuple(warnings))
+    tolerance.settle(findings, request.canonical_document, extracted)
+    # Marker text names objects inside the asset by the target's path on both sides (the document may come from
+    # before a move).
+    authored = markers.rebase(authored, request.target_asset_path)
+    extracted = markers.rebase(extracted, request.target_asset_path)
+    authored = _adopt_former_properties(authored, extracted)
+    with tolerance.settled():
+        if _is_behavior_tree_profile(profile):
+            return _evidence_result(request, revision, _public_diff_payload(profile.diff_payload(
+                authored, extracted, context=context, validated=True)))
+        differences = profile.diff(authored, extracted)
     return _evidence_result(
         request,
         revision,
@@ -975,7 +1006,9 @@ def summarized(handler, request: RuntimeRequestDto, inspected):
 
 def _inspect_mode(request: RuntimeRequestDto) -> str:
     options = _inspect_options(request)
-    if request.requested_profile_class_path != "":
+    # The only binding an Inspect carries is the native route's choice of an ancestor's profile (class_routing).
+    profile_class = request.requested_profile_class_path
+    if profile_class != "" and class_routing.routed_class(profile_class) != request.requested_asset_class_path:
         raise contract_error(
             "/RequestedProfileClassPath",
             "GenericRuntime.InvalidNativeProjection",
@@ -1088,11 +1121,36 @@ def _mutating_operation_result(request: RuntimeRequestDto, revision: int, phase:
         if _is_blackboard_profile(profile) and phase is RuntimePhase.APPLY
         else None
     )
-    canonical = profile.canonicalize(request.canonical_document)
-    if phase is RuntimePhase.VALIDATE:
-        if _is_behavior_tree_profile(profile):
+    with tolerance.authoring() as findings:
+        canonical = profile.canonicalize(request.canonical_document)
+        if phase is RuntimePhase.VALIDATE and _is_behavior_tree_profile(profile):
             profile.validate(canonical, context=context)
+    if phase is RuntimePhase.VALIDATE:
+        # No read of the asset here: authored-rule findings are settled by the first phase that reads it.
         return _evidence_result(request, revision, canonical)
+    # Preflight settles the findings before anything changes (Apply and Repair of the same request follow it, and
+    # some readers are not allowed there); Verify settles against its own read.
+    # A Behavior Tree's Verify compares the whole tree it reads with the document, which holds every judged value; a
+    # fresh-load Verify may resolve its staged copy once only.
+    if findings and (phase is RuntimePhase.PREFLIGHT
+                     or (phase is RuntimePhase.VERIFY and not _is_behavior_tree_profile(profile))):
+        tolerance.settle(findings, request.canonical_document, _current_document(request, profile, context))
+    with tolerance.settled():
+        return _mutating_phase_result(request, revision, phase, profile, context, canonical, blackboard_relay)
+
+
+def _current_document(request: RuntimeRequestDto, profile: object, context: GenericPrimitiveContext) -> dict | None:
+    """The current asset's canonical document, read as it is (None: no such asset)."""
+    try:
+        return extract_document(_read_only_target(request), lambda: _extract_existing(request, profile, context),
+                                profile.canonicalize, read_only=False)
+    except AssetDocumentContractError as error:
+        if error.diagnostic.code not in _TARGET_MISSING_CODES:
+            raise
+        return None
+
+
+def _mutating_phase_result(request, revision, phase, profile, context, canonical, blackboard_relay):
     if phase is RuntimePhase.PREFLIGHT and _is_blackboard_profile(profile):
         exists, _, _ = _resolve_existing(
             context,
@@ -1178,7 +1236,8 @@ def dispatch(request, context):
     )
     try:
         typed_request = _decode_native_request(request)
-        return _project_native_result(_dispatch_typed(typed_request, context))
+        with markers.target(typed_request.target_asset_path):
+            return _project_native_result(_dispatch_typed(typed_request, context))
     except AssetDocumentContractError as error:
         _clear_behavior_tree_expected()
         return _project_native_failure(request_id, revision, error.diagnostic)

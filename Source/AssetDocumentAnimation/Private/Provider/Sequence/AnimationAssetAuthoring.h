@@ -4,6 +4,8 @@
 #include "Runtime/AssetDocumentAtomicTransaction.h"
 #include "Runtime/AssetDocumentPrimitiveProvider.h"
 
+class UAnimSequenceBase;
+
 // Authoring surfaces of a UAnimSequenceBase-derived asset that a human edits in
 // the sequence editor: frame data, float curves, notify tracks, notifies, notify
 // states, sync markers, preview mesh, hard object references, metadata and asset
@@ -22,6 +24,14 @@ bool IsAdmittedClassPath(FStringView ClassPath);
 
 FAssetDocumentPrimitiveDescriptor MakeAnimationAssetAuthoringSnapshotDescriptor();
 FAssetDocumentPrimitiveDescriptor MakeAnimationAssetAuthoringEditDescriptor();
+
+// The timeline of any UAnimSequenceBase (an Anim Composite included): the float curves, notify tracks, notifies and
+// notify states, in the snapshot's form ("curves", "notify_tracks", "notifies", "notify_states").
+bool CaptureAnimationAssetTimeline(UAnimSequenceBase& Asset, FAssetDocumentRuntimeValueDto& Out,
+ TArray<FAssetDocumentRuntimeDiagnostic>& Diagnostics);
+// Applies an authoring intent that carries only those four sections (any other section is refused), with the same
+// checks and editor calls as the sequence edit. The caller owns the transaction.
+FAssetDocumentContractValidationResult ApplyAnimationAssetTimeline(UAnimSequenceBase& Asset, const FAssetDocumentRuntimeValueDto& Intent);
 
 // Dispatch for the request-bound Animation owner. ExpectedTargetPath is the
 // bound request's exact target; any other object is rejected.

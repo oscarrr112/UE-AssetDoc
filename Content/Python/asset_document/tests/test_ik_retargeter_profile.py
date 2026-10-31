@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import unittest
 
-from asset_document.diagnostics import AssetDocumentContractError
+from asset_document.diagnostics import AssetDocumentContractError, collecting_read_warnings
 from asset_document.profiles import ik_retargeter as rtg
 from asset_document.profiles import ik_retargeter_apply as plan
 
@@ -106,6 +106,32 @@ class AssembleTests(unittest.TestCase):
     def test_cleared_preview_mesh_is_null(self):
         side = rtg._side({"ik_rig": TARGET, "preview_mesh": "", "rig_mesh": MESH})
         self.assertEqual(side, {"IKRig": TARGET, "PreviewMesh": None})
+
+
+class ProfileTests(unittest.TestCase):
+    def _facts(self, current):
+        records = _records()
+        records[0] = dict(records[0], profiles=["Run", "Walk"], current_profile=current)
+        records.append({"kind": "profile", "name": "Run", "overrides": [
+            {"op": "FK Chains", "type": "IKRetargetFKChainsOpSettings", "settings": {"Enabled": False}},
+            {"type": "IKRetargetPelvisMotionSettings"}], "target_pose": "A-Pose", "force_all_ik_off": True})
+        records.append({"kind": "profile", "name": "Walk", "overrides": []})
+        return rtg.assemble(records)[1]
+
+    def test_inspect_lists_each_profile_s_overrides(self):
+        self.assertEqual(self._facts("")["profiles"], {"Names": ["Run", "Walk"], "Current": "", "Overrides": {
+            "Run": {"Ops": [{"Op": "FK Chains", "SettingsType": "IKRetargetFKChainsOpSettings", "Settings": {"Enabled": False}},
+                            {"Op": "(every op with IKRetargetPelvisMotionSettings)",
+                             "SettingsType": "IKRetargetPelvisMotionSettings"}],
+                    "TargetPose": "A-Pose", "ForceAllIKOff": True},
+            "Walk": {"Ops": []}}})
+
+    def test_a_current_profile_warns_on_read(self):
+        with collecting_read_warnings() as warnings:
+            rtg.warn_profile(self._facts("Run"))
+            rtg.warn_profile(self._facts(""))
+        self.assertEqual([(item.code, item.path) for item in warnings], [("IKRetargeter.ProfileActive", "/Body")])
+        self.assertIn("'Run'", warnings[0].message)
 
 
 class DiffTests(unittest.TestCase):
@@ -206,6 +232,84 @@ class ValidateTests(unittest.TestCase):
                                                                         "Children": []}]}]}
         self.assertEqual(_code(lambda: rtg.validate_body(body)),
                          ("IKRetargeter.InvalidParentOp", "/Body/Ops/0/Children/0/Children"))
+
+
+class UnloadableOpTests(unittest.TestCase):
+    MARKER = {"Name": "Unknown_5", "Type": None, "Unsupported": "The op's type does not load."}
+
+    def _live(self):
+        body, facts = rtg.assemble(_records() + [{"kind": "op", "index": 5, "entry": dict(self.MARKER)}])
+        return plan.Live(body, facts["sides"])
+
+    def test_an_op_whose_type_does_not_load_is_kept(self):
+        live = self._live()
+        document = {"SchemaVersion": 1, "Class": rtg.CLASS, "Action": "Update", "Target": "/Game/Rigs/RTG_Test",
+                    "Properties": {}, "Body": {"Ops": live.body["Ops"]}}
+        body = rtg.canonicalize(document)["Body"]
+        plan.check_markers(body, live.body)
+        self.assertEqual(_ops(plan.phase_op_removals, body, live), [])
+        self.assertEqual(_ops(plan.phase_op_adds, body, live), [])
+        without = {"Ops": [entry for entry in body["Ops"] if entry["Name"] != "Unknown_5"]}
+        self.assertEqual(_ops(plan.phase_op_removals, without, live), [])
+
+    def test_an_edited_or_new_marker_is_refused(self):
+        live = self._live()
+        edited = {"Ops": live.body["Ops"][:-1] + [dict(self.MARKER, Unsupported="other")]}
+        self.assertEqual(_code(lambda: plan.check_markers(edited, live.body)),
+                         ("IKRetargeter.UnrepresentedValue", f"/Body/Ops/{len(edited['Ops']) - 1}"))
+        self.assertEqual(_code(lambda: plan.check_markers({"Ops": [dict(self.MARKER)]}, _live().body)),
+                         ("IKRetargeter.UnrepresentedValue", "/Body/Ops/0"))
+
+
+class UnrepresentedFieldTests(unittest.TestCase):
+    """An op settings or chain-row field the document has no form for reads in place as a marker."""
+    MARKER = {"Unsupported": "TFieldPath<FProperty> has no document form; AssetDoc keeps the value.", "Text": ""}
+
+    def _live(self):
+        records = _records()
+        records[1] = {"kind": "op", "index": 0, "entry": dict(records[1]["entry"],
+                                                              Settings={"TranslationAlpha": 0.9, "Filter": dict(self.MARKER)})}
+        records[3] = {"kind": "op_chains", "index": 1, "chains": {"Spine": {"RotationAlpha": 0.5, "Filter": dict(self.MARKER)}}}
+        body, facts = rtg.assemble(records)
+        return plan.Live(body, facts["sides"])
+
+    def test_the_extract_re_applies_as_a_no_op(self):
+        live = self._live()
+        body = rtg.canonicalize({"SchemaVersion": 1, "Class": rtg.CLASS, "Action": "Update", "Target": "/Game/R/RTG",
+                                 "Properties": {}, "Body": live.body})["Body"]
+        self.assertEqual(rtg.body_diff(body, live.body, exact=True), [])
+        plan.check_markers(body, live.body)
+        self.assertEqual(_ops(plan.phase_op_settings, body, live), [])
+        self.assertEqual(_ops(plan.phase_op_chains, body, live), [])
+
+    def test_an_omitted_marker_is_kept(self):
+        live = self._live()
+        body = self._live().body
+        del body["Ops"][0]["Settings"]["Filter"]
+        del body["Ops"][1]["Chains"]["Spine"]["Filter"]
+        self.assertEqual(rtg.body_diff(body, live.body, exact=False), [])
+        self.assertEqual(_ops(plan.phase_op_settings, body, live), [])
+        self.assertEqual(_ops(plan.phase_op_chains, body, live), [])
+
+    def test_an_edit_of_another_field_carries_the_marker_to_the_write(self):
+        live = self._live()
+        body = self._live().body
+        body["Ops"][1]["Chains"]["Spine"]["RotationAlpha"] = 0.25
+        plan.check_markers(body, live.body)
+        self.assertEqual(_ops(plan.phase_op_chains, body, live),
+                         [{"op": "op.chain_settings", "name": "FK Chains", "chain": "Spine",
+                           "settings": {"RotationAlpha": 0.25, "Filter": self.MARKER}}])
+
+    def test_an_edited_or_new_marker_is_refused(self):
+        live = self._live()
+        body = self._live().body
+        body["Ops"][0]["Settings"]["Filter"]["Text"] = "/Script/Engine.Actor:Tags"
+        self.assertEqual(_code(lambda: plan.check_markers(body, live.body)),
+                         ("IKRetargeter.UnrepresentedValue", "/Body/Ops/0/Settings/Filter"))
+        body = self._live().body
+        body["Ops"][1]["Chains"]["Head"] = {"Filter": dict(self.MARKER)}
+        self.assertEqual(_code(lambda: plan.check_markers(body, live.body)),
+                         ("IKRetargeter.UnrepresentedValue", "/Body/Ops/1/Chains/Head/Filter"))
 
 
 class PlanTests(unittest.TestCase):

@@ -48,11 +48,21 @@ bool IsEditableField(const FProperty& Property);
 // the codec cannot represent.
 bool EncodeField(const FProperty& Property, const void* Container, FValue& OutValue, FString& OutError);
 
+// The read of a value the codec has no form for (a TFieldPath, a TOptional, a delegate, ...): the marker
+// {"Unsupported": "<C++ type> has no document form; AssetDoc keeps the value.", "Text": <export text>}. A write
+// keeps the stored value where a document leaves the marker as read or omits it.
+FValue MakeUnrepresentedMarker(const FProperty& Property, const void* ValuePtr);
+// The field's typed value, or its marker when the codec cannot represent it (EncodeField fails).
+FValue EncodeFieldOrMarker(const FProperty& Property, const void* Container);
+// An object whose "Unsupported" is a string (a marker), and a value with a marker anywhere inside.
+bool IsMarker(const FValue& Value);
+bool HoldsMarker(const FValue& Value);
+
 // The editable fields of Struct whose value in Value differs from Defaults (both instances of Struct), in
-// declaration order, as one document object; Skip filters out fields owned by other document keys.
-bool EncodeSparse(const UStruct& Struct, const void* Value, const void* Defaults, FValue& OutObject, FString& OutError,
-	TFunctionRef<bool(const FProperty&)> Skip);
-bool EncodeSparse(const UStruct& Struct, const void* Value, const void* Defaults, FValue& OutObject, FString& OutError);
+// declaration order, as one document object; Skip filters out fields owned by other document keys. A field the
+// codec cannot represent reads as its marker (MakeUnrepresentedMarker), so the read never fails on one field.
+FValue EncodeSparse(const UStruct& Struct, const void* Value, const void* Defaults, TFunctionRef<bool(const FProperty&)> Skip);
+FValue EncodeSparse(const UStruct& Struct, const void* Value, const void* Defaults);
 
 // The editable fields of Struct with their values in Defaults (discovery: list_types rows); Skip as above.
 TArray<TSharedPtr<FJsonValue>> DescribeFields(const UStruct& Struct, const void* Defaults,

@@ -8,13 +8,18 @@ assets), so Validate asks ``graph.link.check.v1`` about the document's links ins
 those of the palette's template node of each end's action key, read on the existing target. Only ends
 whose pin types the document cannot change are judged: nodes of the Blueprint's own members (their
 types may change in the same document), nodes whose pins the document shapes (user pins, pin types,
-class picks, properties) and implicit nodes are left to Apply, which refuses the same link with the
-same message. Pin defaults (PinOverrides) get the check Apply makes before it sets them, on the template's
-pin.
+properties, a Format text) and implicit nodes are left to Apply, which refuses the same link with the
+same message. A class picked on a pin keeps the node's other pins (it may add pins, or retype an output
+the function declares as decided by it, which ``graph.link.check.v1`` leaves out). Pin defaults
+(PinOverrides) get the check Apply makes before it sets them, on the template's pin.
+
+A member variable read inside a const function is read-only, and the compiler refuses it on a by-reference
+input that is not const: Validate warns about such a link (Graph.ReadOnlyReference). This is a static check of the
+document's links, not a trial compile.
 """
 from __future__ import annotations
 
-from asset_document.diagnostics import AssetDocumentContractError, RuntimeDiagnostic, contract_errors
+from asset_document.diagnostics import AssetDocumentContractError, DiagnosticSeverity, RuntimeDiagnostic, contract_errors
 from asset_document.graphs.executor import LINK_CHECK, conversion_message, pin_default_message
 from asset_document.graphs.model import GraphDoc, NodeDoc
 from asset_document.graphs.pin_names import resolve_pin_name
@@ -40,12 +45,15 @@ def _fixed_pins(node: NodeDoc, key: str) -> bool:
 
 
 def _key(node: NodeDoc, path: str, *, self_class: str | None, target: str, skip=None) -> str | None:
-    if _shaped(node):
+    """The key of a link end whose template pins are the node's: not shaped by the document's settings."""
+    if node.action is None:
         return None
     try:
         key = K2_ADAPTER.normalize_action(node.action, self_class=self_class, path=path)
     except AssetDocumentContractError:
         return None  # Apply reports the key
+    if not _fixed_pins(node, key):
+        return None
     owner = f"{target}."
     return None if "#" in key or owner.casefold() in key.casefold() or (skip is not None and skip(key)) else key
 
@@ -103,7 +111,8 @@ def check_graphs(invoke, graphs: tuple[GraphDoc, ...], *, self_class: str | None
     """Every independent problem Apply would refuse in the document's graphs, read without editing: action keys
     that place no node (with suggestions), pin names a node's palette template does not have, links the
     editor refuses or makes only through a conversion node, and pin defaults the pin refuses (a literal on a
-    by-ref input). Returns RuntimeDiagnostics (empty: nothing found).
+    by-ref input), and warns about a read-only member passed by reference (Graph.ReadOnlyReference). Returns
+    RuntimeDiagnostics (empty: nothing found).
 
     ``invoke(primitive, values)`` calls ``graph.link.check.v1`` on a Blueprint (the target, or a transient
     Blueprint of the document's parent class for a new one); None skips the check. ``skip(key)``: keys the Profile
@@ -119,7 +128,7 @@ def check_graphs(invoke, graphs: tuple[GraphDoc, ...], *, self_class: str | None
     keys = sorted({key for _, _, key in nodes})
     links = checked_links(graphs, self_class=self_class, target=target, skip=skip)
     if not keys and not links:
-        return []
+        return _read_only_references(graphs, {}, self_class=self_class)
     templates, unresolved = {}, {}
     if keys:
         result = invoke(LINK_CHECK, {"describe": keys}) or {}
@@ -178,7 +187,68 @@ def check_graphs(invoke, graphs: tuple[GraphDoc, ...], *, self_class: str | None
                 out.append(RuntimeDiagnostic(f"{graph.path}/Links/{index}", "Graph.PinNotFound",
                                              f"Node '{node.id}' ({key}) has no pin '{end.pin}'. "
                                              f"Pins: {_pin_list(pins, direction)}."))
-    return out + conversions + _check_defaults(invoke, nodes, pins_of)
+    return (out + conversions + _check_defaults(invoke, nodes, pins_of)
+            + _read_only_references(graphs, pins_of, self_class=self_class))
+
+
+def _self_member(key: str | None, self_class: str) -> str | None:
+    """The variable a getter of the Blueprint's own member reads (not a function's local variable)."""
+    parts = key.split(":") if key else ()
+    return parts[3] if len(parts) == 4 and parts[:3] == ["K2", "VariableGet", self_class] else None
+
+
+def _writes_through(key: str | None, pin: str, pins_of: dict, signatures: dict, self_class: str) -> bool:
+    """The input is passed by reference and not const: from the palette template's pin, or for a function of the
+    Blueprint itself from the document's own signature of it."""
+    if key is None:
+        return False
+    if key in pins_of:
+        found = _template_pin(pins_of[key], pin, "input", key)
+        return found is not None and found.by_ref and not found.const
+    prefix = f"K2:CallFunction:{self_class}:"
+    signature = signatures.get(key[len(prefix):].casefold()) if key.startswith(prefix) else None
+    found = next((item for item in signature.inputs if item.name.casefold() == pin.casefold()), None) \
+        if signature is not None else None
+    return found is not None and found.type.is_ref and not found.type.is_const
+
+
+def _read_only_references(graphs: tuple[GraphDoc, ...], pins_of: dict, *, self_class: str | None) -> list:
+    """Graph.ReadOnlyReference warnings: in a function the document makes const, a getter of the Blueprint's own
+    member variable linked into a by-reference input that is not const. The compiler refuses the read-only value
+    there ("Cannot pass a read-only variable to a reference parameter")."""
+    if not self_class:
+        return []
+    signatures = {graph.name.casefold(): graph.signature for graph in graphs
+                  if graph.role == "function" and graph.signature is not None}
+    out = []
+    for root in graphs:
+        if root.role != "function" or root.signature is None or root.signature.flags.get("const") is not True:
+            continue
+        for graph in root.walk():
+            keys = {}
+            for node in graph.nodes:
+                try:
+                    keys[node.id] = K2_ADAPTER.normalize_action(node.action, self_class=self_class,
+                                                                path=graph.node_path(node.id)) if node.action else None
+                except AssetDocumentContractError:
+                    keys[node.id] = None
+            # A getter whose target pin is linked reads another object's variable.
+            targeted = {end.node for link in graph.links for end in (link.from_, link.to)
+                        if end.pin.casefold() in ("self", "target")}
+            for index, link in enumerate(graph.links):
+                for getter, other in ((link.from_, link.to), (link.to, link.from_)):
+                    member = _self_member(keys.get(getter.node), self_class)
+                    if (member is None or getter.node in targeted or getter.pin.casefold() != member.casefold()
+                            or not _writes_through(keys.get(other.node), other.pin, pins_of, signatures, self_class)):
+                        continue
+                    out.append(RuntimeDiagnostic(f"{graph.path}/Links/{index}", "Graph.ReadOnlyReference", (
+                        f"{getter} reads the member variable '{member}' inside the const function '{root.name}' and "
+                        f"passes it to {other}, a by-reference input: a const function's member variables are "
+                        f"read-only, so the Blueprint fails to compile (\"Cannot pass a read-only variable to a "
+                        f"reference parameter\"). Copy the value into a local variable first, or make the function "
+                        f"not const (Signature \"Const\": false)."), DiagnosticSeverity.WARNING))
+                    break
+    return out
 
 
 def _check_defaults(invoke, nodes: list, pins_of: dict) -> list:
@@ -222,7 +292,7 @@ def _template_names(request: dict, pins_of: dict) -> dict:
 
 
 class _TemplatePin:
-    __slots__ = ("name", "direction", "category", "display_name", "hidden")
+    __slots__ = ("name", "direction", "category", "display_name", "hidden", "by_ref", "const")
 
     def __init__(self, row: dict) -> None:
         self.name = str(row.get("name", ""))
@@ -230,10 +300,14 @@ class _TemplatePin:
         self.category = str(row.get("category", ""))
         self.display_name = str(row.get("display_name", ""))
         self.hidden = bool(row.get("hidden", False))
+        self.by_ref = row.get("by_ref") is True
+        self.const = row.get("const") is True
 
 
-def check_links(invoke, graphs: tuple[GraphDoc, ...], *, self_class: str | None, target: str, skip=None) -> None:
-    """Raise every problem ``check_graphs`` finds (the first leads)."""
+def check_links(invoke, graphs: tuple[GraphDoc, ...], *, self_class: str | None, target: str, skip=None) -> list:
+    """Raise every error ``check_graphs`` finds (the first leads); return its warnings."""
     found = check_graphs(invoke, graphs, self_class=self_class, target=target, skip=skip)
-    if found:
-        raise contract_errors(found)
+    errors = [item for item in found if item.severity is DiagnosticSeverity.ERROR]
+    if errors:
+        raise contract_errors(errors)
+    return [item for item in found if item.severity is not DiagnosticSeverity.ERROR]

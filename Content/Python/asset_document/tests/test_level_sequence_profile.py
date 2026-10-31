@@ -11,7 +11,7 @@ import copy
 import unittest
 from unittest import mock
 
-from asset_document.diagnostics import AssetDocumentContractError
+from asset_document.diagnostics import AssetDocumentContractError, DiagnosticSeverity, collecting_read_warnings, contract_error
 from asset_document.profiles import level_sequence as seq
 from asset_document.profiles import level_sequence_apply as apply_module
 from asset_document.profiles import sequencer_director as director
@@ -777,6 +777,312 @@ class DirectorTests(unittest.TestCase):
         written.assert_not_called()
         self.assertEqual(batches[-1], [{"op": "director.remove"}])
         self.assertEqual(batches[0][0], {"op": "binding.remove", "guid": DOOR})
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Content the document has no form for: markers, their read warnings, keep and refuse on apply
+# ---------------------------------------------------------------------------------------------------------------------
+MARKED = {"Unsupported": "Curve (FFooCurve) has no document form; AssetDoc keeps the value.", "Text": "(A=1)"}
+FADE = "/Body/Tracks/1"
+
+
+def _marked_records():
+    """The records with a global Fade track whose section holds a value marker and procedural channel overrides, and
+    the warnings the read gives for them and for an orphaned binding and a Control Rig track."""
+    records = _records()
+    records[-1:-1] = [
+        {"kind": "track", "binding": "", "entry": {"Type": "Fade"}},
+        {"kind": "section", "entry": {"Start": 0, "End": 30, "Properties": {"Curve": MARKED, "Speed": 2},
+                                      "ChannelOverrides": dict(seq.CHANNEL_OVERRIDES),
+                                      "Channels": {"Value": {"Default": 1}}}},
+        {"kind": "warning", "code": "Sequencer.UnsupportedValue", "message": "Curve cannot be represented",
+         "path": f"{FADE}/Sections/0/Properties/Curve"},
+        {"kind": "warning", "code": "Sequencer.UnsupportedChannelOverride", "message": "overrides kept",
+         "path": f"{FADE}/Sections/0/ChannelOverrides"},
+        {"kind": "warning", "code": "Sequencer.UnsupportedBindingShape", "message": "Object binding X is not part of the document",
+         "path": "/Body/Bindings"},
+        {"kind": "warning", "code": "Sequencer.ControlRigTrack", "message": "rig", "path": "/Body/Bindings/0/Tracks/0"},
+    ]
+    return records
+
+
+def _marked_live():
+    records = _marked_records()
+    objects = iter(f"Object_{index}" for index in range(100))
+    for record in records:
+        if record["kind"] in ("track", "section"):
+            record["object"] = next(objects)
+    body, _ = seq.assemble(records, ids=True)
+    return body
+
+
+def _marked_body():
+    body, _ = seq.assemble(_marked_records())
+    return body
+
+
+def _all_ops(plan):
+    return _ops(plan.structure() + plan.content() + plan.finish())
+
+
+class MarkerTests(unittest.TestCase):
+    def test_extract_warns_each_marker_and_the_read_warnings(self):
+        body, facts = seq.assemble(_marked_records())
+        with mock.patch.object(seq, "read_body", return_value=(body, facts)), collecting_read_warnings() as warnings:
+            extracted, _ = seq.document_body(None, None, None, TARGET)
+        self.assertEqual(extracted["Tracks"][1]["Sections"][0]["Properties"]["Curve"], MARKED)
+        found = {(item.code, item.path): item.message for item in warnings}
+        self.assertEqual(found, {
+            ("Sequencer.Unrepresented", f"{FADE}/Sections/0/Properties/Curve"): "Curve cannot be represented",
+            ("Sequencer.Unrepresented", f"{FADE}/Sections/0/ChannelOverrides"): "overrides kept",
+            ("Sequencer.UnsupportedBindingShape", "/Body/Bindings"): "Object binding X is not part of the document",
+            ("Sequencer.ControlRigTrack", "/Body/Bindings/0/Tracks/0"): "rig",
+            ("Sequencer.UnsupportedLocator", "/Body/Bindings/1"): "m"})
+        self.assertEqual({item.severity for item in warnings}, {DiagnosticSeverity.WARNING})
+
+    def test_a_marker_with_no_read_warning_uses_its_reason(self):
+        body = {"Settings": SETTINGS, "Tracks": [{"Type": "Fade", "Sections": [{"Properties": {"Warp": {
+            "Unsupported": "Warp: this kind of time warp has no document form; AssetDoc keeps the value.", "Text": "x"}}}]}]}
+        with collecting_read_warnings() as warnings:
+            seq.warn_read(body, {"warnings": []})
+        self.assertEqual([(item.code, item.path, item.message) for item in warnings],
+                         [("Sequencer.Unrepresented", "/Body/Tracks/0/Sections/0/Properties/Warp",
+                           "Warp: this kind of time warp has no document form; AssetDoc keeps the value.")])
+
+    def test_the_extract_compares_equal_and_plans_nothing(self):
+        live = seq.canonicalize(_document(_marked_body()))
+        self.assertEqual(seq.diff(seq.canonicalize(_document(_marked_body())), live, exact=True), ())
+        self.assertEqual(_all_ops(Plan_with(_marked_body(), _marked_live())), [])
+
+    def test_older_forms_read_as_the_current_markers(self):
+        body = _marked_body()
+        section = body["Tracks"][1]["Sections"][0]
+        del section["ChannelOverrides"]
+        section["Unsupported"] = "ChannelOverrides"
+        section["Properties"]["Curve"] = {"Unsupported": "(A=1)"}
+        canonical = seq.canonicalize(_document(body))
+        self.assertEqual(canonical["Body"]["Tracks"][1]["Sections"][0]["ChannelOverrides"], seq.CHANNEL_OVERRIDES)
+        self.assertNotIn("Unsupported", canonical["Body"]["Tracks"][1]["Sections"][0])
+        live = seq.canonicalize(_document(_marked_body()))
+        self.assertEqual(seq.diff(canonical, live, exact=True), ())
+        self.assertEqual(_all_ops(Plan_with(body, _marked_live())), [])
+
+    def test_omitted_markers_are_kept(self):
+        body = _marked_body()
+        section = body["Tracks"][1]["Sections"][0]
+        del section["ChannelOverrides"]
+        del section["Properties"]["Curve"]
+        live = seq.canonicalize(_document(_marked_body()))
+        self.assertEqual(seq.diff(seq.canonicalize(_document(body)), live, exact=True), ())
+        self.assertEqual(_all_ops(Plan_with(body, _marked_live())), [])
+        # An edit of the same section writes the markers back as they are (the content is kept).
+        section["End"] = 40
+        ops = _all_ops(Plan_with(body, _marked_live()))
+        self.assertEqual([op["op"] for op in ops], ["section.set"])
+        self.assertEqual(ops[0]["entry"]["Properties"], {"Curve": MARKED, "Speed": 2})
+        self.assertEqual(ops[0]["entry"]["ChannelOverrides"], seq.CHANNEL_OVERRIDES)
+        self.assertEqual(ops[0]["entry"]["End"], 40)
+
+    def test_an_edited_marker_is_refused(self):
+        cases = [
+            (lambda section: section["Properties"]["Curve"].update(Text="(A=2)"), f"{FADE}/Sections/0/Properties/Curve"),
+            (lambda section: section["Properties"]["Curve"].update(Unsupported="mine"), f"{FADE}/Sections/0/Properties/Curve"),
+            (lambda section: section["ChannelOverrides"].update(Unsupported="noise"), f"{FADE}/Sections/0/ChannelOverrides"),
+            (lambda section: section["Properties"].update(Speed=dict(MARKED)), f"{FADE}/Sections/0/Properties/Speed"),
+        ]
+        for edit, path in cases:
+            with self.subTest(path=path):
+                body = _marked_body()
+                edit(body["Tracks"][1]["Sections"][0])
+                self.assertTrue(seq.diff(seq.canonicalize(_document(body)), seq.canonicalize(_document(_marked_body())),
+                                         exact=False))
+                with self.assertRaises(AssetDocumentContractError) as raised:
+                    Plan_with(body, _marked_live())
+                self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                                 ("Sequencer.UnrepresentedValue", path))
+
+    def test_a_marker_in_a_new_entry_is_refused(self):
+        body = _marked_body()
+        body["Tracks"][1]["Sections"].append(copy.deepcopy(body["Tracks"][1]["Sections"][0]))
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            Plan_with(body, _marked_live())
+        self.assertEqual(raised.exception.diagnostic.code, "Sequencer.UnrepresentedValue")
+        self.assertIn(raised.exception.diagnostic.path, (f"{FADE}/Sections/1/Properties/Curve", f"{FADE}/Sections/1/ChannelOverrides"))
+
+    def test_channel_overrides_is_read_only(self):
+        body = _marked_body()
+        body["Tracks"][1]["Sections"][0]["ChannelOverrides"] = {"Location.X": "noise"}
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            seq.canonicalize(_document(body))
+        self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                         ("Sequencer.InvalidBody", f"{FADE}/Sections/0/ChannelOverrides"))
+
+    def test_settings_markers(self):
+        clock = {"Class": "/Script/Game.Clock", "Properties": {"Source": dict(MARKED)}}
+        live = _live()
+        live["Settings"] = dict(SETTINGS, Clock="Custom", CustomClock=clock)
+        body = _body()
+        body["Settings"] = dict(SETTINGS, Clock="Custom", CustomClock={"Class": "/Script/Game.Clock", "Properties": {}})
+        self.assertIsNone(apply_module.settings_op(body, live))
+        body["Settings"]["CustomClock"]["Properties"]["Source"] = dict(MARKED, Text="(A=3)")
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            apply_module.settings_op(body, live)
+        self.assertEqual(raised.exception.diagnostic.path, "/Body/Settings/CustomClock/Properties/Source")
+
+
+class ControlRigTests(unittest.TestCase):
+    RIG = "/Script/ControlRig.MovieSceneControlRigParameterTrack"
+
+    def _live(self):
+        live = _live()
+        live["Bindings"][1]["Tracks"].append({"Type": self.RIG, "_Object": "Rig_0", "Sections": [
+            {"_Object": "RigSection_0", "Start": 0, "End": 30, "Channels": {"Arm.X": {"Default": 1}}}]})
+        return live
+
+    def test_a_new_control_rig_track_is_refused(self):
+        body = _body()
+        body["Bindings"][1]["Tracks"].append({"Type": self.RIG, "Sections": [{"Start": 0, "End": 30}]})
+        plan = Plan_with(body, _live())
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            plan.structure()
+        self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                         ("Sequencer.TrackNotSupported", "/Body/Bindings/1/Tracks/1/Type"))
+
+    def test_an_existing_control_rig_track_reapplies_and_edits_around_it(self):
+        live = self._live()
+        body = _strip(live)
+        self.assertEqual(_all_ops(Plan_with(body, live)), [])
+        body["Markers"] = [{"Frame": 10, "Label": "Cue"}]
+        self.assertEqual([op["op"] for op in _all_ops(Plan_with(body, live))], ["markers.set"])
+
+
+SHOT = "/Script/MovieScene.MovieSceneShotMetaData"
+TAKE = "/Script/TakesCore.TakeMetaData"
+
+
+def _tagged_live():
+    """A live Body with binding tags, a possessable bound to a parent's spawnable, and two metadata objects."""
+    records = _records()
+    records[0] = dict(records[0], binding_tags={"Hero": [{"Binding": "Door"}, {"Binding": "Cam"}]},
+                      metadata={"Notes": "n", "Objects": [{"Class": SHOT, "Properties": {"FavoriteRating": 4}},
+                                                          {"Class": TAKE, "Properties": {"Slate": "A1"}}]})
+    records[3] = dict(records[3], entry=dict(records[3]["entry"], SpawnedBy={"Guid": CAMERA, "SequenceID": 7, "ParentIndex": 1}))
+    objects = iter(f"Object_{index}" for index in range(100))
+    for record in records:
+        if record["kind"] in ("track", "section"):
+            record["object"] = next(objects)
+    body, _ = seq.assemble(records, ids=True)
+    return body
+
+
+class TagsSpawnedByMetaDataTests(unittest.TestCase):
+    def test_extract_reapplies_unchanged(self):
+        live = _tagged_live()
+        body = _strip(live)
+        self.assertEqual(body["BindingTags"], {"Hero": [{"Binding": "Door"}, {"Binding": "Cam"}]})
+        self.assertEqual(body["Bindings"][1]["SpawnedBy"], {"Guid": CAMERA, "SequenceID": 7, "ParentIndex": 1})
+        document = seq.canonicalize(_document(body))
+        self.assertEqual(seq.diff(document, document, exact=True), ())
+        self.assertEqual(seq.body_diff(document["Body"], live, exact=True), [])
+        self.assertEqual(_all_ops(Plan_with(body, live)), [])
+
+    def test_binding_tags_are_a_complete_region(self):
+        live = _tagged_live()
+        body = _strip(live)
+        body["BindingTags"] = {"Hero": [{"Binding": "Door"}], "Cam": [{"Binding": "Cam"}], "Empty": []}
+        self.assertEqual(sorted(item.path for item in seq.body_diff(seq.canonicalize(_document(body))["Body"], live, False)),
+                         ["/Body/BindingTags/Cam", "/Body/BindingTags/Hero/1"])
+        ops = _all_ops(Plan_with(body, live))
+        self.assertEqual(ops, [{"op": "binding_tags.set", "tags": body["BindingTags"]}])
+        del body["BindingTags"]                               # omitted = kept
+        self.assertEqual(_all_ops(Plan_with(body, live)), [])
+        body["BindingTags"] = {}                              # listed empty = no tags
+        self.assertEqual(_all_ops(Plan_with(body, live)), [{"op": "binding_tags.set", "tags": {}}])
+
+    def test_binding_tags_are_validated(self):
+        for tags, path in (([], "/Body/BindingTags"), ({"Hero": {"Binding": "Door"}}, "/Body/BindingTags/Hero"),
+                           ({"Hero": ["Door"]}, "/Body/BindingTags/Hero/0")):
+            with self.assertRaises(AssetDocumentContractError) as raised:
+                seq.canonicalize(_document({"BindingTags": tags}))
+            self.assertEqual(raised.exception.diagnostic.path, path)
+
+    def test_spawned_by_omitted_is_kept_and_null_clears(self):
+        live = _tagged_live()
+        body = _strip(live)
+        del body["Bindings"][1]["SpawnedBy"]
+        self.assertEqual(seq.body_diff(seq.canonicalize(_document(body))["Body"], live, False), [])
+        self.assertEqual(_all_ops(Plan_with(body, live)), [])
+        body["Bindings"][1]["SpawnedBy"] = None
+        self.assertEqual([item.path for item in seq.body_diff(seq.canonicalize(_document(body))["Body"], live, False)],
+                         ["/Body/Bindings/1/SpawnedBy"])
+        ops = _all_ops(Plan_with(body, live))
+        self.assertEqual(ops, [{"op": "binding.set", "guid": DOOR, "entry": {"Bind": [], "SpawnedBy": None}}])
+        body["Bindings"][1]["SpawnedBy"] = {"Binding": "Cam"}
+        ops = _all_ops(Plan_with(body, live))
+        self.assertEqual(ops, [{"op": "binding.set", "guid": DOOR, "entry": {"Bind": [], "SpawnedBy": {"Binding": "Cam"}}}])
+        # A binding without one: null is no change.
+        body = _strip(live)
+        body["Bindings"][0]["Children"][0]["SpawnedBy"] = None
+        self.assertEqual(_all_ops(Plan_with(body, live)), [])
+
+    def test_spawned_by_omitted_is_not_written_with_another_entry_edit(self):
+        # The stored reference stays as it is: a path read before a rename in the same apply, or a spawnable deleted
+        # since, would no longer name it.
+        live = _tagged_live()
+        body = _strip(live)
+        del body["Bindings"][1]["SpawnedBy"]
+        body["Bindings"][1]["Tags"] = ["Lead"]
+        self.assertEqual(_all_ops(Plan_with(body, live)),
+                         [{"op": "binding.set", "guid": DOOR, "entry": {"Bind": [], "Tags": ["Lead"]}}])
+
+    def test_metadata_objects_pair_by_class_and_omitted_are_kept(self):
+        live = _tagged_live()
+        body = _strip(live)
+        body["MetaData"] = {"Notes": "n", "Objects": list(reversed(body["MetaData"]["Objects"]))}
+        self.assertEqual(seq.body_diff(seq.canonicalize(_document(body))["Body"], live, False), [])
+        self.assertEqual(_all_ops(Plan_with(body, live)), [])
+        body["MetaData"] = {"Notes": "n"}                     # Objects omitted = kept
+        self.assertEqual(_all_ops(Plan_with(body, live)), [])
+        body["MetaData"] = {"Notes": "n", "Objects": [{"Class": SHOT, "Properties": {"FavoriteRating": 5}}]}
+        changes = seq.body_diff(seq.canonicalize(_document(body))["Body"], live, False)
+        self.assertEqual([(item.path, item.kind) for item in changes],
+                         [("/Body/MetaData/Objects/0/Properties/FavoriteRating", seq.DiffKind.REPLACE),
+                          ("/Body/MetaData/Objects/1", seq.DiffKind.REMOVE)])
+        self.assertEqual(_all_ops(Plan_with(body, live)),
+                         [{"op": "metadata.set", "values": {"Objects": body["MetaData"]["Objects"]}}])
+
+    def test_metadata_objects_paths_are_in_document_order(self):
+        live = _tagged_live()
+        body = _strip(live)
+        take, shot = [dict(item) for item in reversed(body["MetaData"]["Objects"])]
+        take["Properties"] = {"Slate": "B2"}
+        body["MetaData"] = {"Notes": "n", "Objects": [take, shot]}
+        document = _document(body)
+        changes = seq.document_paths(seq.diff(seq.canonicalize(document), seq.canonicalize(_document(_strip(live))),
+                                              exact=False), document)
+        self.assertEqual([item.path for item in changes], ["/Body/MetaData/Objects/0/Properties/Slate"])
+        # Each object the document removes has its own index.
+        body["MetaData"] = {"Notes": "n", "Objects": []}
+        document = _document(body)
+        changes = seq.document_paths(seq.diff(seq.canonicalize(document), seq.canonicalize(_document(_strip(live))),
+                                              exact=False), document)
+        self.assertEqual(sorted(item.path for item in changes), ["/Body/MetaData/Objects/0", "/Body/MetaData/Objects/1"])
+        # A refusal of the apply at a sorted index names the document's entry.
+        document = _document(dict(body, MetaData={"Notes": "n", "Objects": [take, shot]}))
+
+        def refuse():
+            raise contract_error("/Body/MetaData/Objects/1/Properties/Slate", "Sequencer.UnrepresentedValue", "x")
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            seq.in_document_order(document, refuse)
+        self.assertEqual(raised.exception.diagnostic.path, "/Body/MetaData/Objects/0/Properties/Slate")
+
+    def test_metadata_objects_are_validated(self):
+        for objects, path in (([{"Properties": {}}], "/Body/MetaData/Objects/0/Class"),
+                              ([{"Class": SHOT}, {"Class": SHOT}], "/Body/MetaData/Objects/1/Class"),
+                              ([{"Class": SHOT, "Fields": {}}], "/Body/MetaData/Objects/0")):
+            with self.assertRaises(AssetDocumentContractError) as raised:
+                seq.canonicalize(_document({"MetaData": {"Objects": objects}}))
+            self.assertTrue(raised.exception.diagnostic.path.startswith(path), raised.exception.diagnostic.path)
 
 
 if __name__ == "__main__":

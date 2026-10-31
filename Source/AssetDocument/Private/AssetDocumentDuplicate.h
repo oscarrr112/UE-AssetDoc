@@ -20,7 +20,10 @@ bool IsReadOnlyContentPath(const FString& PackageName);
 // A map is copied with the external packages of its actors and objects (one file per actor; every
 // actor of a World Partition map that is not open is loaded first, as the editor's Save As does);
 // an open World Partition map is refused, as the Content Browser refuses it. A failure leaves no
-// asset, package or file behind.
+// asset, package or file behind. The AssetDocument metadata of the source's subobjects (the document
+// Id and authored Action of each graph node) is copied to the copy's subobjects of the same path, so
+// a document names the copy's nodes as it named the source's; the engine gives the copy's graph
+// nodes new NodeGuids.
 // Diagnostic codes: Duplicate.SourceNotFound, Duplicate.UnsupportedSource,
 // Duplicate.InvalidTarget, Duplicate.TargetExists, Duplicate.Failed, Duplicate.SaveFailed.
 FAssetDocumentResult DuplicateAsset(const FAssetDocumentDuplicateRequest& Request);

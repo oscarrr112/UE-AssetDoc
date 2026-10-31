@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 
+from asset_document import markers
 from asset_document.canonical.document_codec import DocumentCodec
 from asset_document.diagnostics import contract_error, primitive_error
 from asset_document.diff.canonical_diff import canonical_diff
@@ -150,6 +151,9 @@ def document_path(primitive_path):
         part = rest.pop(0)
         if part == "trigger":
             continue
+        if part in ("reuse", "reuse_index"):
+            # The kept object is chosen by the profile, not written by the author: report at the row.
+            break
         if part == "properties":
             out.append("Properties")
             out.extend(rest)
@@ -233,14 +237,23 @@ def create_target_context(document, context):
 def preflight(document, context):
     """Checks that need the live target; every write is snapshot-covered."""
     canonical = codec.canonical_body(document.get("Body", {}))
-    if "BoneTracks" not in canonical:
+    listed = [region for region in codec.READ_ONLY_REGIONS if region in canonical]
+    if not listed:
         return SNAPSHOT_COVERED
     exists, read = _resolve(context, document["Target"], ANIM_SEQUENCE_CLASS, "/Target")
-    live = read_snapshot(context, read)["bone_tracks"] if exists else []
-    if canonical["BoneTracks"] != live:
-        raise _error("/Body/BoneTracks", "BoneTracks is read-only (bone animation data comes from an import); "
-                     "omit it or give the current bone list.", "AnimSequence.ReadOnlyRegion")
+    live = codec.snapshot_to_document_parts(read_snapshot(context, read))[0] if exists else {}
+    for region in listed:
+        if not codec.region_matches(region, canonical[region], live.get(region, []), canonical, live):
+            raise _error(f"/Body/{region}", f"{region} is read-only ({_READ_ONLY_SOURCES[region]}); omit it or give it "
+                         "as extracted.", "AnimSequence.ReadOnlyRegion")
     return SNAPSHOT_COVERED
+
+
+_READ_ONLY_SOURCES = {
+    "BoneTracks": "bone animation data comes from an import",
+    "TransformCurves": "transform curves are keyed on the additive layer tracks in the Animation editor",
+    "Attributes": "animated bone attributes come from an import",
+}
 
 
 def _plain_fields_authored(canonical, properties):
@@ -256,7 +269,10 @@ def apply(document, read, mutable, context):
     if _plain_fields_authored(canonical, properties):
         admitted, batch = _admitted_batch(context, read)
         writable = {row.get("name") for row in admitted if type(row) is dict and row.get("writable") is True}
-    intent, fields = codec.lower(canonical, properties, writable)
+    reuse = None
+    if any(region in canonical for region in codec.REUSED_REGIONS):
+        reuse = codec.reuse_plan(canonical, read_snapshot(context, read) if read is not None else None)
+    intent, fields = codec.lower(canonical, properties, writable, reuse)
     for name in fields:
         if name not in writable:
             raise _error(region_path(name), f"'{name}' is not an admitted writable AnimSequence property.",
@@ -285,6 +301,8 @@ def apply(document, read, mutable, context):
 
 def extract(target, read, context):
     body, properties = codec.snapshot_to_document_parts(read_snapshot(context, read))
+    for region in codec.REUSED_REGIONS:
+        markers.warn_all(body[region], codec.PREFIX, f"/Body/{region}")
     return {"SchemaVersion": 1, "Target": target, "Class": ANIM_SEQUENCE_CLASS,
             "Action": DocumentAction.CREATE_OR_UPDATE.value, "Definitions": {}, "Properties": properties,
             "Body": body}
@@ -340,7 +358,7 @@ class AnimSequenceRuntimeProfile:
 
     def inspect_profile(self):
         return {"Class": ANIM_SEQUENCE_CLASS, "BodySections": list(codec.BODY_KEYS),
-                "ReadOnlySections": ["BoneTracks"]}
+                "ReadOnlySections": list(codec.READ_ONLY_REGIONS)}
 
     def create_template(self, target):
         return {"SchemaVersion": 1, "Target": _require_target(target), "Class": ANIM_SEQUENCE_CLASS,
@@ -358,7 +376,7 @@ class AnimSequenceRuntimeProfile:
                 "Required": ["SchemaVersion", "Target", "Class", "Action"],
                 "Properties": {"Body": {"type": "object", "keys": list(codec.BODY_KEYS),
                                         "settings": {region: list(fields) for region, fields in codec.REGION_FIELDS.items()},
-                                        "read_only": ["BoneTracks"]}}}
+                                        "read_only": list(codec.READ_ONLY_REGIONS)}}}
 
     def create_target_context(self, document, context):
         return create_target_context(canonicalize(document), context)

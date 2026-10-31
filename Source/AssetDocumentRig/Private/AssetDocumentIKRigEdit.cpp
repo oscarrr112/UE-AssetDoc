@@ -663,7 +663,7 @@ bool OpSolverSettings(FEdit& Edit, FReader& Op)
 	FInstancedStruct DefaultSolver(Edit.Controller.GetSolverStructAtIndex(Index)->GetScriptStruct());
 	const FIKRigSolverSettingsBase* Defaults = DefaultSolver.GetMutable<FIKRigSolverBase>().GetSolverSettings();
 	FStructWriteResult Written;
-	if (!WriteSettingsStruct(Op, TEXT("settings"), *Type, Settings, Defaults, Edit.Rig, [](const FProperty&) { return false; }, Written))
+	if (!WriteSettingsStruct(Op, TEXT("settings"), *Type, Settings, Defaults, Edit.Rig, TEXT("IKRig"), [](const FProperty&) { return false; }, Written))
 	{
 		return false;
 	}
@@ -692,7 +692,7 @@ bool OpGoalSettings(FEdit& Edit, FReader& Op)
 	}
 	const FStructInstance Defaults(Type);
 	FStructWriteResult Written;
-	if (!WriteSettingsStruct(Op, TEXT("settings"), *Type, Settings, Defaults.Get(), Edit.Rig, [](const FProperty&) { return false; }, Written))
+	if (!WriteSettingsStruct(Op, TEXT("settings"), *Type, Settings, Defaults.Get(), Edit.Rig, TEXT("IKRig"), [](const FProperty&) { return false; }, Written))
 	{
 		return false;
 	}
@@ -721,7 +721,7 @@ bool OpBoneSettings(FEdit& Edit, FReader& Op)
 	}
 	const FStructInstance Defaults(Type);
 	FStructWriteResult Written;
-	if (!WriteSettingsStruct(Op, TEXT("settings"), *Type, Settings, Defaults.Get(), Edit.Rig, [](const FProperty&) { return false; }, Written))
+	if (!WriteSettingsStruct(Op, TEXT("settings"), *Type, Settings, Defaults.Get(), Edit.Rig, TEXT("IKRig"), [](const FProperty&) { return false; }, Written))
 	{
 		return false;
 	}

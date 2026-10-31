@@ -1247,6 +1247,23 @@ class GenericRuntimeCutoverTests(unittest.TestCase):
         self.assertEqual(result["canonical_bytes"], CANONICAL_BYTES)
         self.assertEqual(result["semantic_hash"], SEMANTIC_HASH)
 
+    def test_extract_names_saved_state_without_document_form(self) -> None:
+        context = NativeContext(5)
+        queue_existing(context, exists=True)
+        queue_properties(context)
+        context.queue("editor.property.read_admitted.v1", outcome(value={"value": 7}))
+        context.queue("editor.property.inspect_evidence.v1", outcome(value={
+            "subject": {"kind": "live_asset", "exact_class_path": EXACT_CLASS, "asset_path": TARGET},
+            "omitted": ({"name": "Keys", "declaring_class": EXACT_CLASS, "ue_cpp_type": "TArray<float>"},
+                        {"name": "Bounds", "declaring_class": EXACT_CLASS, "ue_cpp_type": "FBox"})}))
+        result = bootstrap_module.dispatch(request({"include_defaults": True}, operation=6), context)
+        self.assertEqual(result["terminal_status"], 0, result["diagnostics"])
+        self.assertEqual(result["canonical_value"]["Properties"], {"Value": 7})
+        notes = [item for item in result["diagnostics"] if item["code"] == "Generic.OmittedSavedState"]
+        self.assertEqual(len(notes), 1, result["diagnostics"])
+        self.assertEqual(notes[0]["path"], "/Properties")
+        self.assertIn("Bounds, Keys", notes[0]["message"])
+
     def test_extract_and_diff_use_python_read_only_semantics(self) -> None:
         extracted, extract, asset_read, property_handle = dispatch_read_only_extract()
 
@@ -1268,10 +1285,14 @@ class GenericRuntimeCutoverTests(unittest.TestCase):
                 "editor.asset.resolve_existing.v1",
                 "editor.property.enumerate_admitted.v1",
                 "editor.property.read_admitted.v1",
+                # Extract also asks for saved state with no document form (an Info diagnostic; none queued here).
+                "editor.property.inspect_evidence.v1",
             ],
         )
+        self.assertEqual(extract.calls[-1][2]["mode"], "omitted_saved_state")
         self.assertIs(extract.calls[-1][3][0]["handle"], asset_read)
-        self.assertIs(extract.calls[-1][3][1]["handle"], property_handle)
+        self.assertIs(extract.calls[-2][3][0]["handle"], asset_read)
+        self.assertIs(extract.calls[-2][3][1]["handle"], property_handle)
 
         compared, diff = dispatch_read_only_diff()
 
@@ -1670,6 +1691,24 @@ class ExactProfileRuntimeTests(unittest.TestCase):
         self.assertEqual(result['terminal_status'], 0, result)
         self.assertNotIn('apply', handler.calls)
         self.assertEqual(context.calls, [])
+
+    def test_validate_checks_warnings_are_the_validate_result_diagnostics(self):
+        from asset_document.diagnostics import DiagnosticSeverity, RuntimeDiagnostic, with_diagnostics
+        from asset_document.tests.runtime_registration_fixtures import registry, Context, Handler
+        warning = RuntimeDiagnostic('/Body/FunctionGraphs/0/Links/1', 'Graph.ReadOnlyReference', 'read-only',
+                                    DiagnosticSeverity.WARNING)
+
+        class Checked(Handler):
+            def validate_checks(self, document, read, context):
+                self.calls.append('validate_checks')
+                return with_diagnostics((), (warning,))
+
+        frozen, handler = registry(Checked())
+        result = runtime_module.build_dispatch(frozen)(request(operation=3), Context(2, exists=True))
+        self.assertEqual(result['terminal_status'], 0, result)
+        self.assertIn('validate_checks', handler.calls)
+        self.assertEqual([(item['path'], item['code']) for item in result['diagnostics']],
+                         [('/Body/FunctionGraphs/0/Links/1', 'Graph.ReadOnlyReference')])
 
     def test_exact_handler_failure_never_falls_back(self):
         from asset_document.tests.runtime_registration_fixtures import registry, Context, Handler

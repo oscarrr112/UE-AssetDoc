@@ -81,6 +81,7 @@ enum class ELeafKind : uint8
 	Rotator,
 	Object,
 	InstancedStruct,
+	Retained,
 };
 
 bool DoesGeneratorSelectExactOwner(
@@ -115,6 +116,25 @@ bool IsForbiddenPropertyFamily(const FProperty& Property)
 		|| CastField<FSoftClassProperty>(&Property) != nullptr
 		|| CastField<FWeakObjectProperty>(&Property) != nullptr
 		|| CastField<FLazyObjectProperty>(&Property) != nullptr;
+}
+
+// A key-type property outside the typed families (a container, an optional, an enum, a soft, weak or lazy reference,
+// a struct other than the math ones): its value is kept as its export text, compared and put back as text.
+bool IsRetainedPropertyFamily(const FProperty& Property)
+{
+	return Property.GetOwnerProperty() == &Property
+		&& Property.ArrayDim == 1
+		&& !Property.HasAnyPropertyFlags(CPF_InstancedReference | CPF_ContainsInstancedReference)
+		&& CastField<FDelegateProperty>(&Property) == nullptr
+		&& CastField<FMulticastDelegateProperty>(&Property) == nullptr
+		&& CastField<FInterfaceProperty>(&Property) == nullptr;
+}
+
+FString ExportRetainedValue(const UBlackboardKeyType& KeyType, const FProperty& Property)
+{
+	FString Text;
+	Property.ExportTextItem_InContainer(Text, &KeyType, nullptr, const_cast<UBlackboardKeyType*>(&KeyType), PPF_None);
+	return Text;
 }
 
 bool IsAuthoredPropertyHandle(
@@ -279,6 +299,7 @@ struct FTypedLeaf
 	FLeafValue Value;
 	TStrongObjectPtr<UObject> ObjectValue;
 	FInstancedStruct InstancedStructValue;
+	FString RetainedText;
 	bool bRequireEditableHandle = true;
 
 	bool MatchesCurrent(
@@ -363,7 +384,7 @@ bool CaptureLeaf(
 	const TSharedPtr<IPropertyHandle> HandlePtr = Handle;
 	FProperty* Property = Handle->GetProperty();
 	if (Property == nullptr
-		|| IsForbiddenPropertyFamily(*Property)
+		|| (IsForbiddenPropertyFamily(*Property) && !IsRetainedPropertyFamily(*Property))
 		|| (bRequireEditableHandle
 			? !IsEditableAuthoredProperty(*Handle, *Property)
 			: !IsAuthoredPropertyHandle(*Handle, *Property))
@@ -384,6 +405,24 @@ bool CaptureLeaf(
 	OutLeaf.PropertyPath = StablePath;
 	OutLeaf.PropertyClass = Property->GetClass();
 	OutLeaf.bRequireEditableHandle = bRequireEditableHandle;
+	const auto CaptureRetained = [&]()
+	{
+		OutLeaf.Kind = ELeafKind::Retained;
+		if (const FStructProperty* StructProperty = CastField<FStructProperty>(Property))
+		{
+			OutLeaf.StructType = StructProperty->Struct;
+		}
+		if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
+		{
+			OutLeaf.ObjectClass = ObjectProperty->PropertyClass;
+		}
+		OutLeaf.RetainedText = ExportRetainedValue(KeyType, *Property);
+		return true;
+	};
+	if (IsForbiddenPropertyFamily(*Property))
+	{
+		return CaptureRetained();
+	}
 
 	if (CastField<FBoolProperty>(Property) != nullptr)
 	{
@@ -505,7 +544,7 @@ bool CaptureLeaf(
 				CastChecked<UBlackboardKeyType_Struct>(&KeyType)->DefaultValue;
 			return true;
 		}
-		return false;
+		return IsRetainedPropertyFamily(*Property) && CaptureRetained();
 	}
 	if (FObjectPropertyBase* ObjectProperty =
 		CastField<FObjectPropertyBase>(Property))
@@ -521,7 +560,7 @@ bool CaptureLeaf(
 		OutLeaf.ObjectValue.Reset(Object);
 		return true;
 	}
-	return false;
+	return IsRetainedPropertyFamily(*Property) && CaptureRetained();
 }
 
 bool RestoreFiniteStructValue(
@@ -685,6 +724,24 @@ bool RestoreLeaf(
 		StructKey->PostEditChangeProperty(Event);
 		return true;
 	}
+	case ELeafKind::Retained:
+	{
+		FProperty* Property = Handle.GetProperty();
+		if (Property == nullptr)
+		{
+			return false;
+		}
+		if (ExportRetainedValue(KeyType, *Property) == Leaf.RetainedText)
+		{
+			return true;
+		}
+		KeyType.PreEditChange(Property);
+		const TCHAR* End = Property->ImportText_InContainer(*Leaf.RetainedText, &KeyType, &KeyType, PPF_None);
+		FPropertyChangedEvent Event(Property, EPropertyChangeType::ValueSet);
+		Event.MemberProperty = Property;
+		KeyType.PostEditChangeProperty(Event);
+		return End != nullptr;
+	}
 	}
 	return false;
 }
@@ -735,6 +792,9 @@ bool ReadbackLeaf(
 		return StructKey != nullptr
 			&& StructKey->DefaultValue == Leaf.InstancedStructValue;
 	}
+	case ELeafKind::Retained:
+		return Handle.GetProperty() != nullptr
+			&& ExportRetainedValue(KeyType, *Handle.GetProperty()) == Leaf.RetainedText;
 	}
 	return false;
 }

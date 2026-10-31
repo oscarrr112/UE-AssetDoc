@@ -40,6 +40,7 @@ without it is remove + add.
 from __future__ import annotations
 
 from asset_document.diagnostics import contract_error
+from asset_document.tolerance import authored_rule
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.profiles import ublueprint_members as members
 
@@ -62,6 +63,9 @@ def _canonical_navigation(value, path) -> dict:
         raise _error(path, "Navigation is an object of direction -> {Rule, WidgetToFocus}.", "Widget.InvalidNavigation")
     out = {}
     for key, entry in value.items():
+        if key == "NavigationMethod":
+            out[key] = _canonical_navigation_method(entry, f"{path}/NavigationMethod")
+            continue
         if key == "RoutingPolicy":
             if type(entry) is not str:
                 raise _error(f"{path}/RoutingPolicy", "RoutingPolicy is an EWidgetNavigationRoutingPolicy name.",
@@ -72,7 +76,7 @@ def _canonical_navigation(value, path) -> dict:
             continue
         if key not in DIRECTIONS:
             raise _error(f"{path}/{key}", f"Unknown navigation direction '{key}'. Directions: {', '.join(DIRECTIONS)}"
-                         ", RoutingPolicy.", "Widget.InvalidNavigation")
+                         ", RoutingPolicy, NavigationMethod.", "Widget.InvalidNavigation")
         if type(entry) is str:
             entry = {"Rule": entry}
         if type(entry) is not dict or set(entry) - {"Rule", "WidgetToFocus"} or type(entry.get("Rule")) is not str:
@@ -216,19 +220,47 @@ def canonical_bindings(value, path: str = "/Body/Bindings") -> list:
                              "Widget.InvalidBinding")
             item["Function"] = row["Function"]
         else:
-            if type(source) is not list or not source or any(type(part) is not str or not part for part in source):
+            if type(source) is not list or any(type(part) is not str for part in source):
                 raise _error(f"{here}/SourcePath", "A Property binding has SourcePath, e.g. [\"Health\"].",
                              "Widget.InvalidBinding")
+            if not source or not all(source):
+                authored_rule(f"{here}/SourcePath", "Widget.InvalidBinding",
+                              "A Property binding has SourcePath, e.g. [\"Health\"]; an empty path or member binds "
+                              "nothing.")
             item["SourcePath"] = list(source)
         key = (widget.casefold(), prop.casefold())
         if key in seen:
-            raise _error(here, f"{widget}.{prop} is bound twice (also at index {seen[key]}).", "Widget.DuplicateBinding")
-        seen[key] = index
+            authored_rule(here, "Widget.DuplicateBinding",
+                          f"{widget}.{prop} is bound twice (also at index {seen[key]}); the editor uses one of them.",
+                          judged=tuple(f"{row_path}/{field}" for row_path in (f"{path}/{seen[key]}", here)
+                                       for field in ("Widget", "Property")))
+        else:
+            seen[key] = index
         out.append(item)
     return sorted(out, key=lambda item: (item["Widget"], item["Property"]))
 
 
 # ---------------------------------------------------------------------------
+def _canonical_navigation_method(value, path):
+    """{"Struct": "/Script/SlateCore.NavigationMethodProximity", "Properties"?: {...}}, or null for none."""
+    if value is None:
+        return None
+    if type(value) is not dict or set(value) - {"Struct", "Properties"} or type(value.get("Struct")) is not str \
+            or not value["Struct"] or type(value.get("Properties", {})) is not dict:
+        raise _error(path, "NavigationMethod is {\"Struct\": \"<navigation method struct path>\", \"Properties\": {...}}"
+                     " or null.", "Widget.InvalidNavigation")
+    return {"Struct": value["Struct"], **({"Properties": value["Properties"]} if value.get("Properties") else {})}
+
+
+def navigation_differs(want: dict, have: dict) -> bool:
+    """A widget's Navigation as stated differs from the live one; an omitted NavigationMethod is kept, null is none."""
+    if "NavigationMethod" not in want:
+        have = {key: entry for key, entry in have.items() if key != "NavigationMethod"}
+    elif want["NavigationMethod"] is None:
+        want = {key: entry for key, entry in want.items() if key != "NavigationMethod"}
+    return want != have
+
+
 # Live query -> Body
 # ---------------------------------------------------------------------------
 def navigation_from_live(value: dict) -> dict:
@@ -240,6 +272,10 @@ def navigation_from_live(value: dict) -> dict:
                                                   if entry.get("widget_to_focus") else {})}
     if value.get("routing_policy"):
         out["RoutingPolicy"] = value["routing_policy"]
+    method = value.get("navigation_method")
+    if type(method) is dict and method.get("struct"):
+        out["NavigationMethod"] = {"Struct": method["struct"],
+                                   **({"Properties": method["properties"]} if method.get("properties") else {})}
     return out
 
 
@@ -449,6 +485,12 @@ def plan_structure(desired: dict, rows: list, paths: dict) -> list:
     return ops
 
 
+def plan_detached_removes(detached: list, paths: dict) -> list:
+    """umg.tree.remove.v1 for the widgets still out of the tree after plan_structure (the umg.tree.query.v1
+    "detached" list): a widget that was detached and not placed again goes like a removed one."""
+    return [("umg.tree.remove.v1", {"name": name}, paths.get(name, "/Body/WidgetTree")) for name in detached]
+
+
 def _changed(desired: dict, live: dict) -> list:
     return [key for key in desired if key not in live or not members.values_equal(desired[key], live[key])]
 
@@ -478,12 +520,16 @@ def plan_values(desired: dict, rows: list, paths: dict) -> list:
                     ops.append(("umg.widget.property.set.v1",
                                 {"name": name, "target": target, "property": prop, "reset": True}, f"{path}/{key}"))
         navigation = node.get("Navigation", {})
-        if navigation != navigation_from_live(row.get("navigation") or {}):
+        if navigation_differs(navigation, navigation_from_live(row.get("navigation") or {})):
             wire = {key: {"rule": entry["Rule"], **({"widget_to_focus": entry["WidgetToFocus"]}
                                                      if "WidgetToFocus" in entry else {})}
                     for key, entry in navigation.items() if key in DIRECTIONS}
             if "RoutingPolicy" in navigation:
                 wire["routing_policy"] = navigation["RoutingPolicy"]
+            if "NavigationMethod" in navigation:
+                method = navigation["NavigationMethod"]
+                wire["navigation_method"] = {"struct": method["Struct"], "properties": method.get("Properties", {})} \
+                    if method else {"struct": ""}
             ops.append(("umg.widget.navigation.set.v1", {"name": name, "navigation": wire}, f"{path}/Navigation"))
     return ops
 
@@ -493,8 +539,9 @@ def plan_bindings(desired: list, live_rows: list) -> list:
     wanted = {(row["Widget"].casefold(), row["Property"].casefold()) for row in desired}
     ops = [("umg.binding.remove.v1", {"widget": row["Widget"], "property": row["Property"]}, "/Body/Bindings")
            for key, row in sorted(live.items()) if key not in wanted]
+    held = bindings_from_live(live_rows)
     for index, row in enumerate(desired):
-        if live.get((row["Widget"].casefold(), row["Property"].casefold())) == row:
+        if row in held:
             continue
         values = {"widget": row["Widget"], "property": row["Property"], "kind": row["Kind"]}
         if row["Kind"] == "Function":
@@ -516,7 +563,7 @@ def _node_mismatch(want: dict, have: dict, strict: bool) -> bool:
     for key in ("Properties", "Slot"):
         if members._props_differ(want.get(key, {}), have.get(key, {}), strict):
             return True
-    return want.get("Navigation", {}) != have.get("Navigation", {})
+    return navigation_differs(want.get("Navigation", {}), have.get("Navigation", {}))
 
 
 def _placements(tree: dict) -> dict:
@@ -619,7 +666,7 @@ def _widget_differences(name: str, effective: dict, live: dict, strict: bool) ->
                               "IsVariable" in have, have.get("IsVariable")))
     for key in ("Properties", "Slot"):
         out.extend(_property_differences(f"{pointer}/{key}", want.get(key, {}), have.get(key, {}), strict))
-    if want.get("Navigation", {}) != have.get("Navigation", {}):
+    if navigation_differs(want.get("Navigation", {}), have.get("Navigation", {})):
         out.append(Difference(f"{pointer}/Navigation", DiffKind.REPLACE, True, want.get("Navigation", {}), True,
                               have.get("Navigation", {})))
     return out or [Difference(pointer, DiffKind.REPLACE, True, _shallow(want), True, _shallow(have))]

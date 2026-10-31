@@ -20,6 +20,8 @@ import json
 import math
 import struct
 
+from asset_document import markers, text_forms
+
 __all__ = (
     "same_number", "number_text", "same_scalar_text", "same_value", "as_authored", "match_by_key",
     "first_difference", "describe", "ABSENT",
@@ -73,7 +75,10 @@ def same_scalar_text(left: object, right: object) -> bool:
 
 
 def same_value(authored: object, observed: object) -> bool:
-    """Structural equality with numbers compared by ``same_number`` (bools are not numbers)."""
+    """Structural equality with numbers compared by ``same_number`` (bools are not numbers). The marker of a value
+    read before its type had a document form names the value the asset holds there (``markers.is_former``)."""
+    if markers.is_former(authored, observed):
+        return True
     if type(authored) is bool or type(observed) is bool:
         return type(authored) is type(observed) and authored == observed
     if _is_number(authored) and _is_number(observed):
@@ -82,6 +87,8 @@ def same_value(authored: object, observed: object) -> bool:
         return authored.keys() == observed.keys() and all(same_value(authored[key], observed[key]) for key in authored)
     if type(authored) in (list, tuple) and type(observed) in (list, tuple):
         return len(authored) == len(observed) and all(same_value(a, b) for a, b in zip(authored, observed))
+    if type(authored) is str and type(observed) is str:
+        return text_forms.same_text(authored, observed)
     return type(authored) is type(observed) and authored == observed
 
 

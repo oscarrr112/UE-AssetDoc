@@ -14,9 +14,13 @@
 //   {kind: "pose", side: "Source" | "Target", name, current, root_offset?: number | {X,Y,Z}}
 //   {kind: "pose_bones", side, name, bones: {<bone>: {X,Y,Z,W}}}                      (chunked; merged into Bones)
 // detail "inspect" adds {kind: "op_facts", index, display_name, singleton, can_have_children, parent_type?,
-// mapping_ready?} per op and {kind: "chains", side, rig, chains[{Name, Start, End, Goal?}]} per IK Rig.
+// mapping_ready?} per op, {kind: "chains", side, rig, chains[{Name, Start, End, Goal?}]} per IK Rig and
+// {kind: "profile", name, overrides[{op?, type, settings?}], source_pose?, target_pose?, force_all_ik_off?} per retarget
+// profile (each op override's settings sparse over the op it applies to, else over a default of its settings type).
 // detail "verify" adds to each op record settings_defaults (every Settings field of what "Add New" makes) and
 // chain_defaults (every field of a new chain row) when the op has them: what an omitted field means.
+// A settings or chain-row field the typed value codec cannot represent reads as its marker
+// {"Unsupported": reason, "Text": export text} (MakeUnrepresentedMarker); the read never fails on one field.
 
 #include "AssetDocumentRigControllerScope.h"
 #include "AssetDocumentRigPrimitives.h"
@@ -24,6 +28,7 @@
 #include "RetargetEditor/IKRetargeterController.h"
 #include "Retargeter/IKRetargetChainMapping.h"
 #include "Retargeter/IKRetargetOps.h"
+#include "Retargeter/IKRetargetProfile.h"
 #include "Retargeter/IKRetargetSettings.h"
 #include "Retargeter/IKRetargeter.h"
 #include "Rig/IKRigDefinition.h"
@@ -85,7 +90,7 @@ TArray<FString> ProfileNames(const UIKRetargeter& Retargeter, FString& OutCurren
 }
 
 // The chain rows of one chain-row array as {<target chain>: sparse settings}, rows at default omitted.
-bool EncodeChainRows(const FArrayProperty& Array, const void* Settings, FCall& Call, int32 OpIndex, TArray<TPair<FString, FValue>>& OutRows)
+void EncodeChainRows(const FArrayProperty& Array, const void* Settings, TArray<TPair<FString, FValue>>& OutRows)
 {
 	const FStructProperty* Element = CastField<FStructProperty>(Array.Inner);
 	const UScriptStruct* RowType = Element->Struct;
@@ -97,22 +102,16 @@ bool EncodeChainRows(const FArrayProperty& Array, const void* Settings, FCall& C
 		const uint8* RowValue = Rows.GetRawPtr(Row);
 		const FNameProperty* NameField = CastField<FNameProperty>(NameProperty);
 		const FName Chain = NameField != nullptr ? NameField->GetPropertyValue_InContainer(RowValue) : NAME_None;
-		FValue Sparse;
-		FString Error;
-		if (!EncodeSparse(*RowType, RowValue, Defaults.Get(), Sparse, Error, [NameProperty](const FProperty& Property) { return &Property == NameProperty; }))
-		{
-			return Fail(Call, TEXT("IKRetargeter.ReadFailed"), FString::Printf(TEXT("Op %d chain %s: %s"), OpIndex, *Chain.ToString(), *Error));
-		}
+		FValue Sparse = EncodeSparse(*RowType, RowValue, Defaults.Get(), [NameProperty](const FProperty& Property) { return &Property == NameProperty; });
 		if (CountValueNodes(Sparse) > 1)
 		{
 			OutRows.Emplace(Chain.ToString(), MoveTemp(Sparse));
 		}
 	}
-	return true;
 }
 
 // Every field of the default chain row of an op's chain-row arrays (the first one; ops have one).
-bool EncodeChainRowDefaults(const UScriptStruct& SettingsType, FValue& OutDefaults, bool& bOutHasRows, FString& OutError)
+void EncodeChainRowDefaults(const UScriptStruct& SettingsType, FValue& OutDefaults, bool& bOutHasRows)
 {
 	bOutHasRows = false;
 	for (TFieldIterator<FProperty> It(&SettingsType); It; ++It)
@@ -123,14 +122,13 @@ bool EncodeChainRowDefaults(const UScriptStruct& SettingsType, FValue& OutDefaul
 			const FProperty* NameProperty = RowType->FindPropertyByName(TEXT("TargetChainName"));
 			const FStructInstance Defaults(RowType);
 			bOutHasRows = true;
-			return EncodeSparse(*RowType, Defaults.Get(), nullptr, OutDefaults, OutError,
-				[NameProperty](const FProperty& Property) { return &Property == NameProperty; });
+			OutDefaults = EncodeSparse(*RowType, Defaults.Get(), nullptr, [NameProperty](const FProperty& Property) { return &Property == NameProperty; });
+			return;
 		}
 	}
-	return true;
 }
 
-bool AddOp(const UIKRetargeter& Retargeter, int32 Index, bool bInspect, bool bVerify, FCall& Call, TArray<FValue>& Records)
+void AddOp(const UIKRetargeter& Retargeter, int32 Index, bool bInspect, bool bVerify, TArray<FValue>& Records)
 {
 	const FInstancedStruct& OpStruct = Retargeter.GetRetargetOps()[Index];
 	const UScriptStruct* Type = OpStruct.GetScriptStruct();
@@ -140,11 +138,13 @@ bool AddOp(const UIKRetargeter& Retargeter, int32 Index, bool bInspect, bool bVe
 	Record.AddInt(TEXT("index"), Index);
 	if (!OpStruct.IsValid() || Type == nullptr)
 	{
+		// An op whose type no longer loads: a marked element, kept on apply.
 		Entry.AddString(TEXT("Name"), FString::Printf(TEXT("Unknown_%d"), Index));
-		Entry.AddString(TEXT("Type"), FString());
+		Entry.Add(TEXT("Type"), MakeNull());
+		Entry.AddString(TEXT("Unsupported"), TEXT("The op's type does not load (its plugin is missing or the type was removed)."));
 		Record.Add(TEXT("entry"), Entry.Build());
 		Records.Add(Record.Build());
-		return true;
+		return;
 	}
 	FIKRetargetOpBase& Op = const_cast<FInstancedStruct&>(OpStruct).GetMutable<FIKRetargetOpBase>();
 	Entry.Add(TEXT("Name"), MakeName(Op.GetName()));
@@ -167,27 +167,20 @@ bool AddOp(const UIKRetargeter& Retargeter, int32 Index, bool bInspect, bool bVe
 	{
 		const FIKRetargetOpSettingsBase* Settings = Op.GetSettings();
 		const FIKRetargetOpSettingsBase* Defaults = DefaultOp.GetSettings();
-		FString Error;
-		FValue Sparse;
-		if (Settings != nullptr && !EncodeSparse(*SettingsType, Settings, Defaults, Sparse, Error, [](const FProperty& Property) { return IsOpOwnedField(Property); }))
+		if (Settings != nullptr)
 		{
-			return Fail(Call, TEXT("IKRetargeter.ReadFailed"), FString::Printf(TEXT("Op %s settings: %s"), *Op.GetName().ToString(), *Error));
-		}
-		if (Settings != nullptr && CountValueNodes(Sparse) > 1)
-		{
-			Entry.Add(TEXT("Settings"), MoveTemp(Sparse));
+			FValue Sparse = EncodeSparse(*SettingsType, Settings, Defaults, [](const FProperty& Property) { return IsOpOwnedField(Property); });
+			if (CountValueNodes(Sparse) > 1)
+			{
+				Entry.Add(TEXT("Settings"), MoveTemp(Sparse));
+			}
 		}
 		if (bVerify && Defaults != nullptr)
 		{
-			FValue AllDefaults;
 			FValue RowDefaults;
 			bool bHasRows = false;
-			if (!EncodeSparse(*SettingsType, Defaults, nullptr, AllDefaults, Error, [](const FProperty& Property) { return IsOpOwnedField(Property); })
-				|| !EncodeChainRowDefaults(*SettingsType, RowDefaults, bHasRows, Error))
-			{
-				return Fail(Call, TEXT("IKRetargeter.ReadFailed"), FString::Printf(TEXT("Op %s defaults: %s"), *Op.GetName().ToString(), *Error));
-			}
-			Record.Add(TEXT("settings_defaults"), MoveTemp(AllDefaults));
+			EncodeChainRowDefaults(*SettingsType, RowDefaults, bHasRows);
+			Record.Add(TEXT("settings_defaults"), EncodeSparse(*SettingsType, Defaults, nullptr, [](const FProperty& Property) { return IsOpOwnedField(Property); }));
 			if (bHasRows)
 			{
 				Record.Add(TEXT("chain_defaults"), MoveTemp(RowDefaults));
@@ -201,9 +194,9 @@ bool AddOp(const UIKRetargeter& Retargeter, int32 Index, bool bInspect, bool bVe
 				const FObjectPropertyBase* Object = CastField<FObjectPropertyBase>(&Property);
 				Entry.AddString(TEXT("TargetIKRig"), PathOf(Object->GetObjectPropertyValue_InContainer(Settings)));
 			}
-			else if (IsChainRowArray(Property) && !EncodeChainRows(*CastField<FArrayProperty>(&Property), Settings, Call, Index, ChainRows))
+			else if (IsChainRowArray(Property))
 			{
-				return false;
+				EncodeChainRows(*CastField<FArrayProperty>(&Property), Settings, ChainRows);
 			}
 		}
 	}
@@ -251,7 +244,6 @@ bool AddOp(const UIKRetargeter& Retargeter, int32 Index, bool bInspect, bool bVe
 		}
 		Records.Add(Facts.Build());
 	}
-	return true;
 }
 
 FValue Quat(const FQuat& Value)
@@ -402,6 +394,59 @@ const FIKRetargetOpBase* FindRetargetOp(const UIKRetargeter& Retargeter, FName N
 	return nullptr;
 }
 
+// One retarget profile as Inspect lists it: what it overrides when it is the current profile.
+void AddProfile(const UIKRetargeter& Retargeter, const FName Name, TArray<FValue>& Records)
+{
+	const FRetargetProfile* Profile = Retargeter.GetProfileByName(Name);
+	if (Profile == nullptr)
+	{
+		return;
+	}
+	TArray<FValue> Overrides;
+	for (const FRetargetOpProfile& OpProfile : Profile->RetargetOpProfiles)
+	{
+		FObjectBuilder Override;
+		if (!OpProfile.OpToApplySettingsTo.IsNone())
+		{
+			Override.Add(TEXT("op"), MakeName(OpProfile.OpToApplySettingsTo));
+		}
+		const UScriptStruct* SettingsType = OpProfile.SettingsToApply.GetScriptStruct();
+		Override.AddString(TEXT("type"), SettingsType != nullptr ? SettingsType->GetName() : FString());
+		if (SettingsType != nullptr)
+		{
+			// Over the settings of the op it names (when that op has settings of this type), else over a new instance.
+			const FIKRetargetOpBase* Op = OpProfile.OpToApplySettingsTo.IsNone() ? nullptr : FindRetargetOp(Retargeter, OpProfile.OpToApplySettingsTo);
+			const FStructInstance Fresh(SettingsType);
+			const void* Base = Op != nullptr && Op->GetSettingsType() == SettingsType && Op->GetSettingsConst() != nullptr
+				? static_cast<const void*>(Op->GetSettingsConst()) : Fresh.Get();
+			FValue Sparse = EncodeSparse(*SettingsType, OpProfile.SettingsToApply.GetMemory(), Base,
+				[](const FProperty& Property) { return IsOpOwnedField(Property); });
+			if (CountValueNodes(Sparse) > 1)
+			{
+				Override.Add(TEXT("settings"), MoveTemp(Sparse));
+			}
+		}
+		Overrides.Add(Override.Build());
+	}
+	FObjectBuilder Record;
+	Record.AddString(TEXT("kind"), TEXT("profile"));
+	Record.Add(TEXT("name"), MakeName(Name));
+	Record.Add(TEXT("overrides"), MakeArray(MoveTemp(Overrides)));
+	if (Profile->bApplySourceRetargetPose)
+	{
+		Record.Add(TEXT("source_pose"), MakeName(Profile->SourceRetargetPoseName));
+	}
+	if (Profile->bApplyTargetRetargetPose)
+	{
+		Record.Add(TEXT("target_pose"), MakeName(Profile->TargetRetargetPoseName));
+	}
+	if (Profile->bForceAllIKOff)
+	{
+		Record.AddBool(TEXT("force_all_ik_off"), true);
+	}
+	Records.Add(Record.Build());
+}
+
 FInstancedStruct MakeAddedOp(const UIKRetargeter& Retargeter, const UScriptStruct& Type, FName ParentName)
 {
 	FInstancedStruct Added(&Type);
@@ -411,6 +456,7 @@ FInstancedStruct MakeAddedOp(const UIKRetargeter& Retargeter, const UScriptStruc
 
 bool BuildIKRetargeterRecords(const UIKRetargeter& Retargeter, bool bInspect, FCall& Call, TArray<FValue>& Records, bool bVerify)
 {
+	TArray<FString> ProfileList;
 	{
 		FObjectBuilder Header;
 		Header.AddString(TEXT("kind"), TEXT("header"));
@@ -418,16 +464,14 @@ bool BuildIKRetargeterRecords(const UIKRetargeter& Retargeter, bool bInspect, FC
 		Header.Add(TEXT("target"), MakeSide(Retargeter, ERetargetSourceOrTarget::Target));
 		Header.AddInt(TEXT("ops"), Retargeter.GetRetargetOps().Num());
 		FString CurrentProfile;
-		Header.Add(TEXT("profiles"), MakeStringArray(ProfileNames(Retargeter, CurrentProfile)));
+		ProfileList = ProfileNames(Retargeter, CurrentProfile);
+		Header.Add(TEXT("profiles"), MakeStringArray(ProfileList));
 		Header.AddString(TEXT("current_profile"), CurrentProfile);
 		Records.Add(Header.Build());
 	}
 	for (int32 Index = 0; Index < Retargeter.GetRetargetOps().Num(); ++Index)
 	{
-		if (!AddOp(Retargeter, Index, bInspect, bVerify, Call, Records))
-		{
-			return false;
-		}
+		AddOp(Retargeter, Index, bInspect, bVerify, Records);
 	}
 	AddPoses(Retargeter, ERetargetSourceOrTarget::Source, Records);
 	AddPoses(Retargeter, ERetargetSourceOrTarget::Target, Records);
@@ -435,6 +479,10 @@ bool BuildIKRetargeterRecords(const UIKRetargeter& Retargeter, bool bInspect, FC
 	{
 		AddRigChains(Retargeter, ERetargetSourceOrTarget::Source, Records);
 		AddRigChains(Retargeter, ERetargetSourceOrTarget::Target, Records);
+		for (const FString& Profile : ProfileList)
+		{
+			AddProfile(Retargeter, FName(*Profile), Records);
+		}
 	}
 	return true;
 }

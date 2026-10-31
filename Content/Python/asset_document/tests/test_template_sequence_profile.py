@@ -11,7 +11,7 @@ import copy
 import unittest
 from unittest import mock
 
-from asset_document.diagnostics import AssetDocumentContractError
+from asset_document.diagnostics import AssetDocumentContractError, collecting_read_warnings
 from asset_document.profiles import level_sequence as seq
 from asset_document.profiles import level_sequence_apply as apply_module
 from asset_document.profiles import template_sequence as tseq
@@ -245,6 +245,61 @@ class ApplyTests(unittest.TestCase):
     def test_registrations(self):
         self.assertEqual(tseq.TEMPLATE_SEQUENCE_RUNTIME_REGISTRATION.profile_meta.profile_id, "profile.template_sequence.v1")
         self.assertEqual(tseq.CAMERA_ANIMATION_SEQUENCE_RUNTIME_REGISTRATION.profile_meta.exact_asset_class_path, tseq.CAMERA_CLASS)
+
+
+MARKED = {"Unsupported": "Shape (FShape) has no document form; AssetDoc keeps the value.", "Text": "(R=1)"}
+
+
+def _marked_records():
+    """The root's saved template holds a value marker and its Transform section procedural channel overrides."""
+    records = copy.deepcopy(_records())
+    records[1]["entry"]["Root"]["Template"] = {"Properties": {"Shape": dict(MARKED)}}
+    records[6]["entry"]["ChannelOverrides"] = dict(seq.CHANNEL_OVERRIDES)
+    return records
+
+
+def _marked_plan(body):
+    level, _ = seq.assemble(_marked_records(), ids=True)
+    live = tseq.template_body(level)
+    canonical = tseq.canonicalize(_document(body), tseq.TEMPLATE_CLASS)["Body"]
+    internal = {key: value for key, value in canonical.items() if key != "Root"}
+    internal["Bindings"] = [tseq.to_internal(canonical["Root"], live.get("Root"))]
+    plan = apply_module.Plan(internal, level, root_path="/Body/Root")
+    plan.match()
+    return plan
+
+
+def _marked_body():
+    level, _ = seq.assemble(_marked_records())
+    return tseq.template_body(level)
+
+
+class MarkerTests(unittest.TestCase):
+    def test_read_warns_at_template_paths(self):
+        level, facts = seq.assemble(_marked_records())
+        with mock.patch.object(seq, "read_body", return_value=(level, facts)), collecting_read_warnings() as warnings:
+            tseq.read_body(None)
+        self.assertEqual(sorted((item.code, item.path) for item in warnings), [
+            ("Sequencer.Unrepresented", "/Body/Root/Template/Properties/Shape"),
+            ("Sequencer.Unrepresented", "/Body/Root/Tracks/1/Sections/0/ChannelOverrides")])
+
+    def test_unchanged_and_older_forms_plan_nothing(self):
+        body = _marked_body()
+        self.assertEqual(_ops(_marked_plan(body).content()), [])
+        section = body["Root"]["Tracks"][1]["Sections"][0]
+        del section["ChannelOverrides"]
+        section["Unsupported"] = "ChannelOverrides"
+        live = tseq.canonicalize(_document(_marked_body()), tseq.TEMPLATE_CLASS)
+        self.assertEqual(tseq.diff(tseq.canonicalize(_document(body), tseq.TEMPLATE_CLASS), live, exact=True), ())
+        self.assertEqual(_ops(_marked_plan(body).content()), [])
+
+    def test_an_edited_root_marker_is_refused_at_its_document_path(self):
+        body = _marked_body()
+        body["Root"]["Template"]["Properties"]["Shape"]["Text"] = "(R=2)"
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            _marked_plan(body)
+        self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                         ("Sequencer.UnrepresentedValue", "/Body/Root/Template/Properties/Shape"))
 
 
 if __name__ == "__main__":

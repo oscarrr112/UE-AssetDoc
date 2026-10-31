@@ -392,6 +392,11 @@ bool PrepareLocalKeysMutation(
 		OutFailure = Failure(TEXT("AIProvider.InvalidContext"), TEXT("Blackboard local-key mutation requires the Editor game thread."));
 		return false;
 	}
+	if (TOptional<FAssetDocumentPrimitiveOutcome> InUse = RefuseLiveBlackboardLayoutChange(*OutBlackboard))
+	{
+		OutFailure = MoveTemp(InUse.GetValue());
+		return false;
+	}
 	if (!PrepareLocalKeyWrite(OutRequest, *OutBlackboard, OutPreparation, OutFailure)) return false;
 	OutLease = AcquireAssetDocumentAIMutableAssetLease(Handles, Invocation);
 	if (OutLease.Lease != nullptr) return true;

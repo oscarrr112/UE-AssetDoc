@@ -23,12 +23,13 @@ public class AssetDocumentTests : ModuleRules
 			"AssetDocument",
 			"AssetDocumentAI",
 			"AssetDocumentAnimation",
+			"AssetDocumentAudio",
 			"AssetDocumentData",
 			"AssetDocumentEditor",
 			"AssetDocumentGraph",
 			"AssetDocumentLevel",
-			"AssetDocumentServer",
-			"AssetDocumentUMG"
+			"AssetDocumentRig",
+			"AssetDocumentServer"
 		};
 		string SourceDirectory = Path.GetDirectoryName(ModuleDirectory);
 		foreach (string TestedModule in TestedModules)
@@ -83,6 +84,7 @@ public class AssetDocumentTests : ModuleRules
 			"GraphEditor",
 			"HTTP",
 			"HTTPServer",
+			"IKRig",
 			"ImageCore",
 			"ImageWrapper",
 			"InputBlueprintNodes",

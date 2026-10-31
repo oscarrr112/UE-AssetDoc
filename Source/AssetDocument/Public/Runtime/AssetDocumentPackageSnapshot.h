@@ -7,6 +7,7 @@
 #include "Runtime/AssetDocumentRuntimeTypes.h"
 #include "UObject/GCObject.h"
 #include "UObject/ObjectPtr.h"
+#include "UObject/SoftObjectPath.h"
 
 class UObject;
 class UPackage;
@@ -58,8 +59,10 @@ ASSETDOCUMENT_API bool UnregisterAssetDocumentDerivedStateRebuilder(FName Rebuil
 // functionally equivalent pre-capture state (not necessarily the same object
 // identities, as with the editor's own Undo):
 //   remove new authored objects -> restore identity -> restore bytes ->
-//   PostEditUndo (deepest first) -> derived-state rebuilders -> verify object
-//   set -> restore dirty flag.
+//   PostEditUndo (deepest first) -> derived-state rebuilders -> restore the package
+//   metadata -> verify object set -> restore dirty flag. The package metadata
+//   (per-object key/value pairs the package keeps about its objects, such as a graph
+//   node's document Id) is restored as captured, since it is not part of any object.
 // Objects created by PostEditUndo or a rebuilder (editor-derived subobjects
 // rebuilt from the restored state, as the editor's Undo also does) are accepted.
 // If verification fails, Restore() fails with PackageSnapshot.RestoreFailed and a
@@ -174,6 +177,10 @@ private:
 	// Replaced object -> its replacement, for the objects this snapshot follows (Tracked).
 	TMap<UObject*, TObjectPtr<UObject>> Replacements;
 	TSet<const UObject*> Tracked;
+	// The package metadata at capture (FMetaData of the package).
+	TMap<FSoftObjectPath, TMap<FName, FString>> CapturedObjectMetaData;
+	TMap<FName, FString> CapturedRootMetaData;
+	void RestoreMetaData();
 	FDelegateHandle ObjectsReplacedHandle;
 	FDelegateHandle ObjectsReinstancedHandle;
 	bool bWasDirty = false;

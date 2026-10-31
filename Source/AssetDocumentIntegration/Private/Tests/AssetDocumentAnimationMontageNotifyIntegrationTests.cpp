@@ -129,6 +129,7 @@ struct FFixture
   State.EndLink.Link(&M, .75f, 0); State.EndLink.ChangeLinkMethod(EAnimLinkMethod::Relative); State.SetDuration(.5f);
   auto& Event = M.Notifies.AddDefaulted_GetRef(); Event.NotifyName = TEXT("Event"); Event.Guid = FGuid::NewGuid(); Event.TrackIndex = 1;
   Event.Link(&M, 1.5f, 0); Event.ChangeLinkMethod(EAnimLinkMethod::Relative);
+  // Notifies an earlier AssetDocument version made (its own names) are ordinary notifies.
   auto& Managed = M.Notifies.AddDefaulted_GetRef(); Managed.NotifyName = TEXT("AssetDocument.Notify");
   Managed.TrackIndex = 1; Managed.Notify = NewObject<UAnimNotify_PlaySound>(&M, TEXT("AssetDocumentManaged_Notify_Old"), RF_Transactional);
   Managed.Link(&M, 1.f, 0); Managed.Guid = FGuid::NewGuid();
@@ -142,9 +143,10 @@ struct FFixture
  {
   const FString Props = bBad ? TEXT("{\"DoesNotExist\":1.0}")
    : bState ? TEXT("{\"bDestroyAtEnd\":false}") : TEXT("{\"VolumeMultiplier\":0.25}");
-  const FString Row = FString::Printf(TEXT("{\"time\":0.125,%s\"track_index\":1.0,\"object\":{\"class\":\"%s\",\"properties\":%s}}"),
+  const FString Row = FString::Printf(TEXT("{\"time\":0.125,%s\"track_index\":1.0,\"object\":{\"class\":\"%s\",\"properties\":%s},\"trigger\":{},\"link\":%s}"),
    bState ? TEXT("\"duration\":0.5,") : TEXT(""),
-   bState ? TEXT("/Script/Engine.AnimNotifyState_TimedParticleEffect") : TEXT("/Script/Engine.AnimNotify_PlaySound"), *Props);
+   bState ? TEXT("/Script/Engine.AnimNotifyState_TimedParticleEffect") : TEXT("/Script/Engine.AnimNotify_PlaySound"), *Props,
+   bState ? TEXT("{\"method\":0,\"slot_name\":null,\"end_method\":0,\"end_slot_name\":null}") : TEXT("{\"method\":0,\"slot_name\":null}"));
   return Base.Document(FString::Printf(TEXT("{\"MontageNotify\":{\"%s\":[%s]}}"),
    bState ? TEXT("notify_states") : TEXT("notifies"), bEmpty ? TEXT("") : *Row));
  }
@@ -157,15 +159,19 @@ struct FFixture
   }
  }
 };
-bool CheckEdited(FAutomationTestBase& T, const UAnimMontage& M, bool bState, bool bEmpty)
+bool CheckEdited(FAutomationTestBase& T, const UAnimMontage& M, bool bState, bool bEmpty, const UObject* Reused)
 {
- const FName ManagedName(bState ? TEXT("AssetDocument.NotifyState") : TEXT("AssetDocument.Notify"));
- const auto* New = M.Notifies.FindByPredicate([&](const auto& E) { return E.NotifyName == ManagedName; });
- T.TestEqual(TEXT("managed family presence"), New != nullptr, !bEmpty);
- if (New)
+ // A listed family is replaced as a whole: its one row reuses the existing notify of the same class nearest in time
+ // (its object edited in place); the family's other notifies are removed.
+ TArray<const FAnimNotifyEvent*> Family;
+ for (const auto& E : M.Notifies) if ((E.NotifyStateClass != nullptr) == bState) Family.Add(&E);
+ T.TestEqual(TEXT("listed family holds exactly the document's rows"), Family.Num(), bEmpty ? 0 : 1);
+ if (!bEmpty && Family.Num() == 1)
  {
-  T.TestEqual(TEXT("new configured time sorts ahead of retained"), New->GetTime(), .125f);
+  const auto* New = Family[0];
+  T.TestEqual(TEXT("authored time"), New->GetTime(), .125f);
   T.TestEqual(TEXT("authored track"), New->TrackIndex, 1);
+  T.TestTrue(TEXT("existing notify object reused in place"), (bState ? static_cast<const UObject*>(New->NotifyStateClass) : New->Notify) == Reused);
   if (bState)
   {
    const auto* Object = Cast<UAnimNotifyState_TimedParticleEffect>(New->NotifyStateClass);
@@ -177,8 +183,16 @@ bool CheckEdited(FAutomationTestBase& T, const UAnimMontage& M, bool bState, boo
    T.TestTrue(TEXT("notify configured scalar saved"), Object && Object->VolumeMultiplier == .25f);
   }
  }
- T.TestTrue(TEXT("unmanaged state preserved"), M.Notifies.ContainsByPredicate([](const auto& E) { return E.NotifyName == TEXT("State") && E.GetTime() == .25f && E.GetDuration() == .5f; }));
- T.TestTrue(TEXT("unmanaged instant preserved"), M.Notifies.ContainsByPredicate([](const auto& E) { return E.NotifyName == TEXT("Event") && E.GetTime() == 1.5f; }));
+ if (bState)
+ {
+  T.TestTrue(TEXT("unlisted instant family preserved"), M.Notifies.ContainsByPredicate([](const auto& E) { return E.NotifyName == TEXT("Event") && E.GetTime() == 1.5f; }));
+  T.TestTrue(TEXT("unlisted instant family keeps its old notify"), M.Notifies.ContainsByPredicate([](const auto& E) { return E.Notify && E.GetTime() == 1.f; }));
+ }
+ else
+ {
+  T.TestTrue(TEXT("unlisted state family preserved"), M.Notifies.ContainsByPredicate([](const auto& E) { return E.NotifyName == TEXT("State") && E.GetTime() == .25f && E.GetDuration() == .5f; }));
+  T.TestTrue(TEXT("unlisted state family keeps its old state"), M.Notifies.ContainsByPredicate([](const auto& E) { return E.NotifyStateClass && E.GetTime() == 1.25f; }));
+ }
  T.TestEqual(TEXT("tracks unchanged"), M.AnimNotifyTracks.Num(), 2);
  T.TestEqual(TEXT("scalar persisted"), M.RateScale, 2.f);
  return !T.HasAnyErrors();
@@ -192,11 +206,15 @@ bool FMontageNotifyApplyFileSuccess::RunTest(const FString&)
  for (bool bState : {false, true}) for (bool bEmpty : {false, true})
  {
   FFixture F; if (!TestTrue(TEXT("saved native fixture and document"), F.Setup() && F.Document(bState, bEmpty))) return false;
+  // The row (0.125 s) is nearest the state at 0.25 s and the only PlaySound notify (1.0 s).
+  const auto* Previous = F.Base.Montage->Notifies.FindByPredicate([&](const FAnimNotifyEvent& E)
+  { return bState ? E.NotifyStateClass && E.GetTime() == .25f : E.Notify != nullptr; });
+  const TWeakObjectPtr<UObject> Reused = Previous ? (bState ? static_cast<UObject*>(Previous->NotifyStateClass) : Previous->Notify) : nullptr;
   const auto A = Bytes(PackageFile(F.A->GetPathName())), B = Bytes(PackageFile(F.B->GetPathName()));
   FHarness H(Options()); if (!H.Initialize(*this)) return false;
   const auto R = H.Apply(F.Base.Sidecar); for (const auto& D : R.Diagnostics) AddInfo(D.Code + TEXT(": ") + D.Message);
   if (!TestTrue(TEXT("real same-provider prepared ApplyFile commits"), R.IsSuccess())) return false;
-  CheckEdited(*this, *F.Base.Montage, bState, bEmpty);
+  CheckEdited(*this, *F.Base.Montage, bState, bEmpty, Reused.Get());
   TestTrue(TEXT("source assets remain unchanged"), Bytes(PackageFile(F.A->GetPathName())) == A && Bytes(PackageFile(F.B->GetPathName())) == B);
   TestFalse(TEXT("target clean"), F.Base.Montage->GetOutermost()->IsDirty());
  }
@@ -210,6 +228,18 @@ bool FMontageNotifyApplyFileRollback::RunTest(const FString&)
  {
   FFixture F; if (!TestTrue(TEXT("saved rollback fixture"), F.Setup() && F.Document(bState, false, Failure == TEXT("bad_property")))) return false;
   const auto Old = F.Base.Montage->Notifies;
+  // The row reuses an existing notify object and writes its properties in place; rollback gives them back.
+  auto ObjectValues = [&F]()
+  {
+   TArray<FString> Out;
+   for (const auto& E : F.Base.Montage->Notifies)
+   {
+    if (const auto* N = Cast<UAnimNotify_PlaySound>(E.Notify)) Out.Add(FString::SanitizeFloat(N->VolumeMultiplier));
+    if (const auto* S = Cast<UAnimNotifyState_TimedParticleEffect>(E.NotifyStateClass)) Out.Add(S->bDestroyAtEnd ? TEXT("true") : TEXT("false"));
+   }
+   return Out;
+  };
+  const auto OldValues = ObjectValues();
   const auto Package = Bytes(PackageFile(F.Base.Target)), Sidecar = Bytes(F.Base.Sidecar);
   TArray<UObject*> OriginalObjects; GetObjectsWithOuter(F.Base.Montage.Get(), OriginalObjects, AssetDocumentObjects::DirectOnly);
   FHarness H(Options(Failure == TEXT("bad_property") ? FString() : Failure)); if (!H.Initialize(*this)) return false;
@@ -218,6 +248,7 @@ bool FMontageNotifyApplyFileRollback::RunTest(const FString&)
   TestEqual(TEXT("old mixed timeline count restored"), F.Base.Montage->Notifies.Num(), Old.Num());
   for (int32 I = 0; I < Old.Num() && I < F.Base.Montage->Notifies.Num(); ++I)
    TestTrue(TEXT("old mixed row exactly restored"), FAnimNotifyEvent::StaticStruct()->CompareScriptStruct(&Old[I], &F.Base.Montage->Notifies[I], 0));
+  TestTrue(TEXT("reused notify objects get their old property values back"), ObjectValues() == OldValues);
   TArray<UObject*> Remaining; GetObjectsWithOuter(F.Base.Montage.Get(), Remaining, AssetDocumentObjects::DirectOnly);
   for (auto* Object : Remaining) TestTrue(TEXT("new staging set retired"), !IsValid(Object) || OriginalObjects.Contains(Object));
   TestTrue(TEXT("real typed inverse used"), H.Inverses.Contains(bState ? SectionsId : SlotsId));
@@ -355,9 +386,9 @@ bool SetupCombined(FFixture& F)
 bool CombinedDocument(FFixture& F, bool BadSecondFamily = false)
 {
  FString Body = Wire({Curve(true)}); Body.LeftChopInline(1);
- Body += TEXT(R"JSON(,"MontageNotify":{"notifies":[{"time":0.125,"track_index":1.0,"object":{"class":"/Script/Engine.AnimNotify_PlaySound","properties":{"VolumeMultiplier":0.25}}}],"notify_states":[{"time":0.875,"duration":0.125,"track_index":0.0,"object":{"class":"/Script/Engine.AnimNotifyState_TimedParticleEffect","properties":)JSON");
+ Body += TEXT(R"JSON(,"MontageNotify":{"notifies":[{"time":0.125,"track_index":1.0,"object":{"class":"/Script/Engine.AnimNotify_PlaySound","properties":{"VolumeMultiplier":0.25}},"trigger":{},"link":{"method":0,"slot_name":null}}],"notify_states":[{"time":0.875,"duration":0.125,"track_index":0.0,"object":{"class":"/Script/Engine.AnimNotifyState_TimedParticleEffect","properties":)JSON");
  Body += BadSecondFamily ? TEXT("{\"DoesNotExist\":1.0}") : TEXT("{\"bDestroyAtEnd\":false}");
- Body += TEXT("}}]}}");
+ Body += TEXT(R"JSON(},"trigger":{},"link":{"method":0,"slot_name":null,"end_method":0,"end_slot_name":null}}]}})JSON");
  return F.Base.Document(Body, TEXT("Update"), false);
 }
 bool CheckCurve(FAutomationTestBase& T, const UAnimMontage& M, bool Edited)
@@ -374,18 +405,20 @@ bool CheckCurve(FAutomationTestBase& T, const UAnimMontage& M, bool Edited)
 bool CheckCombined(FAutomationTestBase& T, const UAnimMontage& M, bool WithStructure = false)
 {
  CheckCurve(T, M, true);
- T.TestEqual(TEXT("both managed families replaced and unmanaged rows retained"), M.Notifies.Num(), 4);
+ // Both families are listed, so each is exactly its document rows: the PlaySound row reuses the old PlaySound notify,
+ // the state row the old state nearest in time (1.25 s); the skeleton notify and the other state are removed.
+ T.TestEqual(TEXT("both listed families replaced as a whole"), M.Notifies.Num(), 2);
  int32 Events = 0, States = 0;
  for (const auto& E : M.Notifies)
  {
-  if (E.NotifyName == TEXT("AssetDocument.Notify"))
-  { ++Events; const auto* N = Cast<UAnimNotify_PlaySound>(E.Notify); T.TestTrue(TEXT("new event property/time"), N && N->VolumeMultiplier == .25f && E.GetTime() == .125f); T.TestTrue(TEXT("new event GUID"), E.Guid.IsValid()); }
-  if (E.NotifyName == TEXT("AssetDocument.NotifyState"))
-  { ++States; const auto* N = Cast<UAnimNotifyState_TimedParticleEffect>(E.NotifyStateClass); T.TestTrue(TEXT("new state property/time/duration"), N && !N->bDestroyAtEnd && E.GetTime() == .875f && E.GetDuration() == .125f); T.TestTrue(TEXT("new state GUID"), E.Guid.IsValid()); }
+  if (E.Notify)
+  { ++Events; const auto* N = Cast<UAnimNotify_PlaySound>(E.Notify); T.TestTrue(TEXT("event property/time"), N && N->VolumeMultiplier == .25f && E.GetTime() == .125f); T.TestTrue(TEXT("event GUID"), E.Guid.IsValid()); }
+  if (E.NotifyStateClass)
+  { ++States; const auto* N = Cast<UAnimNotifyState_TimedParticleEffect>(E.NotifyStateClass); T.TestTrue(TEXT("state property/time/duration"), N && !N->bDestroyAtEnd && E.GetTime() == .875f && E.GetDuration() == .125f); T.TestTrue(TEXT("state GUID"), E.Guid.IsValid()); }
  }
- T.TestEqual(TEXT("one new event"), Events, 1); T.TestEqual(TEXT("one new state"), States, 1);
- T.TestTrue(TEXT("unmanaged state preserved"), M.Notifies.ContainsByPredicate([](const auto& E) { return E.NotifyName == TEXT("State") && E.GetTime() == .25f && E.GetDuration() == .5f; }));
- T.TestTrue(TEXT("unmanaged instant preserves its relative segment position"), M.Notifies.ContainsByPredicate([&](const auto& E) { return E.NotifyName == TEXT("Event") && E.GetTime() == (WithStructure ? 2.5f : 1.5f); }));
+ T.TestEqual(TEXT("one event"), Events, 1); T.TestEqual(TEXT("one state"), States, 1);
+ T.TestFalse(TEXT("unlisted skeleton notify of a listed family removed"), M.Notifies.ContainsByPredicate([](const auto& E) { return E.NotifyName == TEXT("Event"); }));
+ T.TestFalse(TEXT("unpaired state of a listed family removed"), M.Notifies.ContainsByPredicate([](const auto& E) { return E.NotifyName == TEXT("State"); }));
  T.TestEqual(TEXT("curve retained scalar baseline"), M.RateScale, 1.f);
  T.TestEqual(TEXT("combined intended length"), M.GetDataModel()->GetNumberOfFrames(), WithStructure ? 90 : 60);
  return !T.HasAnyErrors();

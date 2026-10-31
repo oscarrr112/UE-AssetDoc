@@ -10,7 +10,7 @@ from __future__ import annotations
 import copy
 import unittest
 
-from asset_document.diagnostics import AssetDocumentContractError
+from asset_document.diagnostics import AssetDocumentContractError, collecting_read_warnings
 from asset_document.profiles import control_rig as cr
 from asset_document.profiles import control_rig_apply as ap
 from asset_document.profiles import control_rig_graph as crg
@@ -263,6 +263,15 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(_code(lambda: ap.check_hierarchy([ROOT, spaced], set())),
                          ("ControlRig.ElementNotFound", "/Body/Hierarchy/1/Spaces/0/Space"))
 
+    def test_reference_elements_the_rig_has_are_kept(self):
+        reference = {"Type": "Reference", "Name": "r", "Parent": "Bone(root)"}
+        live = {"Bone(root)": ROOT, "Reference(r)": reference}
+        ap.check_hierarchy([ROOT, dict(reference)], live)
+        self.assertEqual(_code(lambda: ap.check_hierarchy([ROOT, dict(reference, Parent="")], live)),
+                         ("ControlRig.ProceduralElement", "/Body/Hierarchy/1/Type"))
+        self.assertEqual(_code(lambda: ap.check_hierarchy([ROOT, dict(reference, Name="s")], live)),
+                         ("ControlRig.ProceduralElement", "/Body/Hierarchy/1/Type"))
+
     def test_variables(self):
         self.assertEqual(_code(lambda: ap.check_variables([{"Name": "A"}, {"Name": "A"}])),
                          ("ControlRig.DuplicateVariable", "/Body/Variables/1/Name"))
@@ -295,6 +304,35 @@ class PhaseTests(unittest.TestCase):
         self.assertEqual(_ops(ap.phase_variable_details(reset, after)),
                          [{"op": "variable.set", "name": "Gain", "default": None}])
 
+    def test_variable_details(self):
+        live = {"Variables": [{"Name": "Speed", "Type": "float", "ExposeOnSpawn": True, "Private": True,
+                               "SliderRange": {"Min": 0, "Max": 10}, "ValueRange": {"Min": -5, "Max": 20.5}}]}
+        # Left out, they keep the rig's (diff and plan).
+        older = {"Variables": [{"Name": "Speed", "Type": "float"}]}
+        self.assertEqual(cr.body_diff(older, live, False), [])
+        self.assertEqual(_ops(ap.phase_variable_details(older, live)), [])
+        edited = {"Variables": [{"Name": "Speed", "Type": "float", "ExposeOnSpawn": False, "Private": True,
+                                 "SliderRange": {"Min": 1, "Max": 5.5}, "ValueRange": {"Max": 20.5}}]}
+        self.assertEqual({change.path for change in cr.body_diff(edited, live, False)},
+                         {"/Body/Variables/Speed/ExposeOnSpawn", "/Body/Variables/Speed/SliderRange/Min",
+                          "/Body/Variables/Speed/SliderRange/Max", "/Body/Variables/Speed/ValueRange/Min"})
+        self.assertEqual(_ops(ap.phase_variable_details(edited, live)), [
+            {"op": "variable.set", "name": "Speed", "expose_on_spawn": False, "slider_min": "1", "slider_max": "5.5",
+             "value_min": ""}])
+        cleared = {"Variables": [{"Name": "Speed", "Type": "float", "SliderRange": {}}]}
+        self.assertEqual(_ops(ap.phase_variable_details(cleared, live)),
+                         [{"op": "variable.set", "name": "Speed", "slider_min": "", "slider_max": ""}])
+
+    def test_variable_range_text(self):
+        self.assertEqual([cr.range_value(text) for text in ("0", "-5", "20.5", "1.0", "1e-05", "01", "1.50", "abc")],
+                         [0, -5, 20.5, 1.0, 1e-05, "01", "1.50", "abc"])
+        self.assertEqual([cr.range_text(value) for value in (0, -5, 20.5, 1.0, "1.50")], ["0", "-5", "20.5", "1.0", "1.50"])
+        cr.validate_body({"Variables": [{"Name": "A", "Type": "float", "SliderRange": {"Min": 0, "Max": "x"}}]})
+        for bad in ({"ExposeOnSpawn": 1}, {"Private": "yes"}, {"SliderRange": {"Low": 0}}, {"ValueRange": [0, 1]},
+                    {"ValueRange": {"Min": True}}):
+            with self.assertRaises(AssetDocumentContractError):
+                cr.validate_body({"Variables": [dict({"Name": "A", "Type": "float"}, **bad)]})
+
     def test_elements(self):
         moved = {"Type": "Null", "Name": "k", "Parents": [{"Parent": "Bone(root)", "Weight": 1.0},
                                                           {"Parent": "Null(n)", "Weight": 0.5}], "RenamedFrom": "m"}
@@ -315,6 +353,29 @@ class PhaseTests(unittest.TestCase):
         self.assertNotIn("RenamedFrom", sets[0]["entry"])
         self.assertEqual(_ops(ap.phase_element_order(body, added_live)),
                          [{"op": "element.order", "keys": ["Null(k)", "Null(n)"]}])
+
+    def test_control_limits_and_removed_spaces(self):
+        ctrl = {"Type": "Control", "Name": "c", "Parent": "Bone(root)", "Settings": {"ControlType": "Float"},
+                "Maximum": 100.0, "Spaces": ["Null(n)"], "RemovedSpaces": ["Bone(root)"]}
+        live = {"Hierarchy": [ROOT, NULL, ctrl]}
+        # Left out, the limits and removed spaces keep the rig's (no diff, no write).
+        older = {"Hierarchy": [ROOT, NULL, {key: value for key, value in ctrl.items()
+                                            if key not in ("Maximum", "RemovedSpaces")}]}
+        self.assertEqual(cr.body_diff(older, live, False), [])
+        self.assertEqual(_ops(ap.phase_element_sets(older, live)), [])
+        edited = {"Hierarchy": [ROOT, NULL, dict(ctrl, Maximum=10.0, RemovedSpaces=[])]}
+        self.assertEqual({change.path for change in cr.body_diff(edited, live, False)},
+                         {"/Body/Hierarchy/Control(c)/Maximum", "/Body/Hierarchy/Control(c)/RemovedSpaces"})
+        self.assertEqual([op["entry"]["RemovedSpaces"] for op in _ops(ap.phase_element_sets(edited, live))], [[]])
+        # An empty RemovedSpaces is what the read leaves out: once applied it matches, and is no write.
+        applied = {"Hierarchy": [ROOT, NULL, {key: value for key, value in ctrl.items() if key != "RemovedSpaces"}]}
+        cleared = {"Hierarchy": [ROOT, NULL, dict(ctrl, RemovedSpaces=[])]}
+        self.assertEqual(cr.body_diff(cleared, applied, False), [])
+        self.assertEqual(_ops(ap.phase_element_sets(cleared, applied)), [])
+        # A new control is added without them (they may name later elements), then set.
+        self.assertNotIn("RemovedSpaces", _ops(ap.phase_element_adds(live, {"Hierarchy": [ROOT, NULL]}))[0]["entry"])
+        self.assertEqual(_code(lambda: ap.check_hierarchy([ROOT, dict(ctrl, Spaces=[], RemovedSpaces=["Null(x)"])], {})),
+                         ("ControlRig.ElementNotFound", "/Body/Hierarchy/1/RemovedSpaces/0"))
 
     def test_error_paths(self):
         items = [ap.Op({}, "/Body/Variables/0", {"to": "/Body/Variables/0/Name"}),
@@ -642,6 +703,78 @@ class FunctionPlanTests(unittest.TestCase):
             {"op": "function.pin.default", "graph": graph, "name": "A", "value": None}])
         self.assertEqual(_phase("interface", live, live), [])
 
+    def test_pin_layout(self):
+        amount = {"Name": "Amount", "Type": "float", "DisplayName": "Blend Amount"}
+        live = {"Functions": {"F": _function(Inputs=[EXEC, amount, {"Name": "Scale", "Type": "float"}],
+                                             PinCategories=[{"Name": "Settings", "Pins": ["Scale", "Amount"]},
+                                                            {"Name": "Empty", "Expanded": True}])}}
+        graph = ["Functions", "F"]
+        # Left out (documents written before the layout was read), labels and categories keep the rig's.
+        older = {"Functions": {"F": _function(Inputs=[EXEC, {"Name": "Amount", "Type": "float"},
+                                                      {"Name": "Scale", "Type": "float"}])}}
+        self.assertEqual(_phase("interface", older, live), [])
+        self.assertEqual(crg.differences(older, live), ())
+        self.assertEqual(_phase("interface", live, live), [])
+        self.assertEqual(crg.differences(live, live), ())
+        edited = copy.deepcopy(live)
+        edited["Functions"]["F"]["Inputs"][1]["DisplayName"] = ""
+        edited["Functions"]["F"]["Inputs"][2]["DisplayName"] = "Size"
+        edited["Functions"]["F"]["PinCategories"] = [{"Name": "Empty", "Expanded": True},
+                                                     {"Name": "Settings", "Pins": ["Amount"], "Expanded": False}]
+        self.assertEqual(_phase("interface", edited, live), [
+            {"op": "function.layout", "graph": graph,
+             "categories": [{"name": "Empty", "pins": [], "expanded": True},
+                            {"name": "Settings", "pins": ["Amount"], "expanded": False}],
+             "display_names": {"Amount": "", "Scale": "Size"}}])
+        self.assertEqual({item.path for item in crg.differences(edited, live)},
+                         {"/Body/Functions/F/Inputs", "/Body/Functions/F/PinCategories"})
+        cleared = copy.deepcopy(live)
+        cleared["Functions"]["F"]["Inputs"][1]["DisplayName"] = ""
+        applied = copy.deepcopy(live)
+        del applied["Functions"]["F"]["Inputs"][1]["DisplayName"]
+        self.assertEqual(crg.differences(cleared, applied), ())
+        # A label equal to the pin's name is no label: nothing to write over none, a clear over another label.
+        named = copy.deepcopy(live)
+        named["Functions"]["F"]["Inputs"][2]["DisplayName"] = "Scale"
+        self.assertEqual(_phase("interface", named, live), [])
+        self.assertEqual(crg.differences(named, live), ())
+        named["Functions"]["F"]["Inputs"][1]["DisplayName"] = "Amount"
+        self.assertEqual(_phase("interface", named, live), [
+            {"op": "function.layout", "graph": graph, "display_names": {"Amount": ""}}])
+        for bad in ([{"Name": ""}], [{"Name": "A"}, {"Name": "A"}], [{"Name": "A", "Pins": ["x"]}, {"Name": "B", "Pins": ["x"]}],
+                    [{"Name": "A", "Open": True}], {"A": []}):
+            with self.assertRaises(AssetDocumentContractError):
+                crg.validate_graphs({"Functions": {"F": _function(PinCategories=bad)}})
+        with self.assertRaises(AssetDocumentContractError):
+            crg.validate_graphs({"Functions": {"F": _function(Inputs=[dict(EXEC, DisplayName=1)])}})
+
+    def test_variant_tags(self):
+        live = {"Functions": {"F": _function(Variant={"Tags": ["Stable"]})}}
+        graph = ["Functions", "F"]
+        self.assertEqual(_phase("interface", {"Functions": {"F": _function()}}, live), [])
+        self.assertEqual(crg.differences({"Functions": {"F": _function()}}, live), ())
+        self.assertEqual(crg.differences(live, live), ())
+        tagged = {"Functions": {"F": _function(Variant={"Tags": ["Outdated", "Stable"]})}}
+        self.assertEqual(_phase("interface", tagged, live),
+                         [{"op": "function.set", "graph": graph, "tags": ["Outdated", "Stable"]}])
+        self.assertEqual([item.path for item in crg.differences(tagged, live)], ["/Body/Functions/F/Variant/Tags"])
+        cleared = {"Functions": {"F": _function(Variant={"Tags": []})}}
+        self.assertEqual(_phase("interface", cleared, live), [{"op": "function.set", "graph": graph, "tags": []}])
+        self.assertEqual(crg.differences(cleared, {"Functions": {"F": _function()}}), ())
+        for bad in ({"Tags": "Stable"}, {"Tags": ["A", "A"]}, {"Guid": "x"}, ["Stable"]):
+            with self.assertRaises(AssetDocumentContractError):
+                crg.validate_graphs({"Functions": {"F": _function(Variant=bad)}})
+
+    def test_collapse_pin_layout(self):
+        box = {"Collapse": {"Inputs": [{"Name": "V", "Type": "float", "DisplayName": "Value"}], "Outputs": [],
+                            "Nodes": {}, "PinCategories": [{"Name": "Main", "Pins": ["V"]}]}}
+        live = {"Graphs": {"Rig": {"Nodes": {"Box": {"Collapse": {"Inputs": [{"Name": "V", "Type": "float"}],
+                                                                  "Outputs": [], "Nodes": {}}}}}}}
+        ops = _ops(crg.phase("structure", {"Graphs": {"Rig": {"Nodes": {"Box": box}}}}, live, ap.Op, planned=set()))
+        self.assertEqual(ops, [{"op": "function.layout", "graph": ["Graphs", "Rig", "Nodes", "Box", "Collapse"],
+                                "categories": [{"name": "Main", "pins": ["V"], "expanded": False}],
+                                "display_names": {"V": "Value"}}])
+
     def test_dependents_of_public_functions(self):
         live = {"Functions": {"Pub": _function(Public=True), "Priv": _function(), "Kept": _function(Public=True)}}
         body = {"Functions": {"Renamed": _function(Public=True, RenamedFrom="Pub"), "Priv": _function(),
@@ -875,6 +1008,47 @@ class FactoryContextTests(unittest.TestCase):
         message = AssetDocumentContractErrorMessage(lambda: ap.check_hierarchy(
             [dict(NULL, Parent="Bone(rot)")], {"Bone(root)"}, {"Bone(root)"}))
         self.assertIn("Bone(root)", message)
+
+
+COMPONENTS = [{"element": "Bone(root)", "name": "PhysicsBody", "type": "RigPhysicsBodyComponent"},
+              {"element": "Bone(root)", "name": "Joint", "type": "RigPhysicsJointComponent"},
+              {"element": "Null(gone)", "name": "Solver", "type": "RigPhysicsSolverComponent"}]
+
+
+class ComponentTests(unittest.TestCase):
+    def test_extract_warns_at_each_element_with_components(self):
+        body = _body()
+        with collecting_read_warnings() as warnings:
+            cr.warn_components(body, {"components": COMPONENTS})
+            cr.warn_components(body, {})
+        self.assertEqual([(item.code, item.path) for item in warnings],
+                         [("ControlRig.ComponentsNotAuthored", "/Body/Hierarchy/0"),
+                          ("ControlRig.ComponentsNotAuthored", "/Body/Hierarchy")])
+        self.assertIn("PhysicsBody (RigPhysicsBodyComponent), Joint (RigPhysicsJointComponent)", warnings[0].message)
+
+    def test_removing_an_element_with_components_warns(self):
+        live = _body()
+        removes = ap.phase_element_removes({"Hierarchy": [live["Hierarchy"][1]]}, live)
+        self.assertEqual([op.op["key"] for op in removes], ["Bone(root)"])
+        calls = FakeCalls([{"records": [{"kind": "header", "components": COMPONENTS}]}])
+        warnings = ap.components_removed(calls, removes)
+        self.assertEqual([(item.code, item.path) for item in warnings], [("ControlRig.ComponentsRemoved", "/Body/Hierarchy")])
+        self.assertIn("Bone(root)", warnings[0].message)
+        self.assertEqual(ap.components_removed(FakeCalls([]), []), [])
+        renamed = ap.phase_element_removes({"Hierarchy": live["Hierarchy"]}, live)
+        self.assertEqual(renamed, [])
+
+    def test_inspect_lists_components_by_element(self):
+        facts = {"header": {"skipped": {"Components": 3}, "components": COMPONENTS}, "pins": {}, "globals": {}}
+        original = cr.read_body
+        cr.read_body = lambda calls, detail: ({}, facts)
+        try:
+            payload = cr.inspect_payload({"Body": {}}, None)
+        finally:
+            cr.read_body = original
+        self.assertEqual(payload["Skipped"], {"Components": 3, "ComponentsByElement": {
+            "Bone(root)": ["PhysicsBody (RigPhysicsBodyComponent)", "Joint (RigPhysicsJointComponent)"],
+            "Null(gone)": ["Solver (RigPhysicsSolverComponent)"]}})
 
 
 class InspectTests(unittest.TestCase):

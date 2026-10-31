@@ -20,6 +20,7 @@ class UMovieSceneSection;
 class UMovieSceneSequence;
 class UMovieSceneTrack;
 class UBlueprint;
+class ULevelSequence;
 struct FMovieSceneDynamicBinding;
 struct FMovieSceneEvent;
 struct FMovieSceneSequenceID;
@@ -192,8 +193,8 @@ struct FEncodeContext
 // for a reference into another sequence), FMovieSceneTimeWarpVariant -> one of {"PlayRate": x}, {"FixedFrame": frames},
 // {"FrameRate": rate}, {"Loop": frames}, {"Clamp": frames}, {"LoopFloat": x}, {"ClampFloat": x}, {"Custom": instanced
 // object}, FMovieSceneEvent -> the event shape, instanced objects {Class, Properties?}, engine structs member by member,
-// everything else through the Editor typed value codec. A value the codec
-// cannot represent is {"Unsupported": <export text>} with Sequencer.UnsupportedValue. Never fails.
+// everything else through the Editor typed value codec. A value the codec cannot represent is the marker
+// {"Unsupported": <reason>, "Text": <export text>} with Sequencer.UnsupportedValue. Never fails.
 FValue EncodeValue(const FProperty& Property, const void* ValuePtr, FEncodeContext& Context);
 
 // The fields of Object that differ from Defaults (null: every field), in declaration order, filtered by Include.
@@ -416,6 +417,11 @@ FValue EncodeDynamicBinding(const FMovieSceneDynamicBinding& Binding, FEncodeCon
 bool DecodeDynamicBinding(const FValue& Value, FMovieSceneDynamicBinding& Binding, FDecodeContext& Context);
 // Document paths of the event sections and bindings that call the director.
 TArray<FString> DirectorUsers(const UMovieSceneSequence& Sequence);
+
+// ---- metadata (AssetDocumentSequencerRead.cpp) ----------------------------------------------------------------------
+
+// The metadata objects of a Level Sequence (ULevelSequence::MetaDataObjects), null entries left out.
+TArray<const UObject*> MetaDataObjectsOf(const ULevelSequence& Level);
 
 // ---- groups and remote references (AssetDocumentSequencerGroups.cpp) ------------------------------------------------
 

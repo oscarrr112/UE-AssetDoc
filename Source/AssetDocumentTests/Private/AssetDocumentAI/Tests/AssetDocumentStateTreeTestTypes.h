@@ -10,9 +10,22 @@
 // (FScopedTestTypesVisible).
 
 #include "CoreMinimal.h"
+#include "StateTreeDelegate.h"
 #include "StateTreeEvaluatorBase.h"
+#include "UObject/Object.h"
 
 #include "AssetDocumentStateTreeTestTypes.generated.h"
+
+// An edit-inline settings object: an instanced object value, which the document codec has no form for.
+UCLASS(EditInlineNew)
+class UAssetDocumentStateTreeTestConfig : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY(EditAnywhere, Category = "Config")
+	float Range = 0.f;
+};
 
 USTRUCT()
 struct FAssetDocumentStateTreeTestEvaluatorInstanceData
@@ -27,6 +40,9 @@ struct FAssetDocumentStateTreeTestEvaluatorInstanceData
 
 	UPROPERTY(EditAnywhere, Category = "Output")
 	int32 Count = 0;
+
+	UPROPERTY(EditAnywhere, Instanced, Category = "Parameter")
+	TObjectPtr<UAssetDocumentStateTreeTestConfig> Config = nullptr;
 };
 
 USTRUCT(meta = (Hidden, DisplayName = "AssetDocument Test Evaluator", Category = "AssetDocument Tests"))
@@ -40,4 +56,24 @@ struct FAssetDocumentStateTreeTestEvaluator : public FStateTreeEvaluatorCommonBa
 
 	UPROPERTY(EditAnywhere, Category = "Parameter")
 	bool bVerbose = false;
+};
+
+// An evaluator with a delegate dispatcher an OnDelegate transition can listen to.
+USTRUCT()
+struct FAssetDocumentStateTreeTestDispatcherInstanceData
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, Category = "Output")
+	FStateTreeDelegateDispatcher OnDone;
+};
+
+USTRUCT(meta = (Hidden, DisplayName = "AssetDocument Test Dispatcher", Category = "AssetDocument Tests"))
+struct FAssetDocumentStateTreeTestDispatcherEvaluator : public FStateTreeEvaluatorCommonBase
+{
+	GENERATED_BODY()
+
+	using FInstanceDataType = FAssetDocumentStateTreeTestDispatcherInstanceData;
+
+	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
 };

@@ -8,7 +8,7 @@
 //        no-op; save + reload is stable.
 //   UEAssetDoc.Niagara.Script.FreeEdits       the same edits made through the editor's API on one
 //        duplicate and through a document on another give the same document (settings, node layout and comment,
-//        pin defaults, parameter metadata and static switch defaults).
+//        a sized comment box, pin defaults, parameter metadata and static switch defaults).
 //   UEAssetDoc.Niagara.Script.NewSettingsValue  a Settings value the asset did not have before
 //        (the read leaves defaults out) is a Diff and applies; the default value itself is no difference.
 //   UEAssetDoc.Niagara.Script.ManageScriptVariables  a graph edit that stops using a parameter
@@ -35,7 +35,9 @@
 
 #include "Algo/AllOf.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
+#include "EdGraphNode_Comment.h"
 #include "EdGraphSchema_Niagara.h"
 #include "NiagaraGraph.h"
 #include "NiagaraConstants.h"
@@ -188,6 +190,20 @@ FString EditLikeTheEditor(UNiagaraScript& Script)
 		Nodes[0]->NodePosY -= 32;
 		Nodes[0]->NodeComment = TEXT("Moved by the free-edit test");
 		Done.Add(TEXT("layout"));
+	}
+	{
+		// The graph's "Create Comment", then the box dragged to enclose a region.
+		const FScopedTransaction Transaction(NSLOCTEXT("AssetDocumentNiagaraTests", "Comment", "Comment"));
+		Graph->Modify();
+		FGraphNodeCreator<UEdGraphNode_Comment> Creator(*Graph);
+		UEdGraphNode_Comment* Box = Creator.CreateNode(false);
+		Box->NodePosX = -480;
+		Box->NodePosY = -320;
+		Box->NodeComment = TEXT("Boxed by the free-edit test");
+		Creator.Finalize();
+		Box->NodeWidth = 640;
+		Box->NodeHeight = 288;
+		Done.Add(TEXT("comment box"));
 	}
 	if (UEdGraphPin* Pin = FloatDefaultPin(*Graph))
 	{

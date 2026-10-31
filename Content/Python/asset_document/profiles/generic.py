@@ -8,7 +8,7 @@ import re
 from asset_document.canonical.document_codec import DocumentCodec
 from asset_document.diff.canonical_diff import canonical_diff
 from asset_document.diff.model import Difference
-from asset_document.diagnostics import contract_error
+from asset_document.diagnostics import contract_error, is_collecting_read_warnings, read_note
 from asset_document.dto import ChangedRecord, JsonValue, PrimitiveRequirement, RuntimePhase
 from asset_document.meta import DocumentAction
 from asset_document.regions.fragment_semantics import (
@@ -18,7 +18,10 @@ from asset_document.regions.fragment_semantics import (
 from asset_document.regions.primitive_catalog import (
     GENERIC_REQUIRED_PRIMITIVES,
     GenericPrimitiveContext,
+    NamedOpaqueHandleArgument,
     OpaqueHandleProxy,
+    PrimitiveOutcomeStatus,
+    requirement,
 )
 from asset_document.profiles.generic_components import generic_property_component
 from asset_document.regions.property_semantics import (
@@ -26,7 +29,7 @@ from asset_document.regions.property_semantics import (
     PropertySemanticAdapter,
 )
 from asset_document.regions.enhanced_input_checks import enhanced_input_warnings
-from asset_document.regions.inspection_semantics import InspectionSemanticAdapter
+from asset_document.regions.inspection_semantics import _EDITOR_INSPECT_ID, InspectionSemanticAdapter
 from asset_document.read_only_extract import admits_read_only
 
 
@@ -340,6 +343,8 @@ class GenericProfileCandidate:
             include_defaults=include_defaults,
             authored=authored_properties,
         )
+        if is_collecting_read_warnings():
+            self._note_omitted_saved_state(asset_handle, context)
         return _snapshot(
             {
                 "SchemaVersion": 1,
@@ -350,6 +355,27 @@ class GenericProfileCandidate:
                 "Properties": properties,
             }
         )
+
+    def _note_omitted_saved_state(self, asset_handle: OpaqueHandleProxy, context: GenericPrimitiveContext) -> None:
+        """An Info diagnostic naming the saved properties no document form covers (custom asset editors and code
+        edit them, the Details panel does not) whose value is not the class default. Apply keeps them."""
+        values: dict[str, JsonValue] = {"mode": "omitted_saved_state", "exact_asset_class_path": self._exact_asset_class_path}
+        if self._properties.declared_names:
+            values["admit_properties"] = list(self._properties.declared_names)
+        outcome = context.invoke(
+            requirement=requirement(_EDITOR_INSPECT_ID),
+            value_arguments=values,
+            handle_arguments=(NamedOpaqueHandleArgument("asset", asset_handle),),
+        )
+        if outcome.status is not PrimitiveOutcomeStatus.SUCCEEDED or type(outcome.value) is not dict:
+            return
+        rows = outcome.value.get("omitted")
+        names = sorted({row["name"] for row in rows if type(row) is dict and type(row.get("name")) is str}) \
+            if type(rows) is list else []
+        if names:
+            read_note("/Properties", "Generic.OmittedSavedState",
+                      f"Saved state that has no document form (an asset editor or code sets it, the Details panel does "
+                      f"not) is not in Properties: {', '.join(names)}. Apply keeps it.")
 
     def validate_authored_properties(
         self,

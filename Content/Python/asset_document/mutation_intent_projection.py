@@ -58,7 +58,9 @@ def _copy_value(value: object, depth: int = 0) -> object:
     if type(value) is list:
         return [_copy_value(child, depth + 1) for child in value]
     if type(value) is dict:
-        _require(all(type(key) is str and key not in _RESERVED for key in value),
+        # The envelope names are reserved as the intent's own fields; nested objects are authored values, where a
+        # property may have any name (a variable called Slot or Body).
+        _require(all(type(key) is str and (depth > 0 or key not in _RESERVED) for key in value),
                  "Intent cannot contain Body, handles, addresses or rollback envelopes")
         return {key: _copy_value(child, depth + 1) for key, child in value.items()}
     raise ValueError("Intent must contain only JSON values; native objects and bytes are forbidden")

@@ -53,9 +53,10 @@ FString GuidText(const FGuid& Guid)
 	return Guid.ToString(EGuidFormats::Digits);
 }
 
+// The shared text form: the source string, or LOCTABLE / INVTEXT / NSLOCTEXT when that keeps the text's identity.
 FString TextOf(const FText& Text)
 {
-	return Text.ToString();
+	return EditorPropertyValueCodec::EncodeText(Text);
 }
 
 FValue MakeTextArray(const TArray<FText>& Texts)
@@ -63,7 +64,7 @@ FValue MakeTextArray(const TArray<FText>& Texts)
 	TArray<FString> Values;
 	for (const FText& Text : Texts)
 	{
-		Values.Add(Text.ToString());
+		Values.Add(TextOf(Text));
 	}
 	return MakeStringArray(Values);
 }
@@ -116,9 +117,22 @@ const TCHAR* AccessName(EMetasoundFrontendVertexAccessType Access)
 	}
 }
 
+// The read of a value the codec has no form for: the reason and the engine's export text (read only).
+FValue UnsupportedMarker(const FProperty& Property, const void* Value)
+{
+	FString Exported;
+	Property.ExportText_Direct(Exported, Value, nullptr, nullptr, PPF_None);
+	FObjectBuilder Marker;
+	Marker.AddString(TEXT("Unsupported"), FString::Printf(TEXT("%s has no document form; AssetDoc keeps the value."),
+		*Property.GetCPPType()));
+	Marker.AddString(TEXT("Text"), Exported);
+	return Marker.Build();
+}
+
 // Sparse values of the editable, non-transient properties of Object that differ from Defaults (same layout),
-// through the typed value codec (the member-literal widget settings, node configurations).
-FValue SparseProperties(const UStruct& Struct, const void* Container, const void* Defaults)
+// through the typed value codec (the member-literal widget settings, node configurations). A value the codec has no
+// form for is left out, or with bMarkUnencodable listed as its marker (a write keeps it).
+FValue SparseProperties(const UStruct& Struct, const void* Container, const void* Defaults, bool bMarkUnencodable = false)
 {
 	FObjectBuilder Out;
 	for (TFieldIterator<FProperty> It(&Struct); It; ++It)
@@ -143,6 +157,10 @@ FValue SparseProperties(const UStruct& Struct, const void* Container, const void
 		{
 			Out.Add(Property->GetAuthoredName(), MoveTemp(Encoded));
 		}
+		else if (bMarkUnencodable)
+		{
+			Out.Add(Property->GetAuthoredName(), UnsupportedMarker(*Property, Value));
+		}
 	}
 	return Out.Build();
 }
@@ -158,8 +176,9 @@ FValue DescribeWidget(const UObject* MemberMetadata, const UObject* EditorDefaul
 }
 
 // A node configuration: its struct, the editable properties that differ from the configuration a new node of the
-// class gets (MakeDefaultNodeConfiguration; the struct's defaults when the class no longer provides that struct), and
-// all editable properties of that default ("defaults": an authored value equal to it is no change).
+// class gets (MakeDefaultNodeConfiguration; the struct's defaults when the class no longer provides that struct; a
+// setting the codec has no form for as its marker), and all editable properties of that default ("defaults": an
+// authored value equal to it is no change).
 FValue DescribeConfiguration(const TInstancedStruct<FMetaSoundFrontendNodeConfiguration>& Configuration, const FMetasoundFrontendClass* Class)
 {
 	const UScriptStruct* Struct = Configuration.GetScriptStruct();
@@ -169,13 +188,13 @@ FValue DescribeConfiguration(const TInstancedStruct<FMetaSoundFrontendNodeConfig
 		: TInstancedStruct<FMetaSoundFrontendNodeConfiguration>();
 	if (ClassDefault.IsValid() && ClassDefault.GetScriptStruct() == Struct)
 	{
-		Out.Add(TEXT("properties"), SparseProperties(*Struct, Configuration.GetMemory(), ClassDefault.GetMemory()));
+		Out.Add(TEXT("properties"), SparseProperties(*Struct, Configuration.GetMemory(), ClassDefault.GetMemory(), true));
 		Out.Add(TEXT("defaults"), SparseProperties(*Struct, ClassDefault.GetMemory(), nullptr));
 	}
 	else
 	{
 		FStructOnScope Defaults(Struct);
-		Out.Add(TEXT("properties"), SparseProperties(*Struct, Configuration.GetMemory(), Defaults.GetStructMemory()));
+		Out.Add(TEXT("properties"), SparseProperties(*Struct, Configuration.GetMemory(), Defaults.GetStructMemory(), true));
 		Out.Add(TEXT("defaults"), SparseProperties(*Struct, Defaults.GetStructMemory(), nullptr));
 	}
 	return Out.Build();

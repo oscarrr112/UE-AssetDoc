@@ -8,6 +8,7 @@
 #include "AssetDocumentHttpServer.h"
 #include "AssetDocumentIngressQueue.h"
 #include "AssetDocumentService.h"
+#include "AssetDocumentSidecarAutoReimport.h"
 #include "AssetDocumentSidecarSyncRunner.h"
 
 DEFINE_LOG_CATEGORY(LogAssetDocument);
@@ -33,6 +34,7 @@ void FAssetDocumentModule::StartupModule()
 	FileWatcher->Register();
 	if (GIsEditor && !IsRunningCommandlet())
 	{
+		UE::AssetDocument::SidecarAutoReimport::Register();
 		Service->GetSidecarSyncRunner().Register();
 		FAssetDocumentHttpServer::SetHealthField(TEXT("sidecar_sync"), []()
 		{
@@ -44,6 +46,7 @@ void FAssetDocumentModule::StartupModule()
 void FAssetDocumentModule::ShutdownModule()
 {
 	FAssetDocumentHttpServer::SetHealthField(TEXT("sidecar_sync"), nullptr);
+	UE::AssetDocument::SidecarAutoReimport::Unregister();
 	if (Service.IsValid())
 	{
 		Service->GetSidecarSyncRunner().Unregister();

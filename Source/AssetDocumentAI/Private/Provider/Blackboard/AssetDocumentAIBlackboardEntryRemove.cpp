@@ -50,14 +50,6 @@ bool IsExactOwnedEntry(
 		&& Entry.KeyType->GetOuter() == &Blackboard && !Names.Contains(Entry.EntryName);
 }
 
-bool HasForbiddenParentShadow(
-	const UBlackboardData& Blackboard,
-	const FBlackboardEntry& Entry)
-{
-	return !IsEngineDerivedSelfKey(Entry)
-		&& HasInheritedKey(Blackboard, Entry.EntryName);
-}
-
 bool IsRequestedAuthoredEntry(
 	const FBlackboardEntry& Entry,
 	const FName RequestedName)
@@ -76,7 +68,6 @@ bool FindExactOwnedLocalTarget(
 		const FBlackboardEntry& Entry = Blackboard.Keys[Index];
 		if (!IsExactOwnedEntry(Blackboard, Entry, Names)) return false;
 		Names.Add(Entry.EntryName);
-		if (HasForbiddenParentShadow(Blackboard, Entry)) return false;
 		if (IsRequestedAuthoredEntry(Entry, RequestedName)) OutTargetIndex = Index;
 	}
 	return true;
@@ -148,7 +139,7 @@ TOptional<FAssetDocumentPrimitiveOutcome> PreflightEntryRemoveIdentity(
 	if (!IsEditorPropertyContext(OutBlackboard))
 		return Failure(TEXT("AIProvider.InvalidContext"),
 			TEXT("Blackboard entry removal requires the Editor game thread."));
-	return {};
+	return RefuseLiveBlackboardLayoutChange(*OutBlackboard);
 }
 
 TOptional<FAssetDocumentPrimitiveOutcome> PreflightEntryRemoveTarget(

@@ -19,6 +19,8 @@
 //           store's SetParameterData / SetUObject; a data interface's Details edit (Modify, PreEditChange,
 //           write, PostEditChangeProperty).
 //   description  the Details panel of the parameter's UNiagaraScriptVariable (Metadata.Description).
+//   meta         the same Details panel's other metadata (slider and widget, display unit, advanced display, edit
+//                and visible conditions, aliases): {properties?, reset?} of FNiagaraVariableMetaData.
 //   category     the hierarchy editor: categories (UHierarchyCategory) under the system editor data's
 //                UserParameterHierarchy, the parameter's element copied from the hierarchy view model's source
 //                items into its category (UHierarchyElement::CopyAndAddItemUnderParentIdentity).
@@ -553,6 +555,43 @@ bool SetDescription(FUserParameterContext& Context, const FNiagaraVariable& Vari
 	return true;
 }
 
+// The Details panel's metadata other than Description (which "description" writes): {properties?, reset?}.
+bool WriteVariableMeta(Graph::FReader& Op, UNiagaraScriptVariable& ScriptVariable, bool& bOutChanged)
+{
+	const FValue* Meta = Op.Find(TEXT("meta"));
+	if (Meta == nullptr || Meta->Kind != EAssetDocumentRuntimeValueKind::Object)
+	{
+		return Op.Fail(TEXT("Graph.InvalidArgument"), TEXT("meta is {properties?, reset?}."), TEXT("meta"));
+	}
+	Graph::FReader MetaOp = Op.Child(TEXT("meta"), *Meta);
+	if (!MetaOp.OnlyFields({TEXT("properties"), TEXT("reset")}))
+	{
+		return false;
+	}
+	const FNiagaraVariableMetaData Defaults;
+	const FName WrittenElsewhere[] = {GET_MEMBER_NAME_CHECKED(FNiagaraVariableMetaData, Description)};
+	UNiagaraScriptVariable* Target = &ScriptVariable;
+	return WriteProperties(MetaOp, *FNiagaraVariableMetaData::StaticStruct(), &ScriptVariable.Metadata, &Defaults, Target,
+		WrittenElsewhere, bOutChanged,
+		[Target](FProperty&) { Target->Modify(); },
+		[Target](FProperty&)
+		{
+			FPropertyChangedEvent Event(UNiagaraScriptVariable::StaticClass()->FindPropertyByName(TEXT("Metadata")), EPropertyChangeType::ValueSet);
+			Target->PostEditChangeProperty(Event);
+		});
+}
+
+bool SetUserMeta(Graph::FReader& Op, FUserParameterContext& Context, const FNiagaraVariable& Variable, bool& bOutChanged)
+{
+	Context.EditorData.Modify();
+	UNiagaraScriptVariable* ScriptVariable = Context.EditorData.FindOrAddUserScriptVariable(Variable, Context.System);
+	if (ScriptVariable == nullptr)
+	{
+		return Op.Fail(TEXT("Niagara.UserParameterNotFound"), TEXT("The parameter has no Details (user script variable)."), TEXT("meta"));
+	}
+	return WriteVariableMeta(Op, *ScriptVariable, bOutChanged);
+}
+
 bool SetCategory(Graph::FReader& Op, FUserParameterContext& Context, const FNiagaraVariable& Variable, const FString& Category, bool& bOutChanged)
 {
 	UHierarchyRoot* Root = Context.EditorData.UserParameterHierarchy;
@@ -646,7 +685,8 @@ bool Set(Graph::FReader& Op, FUserParameterContext& Context, bool& bOutChanged)
 {
 	FString Name;
 	FNiagaraVariable Variable;
-	if (!Op.OnlyFields({TEXT("op"), TEXT("name"), TEXT("value"), TEXT("reset"), TEXT("description"), TEXT("category")}) || !Op.String(TEXT("name"), Name))
+	if (!Op.OnlyFields({TEXT("op"), TEXT("name"), TEXT("value"), TEXT("reset"), TEXT("description"), TEXT("category"), TEXT("meta")})
+		|| !Op.String(TEXT("name"), Name))
 	{
 		return false;
 	}
@@ -668,6 +708,10 @@ bool Set(Graph::FReader& Op, FUserParameterContext& Context, bool& bOutChanged)
 		{
 			return false;
 		}
+	}
+	if (Op.Has(TEXT("meta")) && !SetUserMeta(Op, Context, Variable, bOutChanged))
+	{
+		return false;
 	}
 	FString Category;
 	if (Op.Has(TEXT("category")))
@@ -822,14 +866,15 @@ bool DeleteDeclared(Graph::FReader& Op, FUserParameterContext& Context, bool& bO
 	return true;
 }
 
-// {op: "parameter", name, description}: the parameter's Details (Metadata.Description).
+// {op: "parameter", name, description?, meta?}: the parameter's Details (Metadata.Description and the other
+// metadata as {properties?, reset?}); at least one of them.
 bool EditDeclared(Graph::FReader& Op, FUserParameterContext& Context, bool& bOutChanged)
 {
 	FString Name;
 	FString Description;
 	FDeclaredList List;
-	if (!Op.OnlyFields({TEXT("op"), TEXT("name"), TEXT("description")}) || !Op.String(TEXT("name"), Name)
-		|| !Op.String(TEXT("description"), Description, true) || !RequireDeclaredList(Op, Context.System, List))
+	if (!Op.OnlyFields({TEXT("op"), TEXT("name"), TEXT("description"), TEXT("meta")}) || !Op.String(TEXT("name"), Name)
+		|| !Op.String(TEXT("description"), Description, !Op.Has(TEXT("meta"))) || !RequireDeclaredList(Op, Context.System, List))
 	{
 		return false;
 	}
@@ -838,7 +883,11 @@ bool EditDeclared(Graph::FReader& Op, FUserParameterContext& Context, bool& bOut
 	{
 		return Op.Fail(TEXT("Niagara.ParameterNotFound"), FString::Printf(TEXT("The system declares no '%s'."), *Name), TEXT("name"));
 	}
-	return SetDeclaredDescription(*Variable, Description, bOutChanged);
+	if (Op.Has(TEXT("description")) && !SetDeclaredDescription(*Variable, Description, bOutChanged))
+	{
+		return false;
+	}
+	return !Op.Has(TEXT("meta")) || WriteVariableMeta(Op, *Variable, bOutChanged);
 }
 } // namespace
 

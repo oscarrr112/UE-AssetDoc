@@ -7,7 +7,7 @@
 //   script       {scope, usage, settings, versions?}        settings: sparse FVersionedNiagaraScriptData of the
 //                exposed version; versions (versioned scripts only): [{Number, Guid, Exposed?, ChangeDescription?, Deprecated?, DeprecationMessage?, Visible?}]
 //   parameter    {scope, name, type, default?, default_mode?, default_binding?, static_switch_default?, meta}
-//   node         {scope, id, action, x, y, version?, comment?, properties?, pins?}   (custom HLSL text: properties.CustomHlsl)
+//   node         {scope, id, action, x, y, version?, comment?, size? (comment box: {width, height}), properties?, pins?}   (custom HLSL text: properties.CustomHlsl)
 //   link         {scope, from "Id:Pin", to "Id:Pin"}
 //   pin_default  {scope, pin "Id:Pin", value}
 // The script asset is read at its exposed version (as the script editor opens it). Node ids are object
@@ -486,6 +486,16 @@ void ReadGraph(const UNiagaraGraph& Graph, const FString& Scope, bool bNodeDefau
 		{
 			AddField(Row, TEXT("comment"), Graph::MakeString(Node->NodeComment));
 		}
+#if WITH_EDITORONLY_DATA
+		if (Node->bCanResizeNode)
+		{
+			// A comment box's size (SGraphNodeResizable): what it encloses.
+			FObjectBuilder Size;
+			Size.AddInt(TEXT("width"), Node->NodeWidth);
+			Size.AddInt(TEXT("height"), Node->NodeHeight);
+			AddField(Row, TEXT("size"), Size.Build());
+		}
+#endif
 		FValue Properties = NodeDetails(*Node);
 		if (Properties.ObjectKeys.Num() > 0)
 		{

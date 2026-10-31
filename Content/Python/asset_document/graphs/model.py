@@ -88,6 +88,10 @@ def thaw_json(value: object) -> object:
 _EMPTY = MappingProxyType({})
 
 
+# A node's enabled state as documents name it -> as graph primitives name it.
+ENABLED_STATES = {"Enabled": "enabled", "Disabled": "disabled", "DevelopmentOnly": "development_only"}
+
+
 @dataclass(frozen=True, slots=True)
 class Position:
     x: float
@@ -297,9 +301,14 @@ class NodeDoc:
     size: Size | None = None
     # The node comment bubble pinned open; None = not stated (kept).
     comment_bubble_visible: bool | None = None
+    # "Disabled" / "DevelopmentOnly" / "Enabled" as stated (None: omitted, the live state is kept).
+    enabled: str | None = None
     # The Action as the document wrote it (``K2:Min``; ``action`` is its normalized key), recorded with the node so
     # extract writes it back. Not compared.
     authored_action: str | None = field(default=None, compare=False)
+    # True: the node is one of the editor's disabled placeholder ("ghost") nodes, as a new Blueprint's default events
+    # are placed (UEdGraphNode::IsAutomaticallyPlacedGhostNode); None: a real node.
+    ghost: bool | None = None
 
     def __post_init__(self) -> None:
         require_id(self.id, "/Id", "Graph.InvalidNodeId")
@@ -321,6 +330,15 @@ class NodeDoc:
             raise contract_error("/Size", "Graph.InvalidSize", "Size must be a Size value.")
         if self.comment_bubble_visible is not None and type(self.comment_bubble_visible) is not bool:
             raise contract_error("/CommentBubbleVisible", "Graph.InvalidType", "CommentBubbleVisible is true or false.")
+        if self.enabled is not None and self.enabled not in ENABLED_STATES:
+            raise contract_error("/Enabled", "Graph.InvalidType", "Enabled is Enabled, Disabled or DevelopmentOnly.")
+        if self.ghost is not None and self.ghost is not True:
+            raise contract_error("/Ghost", "Graph.InvalidType",
+                                 "Ghost is true (an editor placeholder node) or false / omitted (a real node).")
+        if self.ghost and self.enabled is not None:
+            raise contract_error("/Enabled", "Graph.ConflictingSetting",
+                                 "A Ghost node is the editor's disabled placeholder: it has no Enabled state of its own. "
+                                 "Leave Ghost out to make it a real node with that state.")
         if type(self.pin_overrides) is not tuple or any(type(item) is not PinOverride for item in self.pin_overrides):
             raise contract_error("/PinOverrides", "Graph.InvalidPinOverride", "Pin overrides are a PinOverride tuple.")
         keys = [(item.pin.casefold(), item.direction) for item in self.pin_overrides]

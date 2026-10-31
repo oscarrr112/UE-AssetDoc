@@ -3,7 +3,7 @@
 
 import unittest
 
-from asset_document import bootstrap
+from asset_document import bootstrap, class_routing
 from asset_document.diagnostics import AssetDocumentContractError
 from asset_document.mutation_intent_projection import SNAPSHOT_COVERED
 from asset_document.profiles import ublueprint_members as members
@@ -81,6 +81,52 @@ class CanonicalTests(unittest.TestCase):
         self.assertIsNotNone(binding)
         self.assertEqual(binding.target_lifecycle.create_context_handle_names, ("parent_class", "factory_class"))
         self.assertEqual(binding.target_lifecycle.optional_create_context_handle_names, ("factory_class",))
+
+
+EDITOR_UTILITY_CLASS = "/Script/Blutility.EditorUtilityBlueprint"
+
+
+class RoutedSubclassTests(unittest.TestCase):
+    """A Blueprint subclass without a profile of its own, routed to this one: its documents keep its own class."""
+
+    def test_the_document_carries_and_accepts_the_asset_class(self):
+        routed = {**document({"Variables": []}), "Class": EDITOR_UTILITY_CLASS}
+        with class_routing.routed(EDITOR_UTILITY_CLASS, UBLUEPRINT_CLASS):
+            self.assertEqual(canonicalize(routed)["Class"], EDITOR_UTILITY_CLASS)
+            self.assertEqual(UBlueprintRuntimeProfile().create_template(TARGET)["Class"], EDITOR_UTILITY_CLASS)
+            self.assertEqual(failure_code(lambda: canonicalize(document({}))), "UBlueprint.ClassMismatch")
+        self.assertEqual(failure_code(lambda: canonicalize(routed)), "UBlueprint.ClassMismatch")
+        self.assertEqual(UBlueprintRuntimeProfile().create_template(TARGET)["Class"], UBLUEPRINT_CLASS)
+
+    def test_another_profile_class_is_not_routed(self):
+        with class_routing.routed(EDITOR_UTILITY_CLASS, "/Script/UMGEditor.WidgetBlueprint"):
+            self.assertEqual(class_routing.document_class(UBLUEPRINT_CLASS), UBLUEPRINT_CLASS)
+        self.assertIsNone(class_routing.routed_class(UBLUEPRINT_CLASS))
+
+    def test_create_is_refused(self):
+        routed = {**document({"ParentClass": "/Script/Blutility.EditorUtilityObject"}), "Class": EDITOR_UTILITY_CLASS}
+        context = _ClassResolveContext()
+        with class_routing.routed(EDITOR_UTILITY_CLASS, UBLUEPRINT_CLASS):
+            with self.assertRaises(AssetDocumentContractError) as caught:
+                UBlueprintRuntimeProfile().create_target_context(routed, context)
+        self.assertEqual(caught.exception.diagnostic.code, "UBlueprint.SubclassCreateUnsupported")
+        self.assertEqual(caught.exception.diagnostic.path, "/Class")
+        self.assertEqual(context.calls, [])
+
+    def test_inspect_carries_only_the_routed_profile(self):
+        from types import SimpleNamespace
+        from asset_document import runtime
+
+        def request(profile_class):
+            return SimpleNamespace(requested_asset_class_path=EDITOR_UTILITY_CLASS,
+                                   requested_profile_class_path=profile_class, canonical_document={"mode": "live_asset"})
+
+        with class_routing.routed(EDITOR_UTILITY_CLASS, UBLUEPRINT_CLASS):
+            self.assertEqual(runtime._inspect_mode(request(UBLUEPRINT_CLASS)), "live_asset")
+            self.assertEqual(failure_code(lambda: runtime._inspect_mode(request("/Script/UMGEditor.WidgetBlueprint"))),
+                             "GenericRuntime.InvalidNativeProjection")
+        self.assertEqual(failure_code(lambda: runtime._inspect_mode(request(UBLUEPRINT_CLASS))),
+                         "GenericRuntime.InvalidNativeProjection")
 
 
 def failure_code(call):
@@ -216,6 +262,79 @@ class PlanTests(unittest.TestCase):
         extracted = members.members_from_query(query)
         self.assertEqual([item.path for item in members.diff_members(body, extracted, {}, {})], ["/Body/Variables"])
 
+    def test_variable_details_are_extracted_kept_when_omitted_and_set_when_stated(self):
+        live = live_variable("Health", default=100.0, replication="rep_notify", rep_notify_func="OnRep_Health",
+                             replication_condition="OwnerOnly", save_game=True, config=False, transient=False,
+                             advanced_display=False, expose_to_cinematics=False, deprecated=False,
+                             deprecation_message="", metadata={"ClampMin": "0", "UIMax": "100"})
+        query = {"variables": [live]}
+        extracted = members.members_from_query(query)
+        self.assertEqual(extracted["Variables"][0], {
+            "Name": "Health", "Type": "float", "DefaultValue": 100.0, "Replication": "RepNotify",
+            "RepNotifyFunc": "OnRep_Health", "ReplicationCondition": "OwnerOnly", "SaveGame": True,
+            "Metadata": {"ClampMin": "0", "UIMax": "100"}})
+        self.assertEqual(members.plan_variables(members.canonical_members(extracted), query), [])
+        self.assertEqual(members.diff_members(members.canonical_members(extracted), extracted, {}, {}), [])
+        # A row written before these settings were read leaves them out: they are kept.
+        older = members.canonical_members({"Variables": [{"Name": "Health", "Type": "float", "DefaultValue": 100.0}]})
+        self.assertEqual(members.plan_variables(older, query), [])
+        self.assertEqual(members.diff_members(older, extracted, {}, {}), [])
+        # Stated values are set as the Details panel does.
+        edited = members.canonical_members({"Variables": [{"Name": "Health", "Type": "float", "Replication": "Replicated",
+                                                           "SaveGame": False, "Metadata": {"ClampMin": "1"}}]})
+        ops = members.plan_variables(edited, query)
+        self.assertEqual({key: ops[0][1][key] for key in ("replication", "save_game", "metadata")},
+                         {"replication": "replicated", "save_game": False, "metadata": {"ClampMin": "1"}})
+        self.assertNotIn("rep_notify_func", ops[0][1])
+        # RepNotify without a function name takes the editor's OnRep_<Name>.
+        created = members.canonical_members({"Variables": [{"Name": "Ammo", "Type": "int", "Replication": "repnotify"}]})
+        self.assertEqual(created["Variables"][0]["RepNotifyFunc"], "OnRep_Ammo")
+        self.assertEqual(failure_code(lambda: members.canonical_members({"Variables": [
+            {"Name": "Ammo", "Type": "int", "Replication": "Replicated", "RepNotifyFunc": "OnRep_Ammo"}]})),
+            "UBlueprint.InvalidBodyRegion")
+
+    def test_text_variable_metadata_is_stated_against_the_new_variable_multi_line(self):
+        # The editor marks a new String / Text variable Multi Line: a Text variable without it states Metadata {}.
+        plain = live_variable("Label", "text", "", metadata={})
+        multi = live_variable("Title", "text", "", metadata={"MultiLine": "true"})
+        extracted = members.members_from_query({"variables": [plain, multi]})
+        self.assertEqual(extracted["Variables"][0]["Metadata"], {})
+        self.assertNotIn("Metadata", extracted["Variables"][1])
+        self.assertEqual(members.diff_members(members.canonical_members(extracted), extracted, {}, {}), [])
+        ops = members.plan_variables(members.canonical_members(extracted), {"variables": []})
+        self.assertEqual([op[1].get("metadata") for op in ops], [{}, None])
+
+    def test_component_category_tooltip_and_default_scene_root(self):
+        query = {"components": [
+            {"name": "Door", "scope": "owned", "class": "/Script/Engine.StaticMeshComponent", "attach_to": "",
+             "category": "Door", "tooltip": "The door leaf", "properties": {}},
+            {"name": "DefaultSceneRoot", "scope": "default", "class": "/Script/Engine.SceneComponent",
+             "properties": {"Mobility": "Static"}}]}
+        extracted = members.members_from_query(query)
+        self.assertEqual(extracted["Components"], [
+            {"Name": "Door", "Class": "/Script/Engine.StaticMeshComponent", "Category": "Door", "Tooltip": "The door leaf"},
+            {"Name": "DefaultSceneRoot", "Scope": "Default", "Properties": {"Mobility": "Static"}}])
+        body = members.canonical_members(extracted)
+        self.assertEqual(members.plan_component_variables(body, query) + members.plan_component_values(body, query), [])
+        self.assertEqual(members.diff_members(body, extracted, {}, {}), [])
+        # Rows written before these were read leave them out: Category, Tooltip and the root's values are kept.
+        older = members.canonical_members({"Components": [{"Name": "Door", "Class": "/Script/Engine.StaticMeshComponent"}]})
+        self.assertEqual(members.plan_component_variables(older, query) + members.plan_component_values(older, query), [])
+        self.assertEqual(members.diff_members(older, extracted, {}, {}), [])
+        # Stated values are set; a listed root's unlisted value is reset.
+        edited = members.canonical_members({"Components": [
+            {"Name": "Door", "Class": "/Script/Engine.StaticMeshComponent", "Category": "", "Tooltip": "Leaf"},
+            {"Name": "DefaultSceneRoot", "Scope": "Default", "Properties": {}}]})
+        self.assertEqual(members.plan_component_variables(edited, query), [(
+            "blueprint.member.component.variable.set.v1", {"name": "Door", "category": "Default", "tooltip": "Leaf"},
+            "/Body/Components/0")])
+        self.assertEqual(members.plan_component_values(edited, query), [(
+            "blueprint.member.property.set.v1", {"target": "component", "component": {"name": "DefaultSceneRoot",
+                                                                                      "scope": "default"},
+                                                 "property": "Mobility", "reset": True}, "/Body/Components/1/Properties")])
+        self.assertEqual(failure_code(lambda: members.canonical_members({"Components": [
+            {"Name": "DefaultSceneRoot", "Scope": "Default", "Category": "Root"}]})), "UBlueprint.InvalidBodyRegion")
+
     def test_components_are_added_parents_first_and_class_change_recreates(self):
         body = members.canonical_members({"Components": [
             {"Name": "Light", "Class": "/Script/Engine.PointLightComponent", "AttachTo": "Mesh"},
@@ -324,6 +443,112 @@ class DiffTests(unittest.TestCase):
         self.assertEqual(members.diff_members(same, extracted, {}, {}, True), [])
 
 
+class OversizedValueMarkerTests(unittest.TestCase):
+    MARK = {"Unsupported": "This value is too large to read in one document page (4100 nodes, limit 3000); "
+                           "AssetDoc keeps it as it is."}
+
+    def query(self):
+        return {"parent_class": "/Script/Engine.Actor", "interfaces": [], "variables": [],
+                "components": [{"name": "Tiles", "scope": "owned", "attach_to": "",
+                                "class": "/Script/Engine.InstancedStaticMeshComponent",
+                                "properties": {"PerInstanceSMData": dict(self.MARK), "bCastShadow": False}},
+                               {"name": "Spline", "scope": "native", "subobject": "Spline",
+                                "properties": {"SplineCurves": dict(self.MARK)}}],
+                "class_defaults": {"Waypoints": dict(self.MARK), "InitialLifeSpan": 5.0},
+                "properties": {"BlueprintDescription": "Kit", "HugeSetting": dict(self.MARK)}}
+
+    def test_extract_warns_at_each_marked_value(self):
+        from asset_document.diagnostics import collecting_read_warnings
+        query = self.query()
+        body = members.members_from_query(query)
+        with collecting_read_warnings() as warnings:
+            members.warn_markers(body, query["properties"])
+        self.assertEqual(sorted((item.code, item.path) for item in warnings), [
+            ("UBlueprint.Unrepresented", "/Body/ClassDefaults/Waypoints"),
+            ("UBlueprint.Unrepresented", "/Body/Components/0/Properties/PerInstanceSMData"),
+            ("UBlueprint.Unrepresented", "/Body/Components/1/Properties/SplineCurves"),
+            ("UBlueprint.Unrepresented", "/Properties/HugeSetting")])
+
+    def test_left_or_omitted_markers_keep_the_value(self):
+        query = self.query()
+        body = members.members_from_query(query)
+        self.assertEqual(members.plan_values(body, query), [])
+        self.assertEqual(members.plan_header(dict(query["properties"]), body, query), [])
+        self.assertEqual(members.diff_members(body, members.members_from_query(query), query["properties"],
+                                              query["properties"], True), [])
+        # Omitted: no reset of the marked value, and no difference; the other values still apply.
+        body["Components"][0]["Properties"] = {"bCastShadow": True}
+        del body["Components"][1]
+        body["ClassDefaults"] = {"InitialLifeSpan": 5.0}
+        ops = [(op[1].get("property"), op[1].get("value", "reset" if op[1].get("reset") else None))
+               for op in members.plan_values(body, query)]
+        self.assertEqual(ops, [("bCastShadow", True)])
+        extracted = members.members_from_query(query)
+        self.assertEqual([item.path for item in members.diff_members(body, extracted, {}, {}, True)],
+                         ["/Body/Components/0/Properties/bCastShadow"])
+        self.assertEqual(members.plan_header({"BlueprintDescription": "Kit"}, body, query), [])
+
+    def test_an_edited_marker_is_refused(self):
+        query = self.query()
+        for edit, path in (
+                (lambda body, props: body["ClassDefaults"]["Waypoints"].update(Unsupported="x"), "/Body/ClassDefaults/Waypoints"),
+                (lambda body, props: body["Components"][0]["Properties"].update(bCastShadow=dict(self.MARK)),
+                 "/Body/Components/0/Properties/bCastShadow"),
+                (lambda body, props: props["HugeSetting"].update(Unsupported="x"), "/Properties/HugeSetting")):
+            body, props = members.members_from_query(query), {key: dict(value) if type(value) is dict else value
+                                                             for key, value in query["properties"].items()}
+            body["ClassDefaults"] = {key: dict(value) if type(value) is dict else value
+                                     for key, value in body["ClassDefaults"].items()}
+            edit(body, props)
+            with self.subTest(path=path), self.assertRaises(AssetDocumentContractError) as caught:
+                members.plan_values(body, query)
+                members.plan_header(props, body, query)
+            self.assertEqual((caught.exception.diagnostic.code, caught.exception.diagnostic.path),
+                             ("UBlueprint.UnrepresentedValue", path))
+
+    def test_markers_are_not_sent_to_the_pick_check(self):
+        from asset_document.profiles.ublueprint_runtime import pick_check_items
+        query = self.query()
+        items = pick_check_items(document(members.members_from_query(query), query["properties"]))
+        self.assertEqual([item["at"] for item in items], ["/Properties/BlueprintDescription"])
+
+
+class UnrepresentedSubclassPropertyTests(unittest.TestCase):
+    ROWS = [{"name": "SavedCount", "owner_class": "/Script/Plugin.StatefulBlueprint", "holds_graphs": False},
+            {"name": "StateGraphs", "owner_class": "/Script/Plugin.StatefulBlueprint", "holds_graphs": True}]
+
+    def test_extract_names_each_unrepresented_property(self):
+        from asset_document.diagnostics import collecting_read_warnings
+        with collecting_read_warnings() as warnings:
+            members.warn_unrepresented({"unrepresented": self.ROWS})
+        self.assertEqual([(item.code, item.path) for item in warnings],
+                         [("UBlueprint.Unrepresented", "/Class")] * 2)
+        self.assertIn("SavedCount", warnings[0].message)
+        self.assertIn("keeps it", warnings[0].message)
+        self.assertIn("StateGraphs", warnings[1].message)
+        self.assertIn("refused", warnings[1].message)
+
+    def test_an_asset_without_them_reads_without_a_warning(self):
+        from asset_document.diagnostics import collecting_read_warnings
+        with collecting_read_warnings() as warnings:
+            members.warn_unrepresented({})
+        self.assertEqual(warnings, [])
+        members.refuse_unrepresented_graphs({})
+
+    def test_apply_is_refused_only_for_graphs_of_its_own(self):
+        members.refuse_unrepresented_graphs({"unrepresented": self.ROWS[:1]})
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            members.refuse_unrepresented_graphs({"unrepresented": self.ROWS})
+        self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                         ("UBlueprint.SubclassGraphsUnsupported", "/Class"))
+        self.assertIn("StateGraphs", raised.exception.diagnostic.message)
+
+    def test_paging_keeps_the_header_list(self):
+        pages = {0: {"unrepresented": self.ROWS, "variables": [], "next_offset": 1}, 1: {"unrepresented": self.ROWS,
+                                                                                       "variables": [], "next_offset": None}}
+        self.assertEqual(query_member_pages(pages.__getitem__)["unrepresented"], self.ROWS)
+
+
 class GraphCompareTests(unittest.TestCase):
     AUTHORED = [{"Name": "Compute", "Signature": {"Inputs": [{"Name": "X", "Type": "float"}]},
                  "Nodes": [{"Id": "If", "Action": "K2:Branch"},
@@ -363,6 +588,22 @@ class GraphCompareTests(unittest.TestCase):
                                             self_class=SELF), ["Compute"])
         authored = [dict(self.AUTHORED[0], Signature={"Inputs": [{"Name": "X", "Type": "int"}]})]
         self.assertEqual(section_mismatches("FunctionGraphs", authored, self.extracted(), self_class=SELF), ["Compute"])
+
+    def test_a_text_pin_display_string_names_its_text(self):
+        from asset_document import text_forms
+        form = 'LOCTABLE("/Game/UI/ST_Menu.ST_Menu", "Greeting")'
+        text_forms.learn({form: "Welcome back"})
+
+        def graph(value):
+            return [{"Name": "Compute", "Signature": {"Inputs": []},
+                     "Nodes": [{"Id": "Say", "Action": "K2:PrintText",
+                                "PinOverrides": [{"Pin": "InText", "DefaultTextValue": value}]}],
+                     "Links": [{"From": "Entry:then", "To": "Say:execute"}]}]
+        extracted = graph(form)
+        extracted[0]["Nodes"].insert(0, {"Id": "Entry", "Implicit": "entry", "NodeGuid": "C" * 32})
+        self.assertEqual(section_mismatches("FunctionGraphs", graph("Welcome back"), extracted, self_class=SELF), [])
+        self.assertEqual(section_mismatches("FunctionGraphs", graph(form), extracted, self_class=SELF), [])
+        self.assertEqual(section_mismatches("FunctionGraphs", graph("Hello"), extracted, self_class=SELF), ["Compute"])
 
     def test_mismatches_say_what_differs(self):
         def why(extracted, authored=None):
@@ -405,6 +646,24 @@ class GraphCompareTests(unittest.TestCase):
         # The whole extraction compared strictly with itself is empty.
         self.assertEqual(section_mismatches("FunctionGraphs", self.extracted(), self.extracted(), self_class=SELF,
                                             strict=True), [])
+
+    def test_strict_diff_compares_a_stated_enabled_state(self):
+        def with_enabled(graphs, state):
+            graph = graphs[0]
+            graph["Nodes"][1] = dict(graph["Nodes"][1], Enabled=state)
+            return graphs
+        disabled = with_enabled(self.extracted(), "Disabled")
+        # Extract states the state the user set; a stated one holds once the user set it.
+        self.assertEqual(section_mismatches("FunctionGraphs", with_enabled(self.extracted(), "Enabled"), disabled,
+                                            self_class=SELF, strict=True), ["Compute"])
+        # A node keeping the state it was placed with (a Development Only Print String) extracts no Enabled.
+        self.assertEqual(section_mismatches("FunctionGraphs", with_enabled(self.extracted(), "Enabled"),
+                                            self.extracted(), self_class=SELF, strict=True), ["Compute"])
+        self.assertEqual(section_mismatches("FunctionGraphs", with_enabled(self.extracted(), "Enabled"),
+                                            with_enabled(self.extracted(), "Enabled"), self_class=SELF, strict=True), [])
+        self.assertEqual(section_mismatches("FunctionGraphs", self.extracted(), disabled, self_class=SELF,
+                                            strict=True), [])
+        self.assertEqual(section_mismatches("FunctionGraphs", disabled, disabled, self_class=SELF, strict=True), [])
 
 
 if __name__ == "__main__":
@@ -508,8 +767,13 @@ class ConversionLinkTests(unittest.TestCase):
                           for path, _, _, request in links],
                          [("/Body/FunctionGraphs/0/Links/1",
                            "K2:CallFunction:/Script/Engine.KismetMathLibrary:RandomInteger", "K2:IfThenElse")])
-        shaped, _ = decode_body(self.body(PinOverrides=[{"Pin": "Max", "DefaultObject": "/Game/X"}]), self_class=SELF)
-        self.assertEqual(checked_links(shaped, self_class=SELF, target=TARGET), [])
+        # A class picked on a pin keeps the node's other pins (graph.link.check.v1 leaves out the outputs it
+        # decides); pin types or properties the document sets change them.
+        picked, _ = decode_body(self.body(PinOverrides=[{"Pin": "Max", "DefaultObject": "/Game/X"}]), self_class=SELF)
+        self.assertEqual(checked_links(picked, self_class=SELF, target=TARGET), links)
+        for shaping in ({"PinTypes": {"ReturnValue": "int64"}}, {"Properties": {"bDefaultsToPureFunc": True}}):
+            shaped, _ = decode_body(self.body(**shaping), self_class=SELF)
+            self.assertEqual(checked_links(shaped, self_class=SELF, target=TARGET), [], shaping)
         calls = []
 
         def invoke(primitive, values):
@@ -524,3 +788,73 @@ class ConversionLinkTests(unittest.TestCase):
         self.assertIn('"To": "Conv_IntToBool:InInt"', raised.exception.diagnostic.message)
         check_links(lambda primitive, values: {"conversions": [], "checked": 1}, graphs, self_class=SELF, target=TARGET)
         check_links(lambda primitive, values: None, graphs, self_class=SELF, target=TARGET)
+
+    def test_a_class_picked_on_a_function_input_does_not_hide_its_refused_link(self):
+        # SelectClass's ReturnValue (Class of Object) into ApplyDamage's DamageTypeClass (Class of DamageType):
+        # the editor refuses it, and the class picked on A must not leave the link to Apply.
+        from asset_document.graphs.schemas.k2 import decode_body
+        from asset_document.profiles.ublueprint_link_check import check_graphs
+        select = "K2:CallFunction:/Script/Engine.KismetMathLibrary:SelectClass"
+        damage = "K2:CallFunction:/Script/Engine.GameplayStatics:ApplyDamage"
+        graphs, _ = decode_body({"UbergraphPages": [{"Name": "EventGraph", "Nodes": [
+            {"Id": "Pick", "Action": select, "PinOverrides": [{"Pin": "A", "DefaultObject": "/Script/Engine.DamageType"}]},
+            {"Id": "Damage", "Action": damage}],
+            "Links": [{"From": "Pick:ReturnValue", "To": "Damage:DamageTypeClass"}]}]}, self_class=SELF)
+        requests = []
+
+        def invoke(primitive, values):
+            requests.append(values)
+            if "links" in values:
+                return {"refused": [{"index": 0, "from_pin": "ReturnValue", "to_pin": "DamageTypeClass",
+                                     "from_type": "Class of Object", "to_type": "Class of Damage Type",
+                                     "reason": "Class of Object is not compatible with Class of Damage Type"}]}
+            return {}
+        found = check_graphs(invoke, graphs, self_class=SELF, target=TARGET)
+        self.assertEqual([request["links"] for request in requests if "links" in request], [[
+            {"from": {"action_key": select, "pin_name": "ReturnValue"},
+             "to": {"action_key": damage, "pin_name": "DamageTypeClass"}}]])
+        self.assertEqual([(item.path, item.code) for item in found],
+                         [("/Body/UbergraphPages/0/Links/0", "Graph.ConnectDisallowed")])
+        self.assertIn("Cannot connect Pick:ReturnValue (Class of Object) to Damage:DamageTypeClass", found[0].message)
+
+    def const_function(self, const=True, call=None, inputs=None):
+        normalize = "K2:CallFunction:/Script/Engine.KismetMathLibrary:Vector_Normalize"
+        return {"FunctionGraphs": [
+            {"Name": "Tidy", "Signature": {"Const": const},
+             "LocalVariables": [{"Name": "Offset", "Type": "struct:/Script/CoreUObject.Vector"}],
+             "Nodes": [{"Id": "Get", "Action": "K2:Get:Velocity"}, {"Id": "Local", "Action": "K2:Get:Offset"},
+                       {"Id": "Call", "Action": call or normalize}],
+             "Links": [{"From": "Entry:then", "To": "Call:execute"}, {"From": "Get:Velocity", "To": "Call:A"},
+                       {"From": "Local:Offset", "To": "Call:A"}]},
+            {"Name": "Scale", "Signature": {"Inputs": inputs or [{"Name": "A", "Type": {
+                "Category": "struct", "SubCategoryObject": "/Script/CoreUObject.Vector", "IsRef": True}}]}}]}
+
+    def read_only_warnings(self, body, by_ref=True, const=False):
+        from asset_document.diagnostics import DiagnosticSeverity
+        from asset_document.graphs.schemas.k2 import decode_body
+        from asset_document.profiles.ublueprint_link_check import check_links
+        graphs, _ = decode_body(body, self_class=SELF)
+        pin = {"name": "A", "direction": "input", "category": "struct", **({"by_ref": True} if by_ref else {}),
+               **({"const": True} if const else {})}
+
+        def invoke(primitive, values):
+            if "describe" in values:
+                return {"templates": [{"key": key, "pins": [pin, {"name": "execute", "direction": "input",
+                                                                  "category": "exec"}]}
+                                      for key in values["describe"]]}
+            return {}
+        found = check_links(invoke, graphs, self_class=SELF, target=TARGET)
+        self.assertTrue(all(item.severity is DiagnosticSeverity.WARNING for item in found))
+        return [(item.path, item.code) for item in found]
+
+    def test_a_member_read_in_a_const_function_into_a_by_ref_input_is_warned(self):
+        # Velocity is the Blueprint's member (read-only in a const function); Offset is a local variable.
+        warned = [("/Body/FunctionGraphs/0/Links/1", "Graph.ReadOnlyReference")]
+        self.assertEqual(self.read_only_warnings(self.const_function()), warned)
+        self.assertEqual(self.read_only_warnings(self.const_function(const=False)), [])
+        self.assertEqual(self.read_only_warnings(self.const_function(), by_ref=False), [])
+        self.assertEqual(self.read_only_warnings(self.const_function(), const=True), [])
+        # A function of the Blueprint itself: its by-reference input is read from the document's signature.
+        self.assertEqual(self.read_only_warnings(self.const_function(call="K2:CallFunction:Self:Scale")), warned)
+        self.assertEqual(self.read_only_warnings(self.const_function(
+            call="K2:CallFunction:Self:Scale", inputs=[{"Name": "A", "Type": "struct:/Script/CoreUObject.Vector"}])), [])

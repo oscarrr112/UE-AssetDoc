@@ -9,6 +9,7 @@
 #include "AssetDocumentAITypedPreimageTestTypes.h"
 #include "AssetDocumentEditorPrimitiveProvider.h"
 #include "AIGraphTypes.h"
+#include "AISystem.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Provider/AssetDocumentAIProviderContracts.h"
 #include "Provider/Blackboard/AuthorityException/AssetDocumentAIBlackboardKeyTypeStructCanonicalWrite.h"
@@ -1672,18 +1673,52 @@ TUniquePtr<FRemoveLoadedConsumerFixture> MakeRemoveLoadedConsumerFixture(
 	return Fixture;
 }
 
-TStrongObjectPtr<UBlackboardComponent> MakeRemoveConsumerComponent(
+// A Blackboard component made for one check. It leaves the AI system when the check ends (as the component of a
+// destroyed actor does), so no live component holds the Blackboard's layout when a later step edits its keys.
+class FScopedConsumerComponent final
+{
+public:
+	FScopedConsumerComponent() = default;
+	explicit FScopedConsumerComponent(UBlackboardComponent* InComponent) : Component(InComponent) {}
+	FScopedConsumerComponent(FScopedConsumerComponent&&) = default;
+	FScopedConsumerComponent& operator=(FScopedConsumerComponent&&) = delete;
+	~FScopedConsumerComponent()
+	{
+		// The component is never registered with an actor, so it leaves the AI system the way UninitializeComponent
+		// does, without the actor-component teardown.
+		UBlackboardData* Blackboard = Component.IsValid() ? Component->GetBlackboardAsset() : nullptr;
+		UAISystem* AISystem = Blackboard != nullptr ? UAISystem::GetCurrentSafe(Component->GetWorld()) : nullptr;
+		if (AISystem == nullptr) return;
+		for (UAISystem::FBlackboardDataToComponentsIterator Iter = AISystem->CreateBlackboardDataToComponentsIterator(*Blackboard);
+			Iter && Iter.Key() == Blackboard; ++Iter)
+		{
+			if (Iter.Value() == Component.Get())
+			{
+				AISystem->UnregisterBlackboardComponent(*Blackboard, *Component);
+				return;
+			}
+		}
+	}
+	bool IsValid() const { return Component.IsValid(); }
+	UBlackboardComponent* Get() const { return Component.Get(); }
+	UBlackboardComponent* operator->() const { return Component.Get(); }
+
+private:
+	TStrongObjectPtr<UBlackboardComponent> Component;
+};
+
+FScopedConsumerComponent MakeRemoveConsumerComponent(
 	FAutomationTestBase& Test, UBlackboardData& Blackboard)
 {
 	UWorld* World = GEditor != nullptr
 		? GEditor->GetEditorWorldContext().World() : nullptr;
-	TStrongObjectPtr<UBlackboardComponent> Component(World != nullptr
+	FScopedConsumerComponent Component(World != nullptr
 		? NewObject<UBlackboardComponent>(World) : nullptr);
 	if (!Test.TestNotNull(TEXT("Remove consumer has Editor world"), World)
 		|| !Test.TestTrue(TEXT("Remove consumer initializes Blackboard component"),
 			Component.IsValid() && Component->InitializeBlackboard(Blackboard)))
 	{
-		return {};
+		return FScopedConsumerComponent();
 	}
 	return Component;
 }
@@ -1694,7 +1729,7 @@ bool PrimeRemoveLoadedConsumer(FAutomationTestBase& Test,
 {
 	Fixture.Task->DirectSelector.InvalidateResolvedKey();
 	Fixture.Task->DirectSelector.ResolveSelectedKey(Blackboard);
-	TStrongObjectPtr<UBlackboardComponent> Component =
+	FScopedConsumerComponent Component =
 		MakeRemoveConsumerComponent(Test, Blackboard);
 	if (!Component.IsValid()) return false;
 	Component->SetValueAsInt(RemovedName, RuntimeValue);
@@ -1712,7 +1747,7 @@ bool RequireRemoveLoadedConsumerForward(FAutomationTestBase& Test,
 	const FName RetainedName, const FName RemovedName,
 	const FBlackboard::FKey BeforeRetainedId, const bool bBeforeTreeDirty)
 {
-	TStrongObjectPtr<UBlackboardComponent> Component =
+	FScopedConsumerComponent Component =
 		MakeRemoveConsumerComponent(Test, Blackboard);
 	if (!Component.IsValid()) return false;
 	return Test.TestEqual(TEXT("Remove consumer resolves retained selector after removal"),
@@ -1734,7 +1769,7 @@ bool RequireRemoveLoadedConsumerRollback(FAutomationTestBase& Test,
 	const FBlackboard::FKey BeforeRemovedId, const bool bBeforeTreeDirty,
 	const int32 RuntimeValue)
 {
-	TStrongObjectPtr<UBlackboardComponent> Component =
+	FScopedConsumerComponent Component =
 		MakeRemoveConsumerComponent(Test, Blackboard);
 	if (!Component.IsValid()) return false;
 	Component->SetValueAsInt(RemovedName, RuntimeValue);
@@ -2973,7 +3008,7 @@ bool FAssetDocumentAIBlackboardV2ReorderSuccessTest::RunTest(const FString&)
 			Passed &= RequireSameEntryMetadata(TEXT("SC-ORD-001 identity Last"), TEXT("Last"), LastBefore);
 			Passed &= TestEqual(TEXT("SC-ORD-001 identity preserves loaded selector cache"),
 				Consumer->Task->DirectSelector.GetSelectedKeyID(), FirstBeforeId);
-			TStrongObjectPtr<UBlackboardComponent> Component =
+			FScopedConsumerComponent Component =
 				MakeRemoveConsumerComponent(*this, *Blackboard);
 			if (!Component.IsValid()) return false;
 			Component->SetValueAsInt(TEXT("Last"), 211);
@@ -3038,7 +3073,7 @@ bool FAssetDocumentAIBlackboardV2ReorderSuccessTest::RunTest(const FString&)
 			}
 			Passed &= TestEqual(TEXT("SC-ORD-001 permutation refreshes loaded selector Key-ID"),
 				Consumer->Task->DirectSelector.GetSelectedKeyID(), Blackboard->GetKeyID(TEXT("First")));
-			TStrongObjectPtr<UBlackboardComponent> Component =
+			FScopedConsumerComponent Component =
 				MakeRemoveConsumerComponent(*this, *Blackboard);
 			if (!Component.IsValid()) return false;
 			Component->SetValueAsInt(TEXT("Last"), 311);
@@ -3065,7 +3100,7 @@ bool FAssetDocumentAIBlackboardV2ReorderSuccessTest::RunTest(const FString&)
 				&& Blackboard->Keys.Last().KeyType == SelfBefore.KeyType);
 		Passed &= TestEqual(TEXT("SC-ORD-001 rollback restores loaded selector cache"),
 			Consumer->Task->DirectSelector.GetSelectedKeyID(), FirstBeforeId);
-		TStrongObjectPtr<UBlackboardComponent> Component =
+		FScopedConsumerComponent Component =
 			MakeRemoveConsumerComponent(*this, *Blackboard);
 		if (!Component.IsValid()) return false;
 		Component->SetValueAsInt(TEXT("Last"), 411);
@@ -3584,9 +3619,40 @@ bool FAssetDocumentAIBlackboardV2ReorderFailureTest::RunTest(const FString&)
 	UnsupportedChanged.MemberProperty = DefaultValueProperty;
 	StructKeyType->PostEditChangeProperty(UnsupportedChanged);
 	Package->SetDirtyFlag(false);
-	Passed &= RunPreflightFailure(TEXT("SC-ORD-002 closes unsupported retained Struct"),
-		MakeNames({TEXT("RetainedStruct"), TEXT("Last"), TEXT("First")} ),
-		TEXT("AIProvider.AuthorityUnavailable"));
+	{
+		// A Struct default the key form cannot hold is kept as stored; it does not stop a reorder. The reorder is kept,
+		// and a component made afterwards lays out the new order with each key's stored default.
+		const TCHAR* Label = TEXT("SC-ORD-002 reorders past an unrepresentable retained Struct");
+		const FBlackboardObservation Before(*Blackboard);
+		const FBlackboardObservation ChildBefore(*Child);
+		FBlackboardLifecycleTransaction Transaction;
+		FBlackboardLifecycleHandleResolver Handles(Transaction.GetMutationToken());
+		const FAssetDocumentPrimitiveOutcome Outcome = Invoke(Transaction, Handles,
+			MakeNames({TEXT("RetainedStruct"), TEXT("Last"), TEXT("First")}));
+		Passed &= RequireSuccess(*this, Label, Outcome)
+			&& TestTrue(*(FString(Label) + TEXT(" keeps the Struct default as stored")),
+				Blackboard->Keys.Num() == 4 && Blackboard->Keys[0].EntryName == TEXT("RetainedStruct")
+					&& Blackboard->Keys[0].KeyType == StructKeyType
+					&& StructKeyType->DefaultValue.GetScriptStruct()
+						== FAssetDocumentAIBlackboardCanonicalStructUnsupported::StaticStruct());
+		{
+			FScopedConsumerComponent Fresh = MakeRemoveConsumerComponent(*this, *Blackboard);
+			Passed &= Fresh.IsValid()
+				&& TestTrue(*(FString(Label) + TEXT(" fresh component holds the Struct default")),
+					Fresh->GetValue<UBlackboardKeyType_Struct>(Blackboard->GetKeyID(TEXT("RetainedStruct"))).GetScriptStruct()
+						== FAssetDocumentAIBlackboardCanonicalStructUnsupported::StaticStruct())
+				&& TestEqual(*(FString(Label) + TEXT(" fresh component holds the Int default")),
+					Fresh->GetValueAsInt(TEXT("Last")), 31);
+		}
+		// The original order back, kept the same way.
+		FBlackboardLifecycleTransaction Restore;
+		FBlackboardLifecycleHandleResolver RestoreHandles(Restore.GetMutationToken());
+		Passed &= RequireSuccess(*this, FString(Label) + TEXT(" back"), Invoke(Restore, RestoreHandles,
+				MakeNames({TEXT("First"), TEXT("RetainedStruct"), TEXT("Last")})));
+		Package->SetDirtyFlag(false);
+		Passed &= RequireObservation(*this, FString(Label) + TEXT(" back restores target"), Before, *Blackboard)
+			&& RequireObservation(*this, FString(Label) + TEXT(" back restores child"), ChildBefore, *Child);
+	}
 	StructKeyType->PreEditChange(DefaultValueProperty);
 	StructKeyType->DefaultValue.InitializeAs<
 		FAssetDocumentAIBlackboardCanonicalStructNested>();
@@ -3651,7 +3717,7 @@ bool FAssetDocumentAIBlackboardV2ReorderFailureTest::RunTest(const FString&)
 				Blackboard->GetKeyID(FBlackboard::KeySelf), SelfBeforeId)
 			&& TestEqual(*(FString(Label) + TEXT(" preserves loaded selector")),
 				Consumer->Task->DirectSelector.GetSelectedKeyID(), FirstBeforeId);
-		TStrongObjectPtr<UBlackboardComponent> Component =
+		FScopedConsumerComponent Component =
 			MakeRemoveConsumerComponent(*this, *Blackboard);
 		if (!Component.IsValid()) return false;
 		Component->SetValueAsInt(TEXT("Last"), 211);
@@ -4168,19 +4234,55 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 				&& Transaction.EnlistedFootprint.IsEmpty() && Before.Equals(*Blackboard));
 	}
 
-	for (const FString& UnsupportedName : {FString(TEXT("UnsupportedArray"))})
+	// Tolerant readback: values the document rules refuse as new input are read as stored; a default that does not
+	// satisfy BaseClass carries an entry read warning; a property with no scalar row uses the shared value codec.
+	// OutWarnings is the entry's warnings array, empty when the readback reports none.
+	const auto ReadTolerantEntry = [&](const TCHAR* TolerantKeyName, FAssetDocumentRuntimeValueDto& OutProperties,
+		FAssetDocumentRuntimeValueDto& OutWarnings)
 	{
-		FBlackboardLifecycleTransaction FailureTransaction;
-		FBlackboardLifecycleHandleResolver FailureHandles(FailureTransaction.GetMutationToken());
-		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(
-			MakeEntryReadbackInvocation(*Blackboard, FailureTransaction.GetMutationToken(), UnsupportedName),
-			FailureHandles, nullptr);
-		Passed &= RequireReadbackFailure(*this,
-			FString::Printf(TEXT("readback unsupported public %s property"), *UnsupportedName), Outcome,
-			Before, *Blackboard, FailureTransaction,
-			TEXT("AIProvider.AuthorityUnavailable"));
+		FBlackboardLifecycleTransaction ReadTransaction;
+		FBlackboardLifecycleHandleResolver ReadHandles(ReadTransaction.GetMutationToken());
+		const FAssetDocumentPrimitiveOutcome TolerantOutcome = Provider->Invoke(
+			MakeEntryReadbackInvocation(*Blackboard, ReadTransaction.GetMutationToken(), TolerantKeyName),
+			ReadHandles, nullptr);
+		const FAssetDocumentRuntimeValueDto& Read = TolerantOutcome.Value;
+		const bool bRead = TestEqual(*FString::Printf(TEXT("readback tolerant %s succeeds"), TolerantKeyName),
+				TolerantOutcome.Status, EAssetDocumentPrimitiveOutcomeStatus::Succeeded)
+			&& Read.Kind == EAssetDocumentRuntimeValueKind::Object && !Read.ObjectKeys.IsEmpty()
+			&& Read.ObjectKeys[0] == TEXT("entry") && Read.Elements[0].Elements.Num() == 6;
+		OutWarnings = ArrayValue({});
+		if (bRead)
+		{
+			OutProperties = Read.Elements[0].Elements[3];
+			if (Read.ObjectKeys.Num() == 2 && Read.ObjectKeys[1] == TEXT("warnings"))
+			{
+				OutWarnings = Read.Elements[1];
+			}
+		}
+		Passed &= TestTrue(*FString::Printf(TEXT("readback tolerant %s has no footprint or mutation"), TolerantKeyName),
+			bRead && TolerantOutcome.ChangedSet.IsEmpty() && ReadTransaction.EnlistedFootprint.IsEmpty()
+				&& Before.Equals(*Blackboard));
+		return bRead;
+	};
+	const auto FindMember = [](const FAssetDocumentRuntimeValueDto& Container, const TCHAR* MemberName)
+		-> const FAssetDocumentRuntimeValueDto*
+	{
+		const int32 MemberIndex = Container.ObjectKeys.IndexOfByKey(FString(MemberName));
+		return MemberIndex == INDEX_NONE ? nullptr : &Container.Elements[MemberIndex];
+	};
+	{
+		FAssetDocumentRuntimeValueDto TolerantProperties;
+		FAssetDocumentRuntimeValueDto TolerantWarnings;
+		if (ReadTolerantEntry(TEXT("UnsupportedArray"), TolerantProperties, TolerantWarnings))
+		{
+			const FAssetDocumentRuntimeValueDto* ArrayMember = FindMember(TolerantProperties, TEXT("UnsupportedArrayValue"));
+			const FAssetDocumentRuntimeValueDto* StructMember = FindMember(TolerantProperties, TEXT("UnsupportedStructValue"));
+			Passed &= TestTrue(TEXT("readback non-scalar key-type properties use the shared value codec"),
+				ArrayMember != nullptr && ArrayMember->Kind == EAssetDocumentRuntimeValueKind::Array
+					&& StructMember != nullptr && StructMember->Kind == EAssetDocumentRuntimeValueKind::Object
+					&& FindMember(TolerantProperties, TEXT("Int32Value")) != nullptr && TolerantWarnings.Elements.IsEmpty());
+		}
 	}
-
 	{
 		FBlackboardLifecycleTransaction FailureTransaction;
 		FBlackboardLifecycleHandleResolver FailureHandles(FailureTransaction.GetMutationToken());
@@ -4193,26 +4295,45 @@ bool FAssetDocumentAIBlackboardV2ReadbackTest::RunTest(const FString&)
 	}
 	for (const TCHAR* IncompatibleName : {TEXT("IncompatibleObject"), TEXT("IncompatibleClass")})
 	{
-		FBlackboardLifecycleTransaction FailureTransaction;
-		FBlackboardLifecycleHandleResolver FailureHandles(FailureTransaction.GetMutationToken());
-		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(
-			MakeEntryReadbackInvocation(*Blackboard, FailureTransaction.GetMutationToken(), IncompatibleName),
-			FailureHandles, nullptr);
-		Passed &= RequireReadbackFailure(*this,
-			FString::Printf(TEXT("readback incompatible %s default"), IncompatibleName), Outcome,
-			Before, *Blackboard, FailureTransaction, TEXT("AIProvider.AuthorityUnavailable"));
+		FAssetDocumentRuntimeValueDto TolerantProperties;
+		FAssetDocumentRuntimeValueDto TolerantWarnings;
+		if (ReadTolerantEntry(IncompatibleName, TolerantProperties, TolerantWarnings))
+		{
+			const FAssetDocumentRuntimeValueDto* StoredDefault = FindMember(TolerantProperties, TEXT("DefaultValue"));
+			const FAssetDocumentRuntimeValueDto* OnlyWarning = TolerantWarnings.Elements.Num() == 1
+				? &TolerantWarnings.Elements[0] : nullptr;
+			const FAssetDocumentRuntimeValueDto* WarningCode = OnlyWarning != nullptr ? FindMember(*OnlyWarning, TEXT("code")) : nullptr;
+			const FAssetDocumentRuntimeValueDto* WarningPath = OnlyWarning != nullptr ? FindMember(*OnlyWarning, TEXT("path")) : nullptr;
+			Passed &= TestTrue(*FString::Printf(TEXT("readback incompatible %s default is kept with a warning"), IncompatibleName),
+				StoredDefault != nullptr && StoredDefault->Kind == EAssetDocumentRuntimeValueKind::Object
+					&& WarningCode != nullptr && WarningCode->StringValue == TEXT("BlackboardData.DefaultValueNotOfBaseClass")
+					&& WarningPath != nullptr && WarningPath->StringValue == TEXT("/KeyTypeProperties/DefaultValue"));
+		}
 	}
-	for (const TCHAR* InvalidEnumName : {
-		TEXT("InternalEnumForbidden"), TEXT("MismatchedNativeEnum"), TEXT("NullEnumType")})
 	{
-		FBlackboardLifecycleTransaction FailureTransaction;
-		FBlackboardLifecycleHandleResolver FailureHandles(FailureTransaction.GetMutationToken());
-		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(
-			MakeEntryReadbackInvocation(*Blackboard, FailureTransaction.GetMutationToken(), InvalidEnumName),
-			FailureHandles, nullptr);
-		Passed &= RequireReadbackFailure(*this,
-			FString::Printf(TEXT("readback invalid exact Enum %s"), InvalidEnumName), Outcome,
-			Before, *Blackboard, FailureTransaction, TEXT("AIProvider.AuthorityUnavailable"));
+		FAssetDocumentRuntimeValueDto TolerantProperties;
+		FAssetDocumentRuntimeValueDto TolerantWarnings;
+		if (ReadTolerantEntry(TEXT("InternalEnumForbidden"), TolerantProperties, TolerantWarnings))
+		{
+			const FAssetDocumentRuntimeValueDto* StoredDefault = FindMember(TolerantProperties, TEXT("DefaultValue"));
+			Passed &= TestTrue(TEXT("readback Enum default that is no readable enumerator is its raw value"),
+				StoredDefault != nullptr && StoredDefault->Kind == EAssetDocumentRuntimeValueKind::Integer
+					&& StoredDefault->IntegerValue == 18);
+		}
+		if (ReadTolerantEntry(TEXT("MismatchedNativeEnum"), TolerantProperties, TolerantWarnings))
+		{
+			const FAssetDocumentRuntimeValueDto* StoredEnumName = FindMember(TolerantProperties, TEXT("EnumName"));
+			Passed &= TestTrue(TEXT("readback EnumName is reported as stored"),
+				StoredEnumName != nullptr && StoredEnumName->StringValue == TEXT("/Script/AssetDocumentAI.WrongEnum"));
+		}
+		if (ReadTolerantEntry(TEXT("NullEnumType"), TolerantProperties, TolerantWarnings))
+		{
+			const FAssetDocumentRuntimeValueDto* StoredEnumType = FindMember(TolerantProperties, TEXT("EnumType"));
+			const FAssetDocumentRuntimeValueDto* StoredDefault = FindMember(TolerantProperties, TEXT("DefaultValue"));
+			Passed &= TestTrue(TEXT("readback null EnumType is null and the default its raw value"),
+				StoredEnumType != nullptr && StoredEnumType->Kind == EAssetDocumentRuntimeValueKind::Null
+					&& StoredDefault != nullptr && StoredDefault->Kind == EAssetDocumentRuntimeValueKind::Integer);
+		}
 	}
 	{
 		FBlackboardLifecycleTransaction FailureTransaction;
@@ -4403,8 +4524,7 @@ bool FAssetDocumentAIBlackboardV2ReadbackFailureTest::RunTest(const FString&)
 
 	bool Passed = true;
 	const FBlackboardObservation Before(*Blackboard);
-	for (const TCHAR* EntryName : {TEXT("NullKeyType"), TEXT("ResidualIdentityMismatch"),
-		TEXT("StructCanonicalClosed")})
+	for (const TCHAR* EntryName : {TEXT("NullKeyType"), TEXT("ResidualIdentityMismatch")})
 	{
 		FBlackboardLifecycleTransaction Transaction;
 		FBlackboardLifecycleHandleResolver Handles(Transaction.GetMutationToken());
@@ -4414,6 +4534,26 @@ bool FAssetDocumentAIBlackboardV2ReadbackFailureTest::RunTest(const FString&)
 		Passed &= RequireReadbackFailure(*this,
 			FString::Printf(TEXT("readback %s entry identity"), EntryName), Outcome,
 			Before, *Blackboard, Transaction, TEXT("AIProvider.AuthorityUnavailable"));
+	}
+	{
+		// A Struct default the key form cannot hold reads as a marker with its export text.
+		FBlackboardLifecycleTransaction Transaction;
+		FBlackboardLifecycleHandleResolver Handles(Transaction.GetMutationToken());
+		const FAssetDocumentPrimitiveOutcome Outcome = Provider->Invoke(
+			MakeEntryReadbackInvocation(*Blackboard, Transaction.GetMutationToken(), TEXT("StructCanonicalClosed")),
+			Handles, nullptr);
+		const FAssetDocumentRuntimeValueDto& Read = Outcome.Value;
+		const FAssetDocumentRuntimeValueDto* Properties =
+			Outcome.Status == EAssetDocumentPrimitiveOutcomeStatus::Succeeded && Read.ObjectKeys.Num() >= 1
+				&& Read.ObjectKeys[0] == TEXT("entry") && Read.Elements[0].Elements.Num() == 6
+			? &Read.Elements[0].Elements[3] : nullptr;
+		const FAssetDocumentRuntimeValueDto* Default = Properties != nullptr && Properties->ObjectKeys.Num() == 1
+			&& Properties->ObjectKeys[0] == TEXT("DefaultValue") ? &Properties->Elements[0] : nullptr;
+		Passed &= TestTrue(TEXT("readback unrepresentable Struct default is a marker"),
+			Default != nullptr && Default->Kind == EAssetDocumentRuntimeValueKind::Object
+				&& Default->ObjectKeys == TArray<FString>{TEXT("Text"), TEXT("Unsupported")})
+			&& TestTrue(TEXT("readback unrepresentable Struct has no footprint or mutation"),
+				Outcome.ChangedSet.IsEmpty() && Transaction.EnlistedFootprint.IsEmpty() && Before.Equals(*Blackboard));
 	}
 
 	{
@@ -5767,11 +5907,6 @@ bool FAssetDocumentAIBlackboardV2UpdateExistingFailureTest::RunTest(const FStrin
 	Passed &= RunCodecPreflightFailure(TEXT("update-existing unsupported generic codec"),
 		TEXT("UnsupportedGenericRejected"), *UnsupportedGenericKey, ObjectValue({}, {}),
 		[&]() { return UnsupportedGenericKey->Int32Value == 0 && UnsupportedGenericKey->UnsupportedArrayValue.IsEmpty(); });
-	Passed &= RunCodecPreflightFailure(TEXT("update-existing incomplete Object codec"),
-		TEXT("IncompleteObjectRejected"), *IncompleteObjectKey,
-		ObjectValue({TEXT("BaseClass"), TEXT("DefaultValue")},
-			{ReferenceValue(TEXT("ClassRef"), *UObject::StaticClass()), NullValue()}),
-		[&]() { return IncompleteObjectKey->BaseClass == nullptr && IncompleteObjectKey->DefaultValue == nullptr; });
 	Passed &= RunCodecPreflightFailure(TEXT("update-existing incompatible Object values"),
 		TEXT("IncompatibleObjectRejected"), *IncompatibleObjectKey,
 		ObjectValue({TEXT("BaseClass"), TEXT("DefaultValue")},
@@ -5793,6 +5928,36 @@ bool FAssetDocumentAIBlackboardV2UpdateExistingFailureTest::RunTest(const FStrin
 				ReferenceValue(TEXT("AssetRef"), *TestEnum)}),
 		[&]() { return InvalidEnumKey->EnumType == TestEnum
 			&& InvalidEnumKey->DefaultValue == static_cast<uint8>(EAssetDocumentAITypedPreimageTestEnum::Original); });
+	{
+		// An Object key with no BaseClass is read as stored; a complete Object key form writes one, and rolls back.
+		const TCHAR* Label = TEXT("update-existing incomplete Object takes a BaseClass");
+		Blackboard->GetOutermost()->SetDirtyFlag(false);
+		FBlackboardLifecycleTransaction CandidateTransaction;
+		FBlackboardLifecycleHandleResolver CandidateHandles(CandidateTransaction.GetMutationToken());
+		const TOptional<FAssetDocumentOpaqueHandle> CandidateEditor = ResolveEditorMutableAsset(
+			*this, *Blackboard, CandidateTransaction.GetMutationToken(), CandidateHandles);
+		const TOptional<FAssetDocumentOpaqueHandle> CandidateHandle = CandidateEditor.IsSet()
+			? CandidateHandles.AddProviderLocalAIResult(CandidateEditor.GetValue()) : TOptional<FAssetDocumentOpaqueHandle>();
+		if (!CandidateHandle.IsSet()) return false;
+		AssetDocumentAIBlackboardMutation::FAssetDocumentAIBlackboardEntryMetadataForwardWriteRequest CandidateRequest;
+		CandidateRequest.BlackboardPath = Blackboard->GetPathName();
+		CandidateRequest.KeyName = TEXT("IncompleteObjectRejected");
+		CandidateRequest.ExpectedClassPath = IncompleteObjectKey->GetClass()->GetPathName();
+		CandidateRequest.CanonicalProperties = ObjectValue({TEXT("BaseClass"), TEXT("DefaultValue")},
+			{ReferenceValue(TEXT("ClassRef"), *UObject::StaticClass()), NullValue()});
+		const FAssetDocumentPrimitiveOutcome CandidateOutcome =
+			AssetDocumentAIBlackboardMutation::ExecuteAssetDocumentAIBlackboardEntryMetadataForwardWritePrerequisite(
+				MakeUpdateExistingPrerequisiteInvocation(CandidateHandle.GetValue()), CandidateRequest,
+				CandidateHandles, &CandidateTransaction);
+		Passed &= TestEqual(*FString::Printf(TEXT("%s succeeds"), Label), CandidateOutcome.Status,
+				EAssetDocumentPrimitiveOutcomeStatus::Succeeded)
+			&& TestTrue(*FString::Printf(TEXT("%s writes the BaseClass"), Label),
+				IncompleteObjectKey->BaseClass == UObject::StaticClass() && IncompleteObjectKey->DefaultValue == nullptr);
+		const FAssetDocumentContractValidationResult Rollback =
+			CandidateTransaction.Rollback(FString(Label) + TEXT(".Rollback"));
+		Passed &= TestTrue(*FString::Printf(TEXT("%s rolls back to no BaseClass"), Label),
+			Rollback.bValid && IncompleteObjectKey->BaseClass == nullptr);
+	}
 	Blackboard->Keys.SetNum(2);
 	Blackboard->UpdateParentKeys();
 	Blackboard->GetOutermost()->SetDirtyFlag(false);
@@ -6562,8 +6727,6 @@ bool FAssetDocumentAIBlackboardV2AddFailureTest::RunTest(const FString&)
 		MakeEntryAddV2Entry(TEXT("Shadowed")), 0, TEXT("AIProvider.Blackboard.KeyAlreadyExists"));
 	Passed &= RunPreflightFailure(TEXT("entry add rejects NAME_None spelling"),
 		MakeEntryAddV2Entry(TEXT("None")), 0, TEXT("AIProvider.Blackboard.EntrySchemaInvalid"));
-	Passed &= RunPreflightFailure(TEXT("entry add rejects unrelated parent-shadowed local snapshot"),
-		MakeEntryAddV2Entry(TEXT("Fresh")), 0, TEXT("AIProvider.AuthorityUnavailable"));
 
 	// The inherited/local same-name pair above is deliberately malformed input
 	// only for the shadow preflight lanes.  Restore a canonical snapshot before
@@ -7976,8 +8139,85 @@ bool FAssetDocumentAIBlackboardV2RemoveFailureTest::RunTest(const FString&)
 	UnsupportedChanged.MemberProperty = DefaultValueProperty;
 	StructKeyType->PostEditChangeProperty(UnsupportedChanged);
 	Package->SetDirtyFlag(false);
-	Passed &= RunPreflightFailure(TEXT("SC-REM-002 closes unsupported retained Struct"),
-		TEXT("RemoveMe"), TEXT("AIProvider.AuthorityUnavailable"));
+	{
+		// A retained Struct default the key form cannot hold is kept as stored; it does not stop a remove.
+		const TCHAR* Label = TEXT("SC-REM-002 removes beside an unrepresentable retained Struct");
+		const FBlackboardObservation Before(*Blackboard);
+		const FBlackboardObservation ChildBefore(*Child);
+		FBlackboardLifecycleTransaction Transaction;
+		FBlackboardLifecycleHandleResolver Handles(Transaction.GetMutationToken());
+		const TOptional<FAssetDocumentOpaqueHandle> Handle = ResolveAIMutableAsset(
+			*this, *Blackboard, Transaction, Handles);
+		if (!Handle.IsSet()) return false;
+		const FAssetDocumentPrimitiveOutcome Outcome =
+			CreateAssetDocumentAIPrimitiveProvider()->Invoke(
+				MakeEntryRemoveV2Invocation(Handle.GetValue(), *Blackboard, TEXT("RemoveMe")),
+				Handles, &Transaction);
+		Passed &= RequireSuccess(*this, Label, Outcome)
+			&& TestTrue(*(FString(Label) + TEXT(" keeps the Struct default as stored")),
+				FindLocalKeyType(*Blackboard, TEXT("RemoveMe")) == nullptr
+					&& FindLocalKeyType(*Blackboard, TEXT("RetainedStruct")) == StructKeyType
+					&& StructKeyType->DefaultValue.GetScriptStruct()
+						== FAssetDocumentAIBlackboardCanonicalStructUnsupported::StaticStruct());
+		const FAssetDocumentContractValidationResult Rollback = Transaction.Rollback(
+			FString(Label) + TEXT(".Rollback"));
+		for (const FAssetDocumentRuntimeDiagnostic& Diagnostic : Rollback.Diagnostics)
+		{
+			AddError(FString::Printf(TEXT("%s rollback diagnostic %s: %s"),
+				Label, *Diagnostic.Code, *Diagnostic.Message));
+		}
+		Passed &= TestTrue(*(FString(Label) + TEXT(" rollback succeeds")), Rollback.bValid)
+			&& RequireObservation(*this, FString(Label) + TEXT(" restores target"), Before, *Blackboard)
+			&& RequireObservation(*this, FString(Label) + TEXT(" restores child"), ChildBefore, *Child);
+	}
+	{
+		// The same remove kept: a component made afterwards lays out the keys that are left, each with its stored
+		// default, the Struct key's included.
+		const TCHAR* Label = TEXT("SC-REM-002 keeps a remove beside an unrepresentable retained Struct");
+		UBlackboardData* Kept = NewObject<UBlackboardData>(
+			Package, TEXT("Kept"), RF_Public | RF_Standalone | RF_Transactional);
+		TStrongObjectPtr<UBlackboardData> KeptGuard(Kept);
+		AddExistingStockIntKey(*Kept, TEXT("RemoveMe"), 21);
+		UBlackboardKeyType_Struct* KeptStructKeyType = NewObject<UBlackboardKeyType_Struct>(
+			Kept, TEXT("KeptStructKeyType"), RF_Transactional);
+		KeptStructKeyType->PreEditChange(DefaultValueProperty);
+		KeptStructKeyType->DefaultValue.InitializeAs<FAssetDocumentAIBlackboardCanonicalStructUnsupported>();
+		FPropertyChangedEvent KeptChanged(DefaultValueProperty, EPropertyChangeType::ValueSet);
+		KeptChanged.MemberProperty = DefaultValueProperty;
+		KeptStructKeyType->PostEditChangeProperty(KeptChanged);
+		FBlackboardEntry KeptStructEntry;
+		KeptStructEntry.EntryName = TEXT("RetainedStruct");
+		KeptStructEntry.KeyType = KeptStructKeyType;
+		Kept->Keys.Add(MoveTemp(KeptStructEntry));
+		AddExistingStockIntKey(*Kept, TEXT("Last"), 31);
+		Kept->UpdateParentKeys();
+		Kept->UpdateKeyIDs();
+		Kept->UpdateIfHasSynchronizedKeys();
+		Package->SetDirtyFlag(false);
+		FBlackboardLifecycleTransaction Transaction;
+		FBlackboardLifecycleHandleResolver Handles(Transaction.GetMutationToken());
+		const TOptional<FAssetDocumentOpaqueHandle> Handle = ResolveAIMutableAsset(
+			*this, *Kept, Transaction, Handles);
+		if (!Handle.IsSet()) return false;
+		const FAssetDocumentPrimitiveOutcome Outcome =
+			CreateAssetDocumentAIPrimitiveProvider()->Invoke(
+				MakeEntryRemoveV2Invocation(Handle.GetValue(), *Kept, TEXT("RemoveMe")),
+				Handles, &Transaction);
+		Passed &= RequireSuccess(*this, Label, Outcome)
+			&& TestTrue(*(FString(Label) + TEXT(" removes the key")),
+				FindLocalKeyType(*Kept, TEXT("RemoveMe")) == nullptr
+					&& FindLocalKeyType(*Kept, TEXT("RetainedStruct")) == KeptStructKeyType);
+		FScopedConsumerComponent Fresh = MakeRemoveConsumerComponent(*this, *Kept);
+		Passed &= Fresh.IsValid()
+			&& TestEqual(*(FString(Label) + TEXT(" fresh component has no removed key")),
+				Kept->GetKeyID(TEXT("RemoveMe")), FBlackboard::InvalidKey)
+			&& TestTrue(*(FString(Label) + TEXT(" fresh component holds the Struct default")),
+				Fresh->GetValue<UBlackboardKeyType_Struct>(Kept->GetKeyID(TEXT("RetainedStruct"))).GetScriptStruct()
+					== FAssetDocumentAIBlackboardCanonicalStructUnsupported::StaticStruct())
+			&& TestEqual(*(FString(Label) + TEXT(" fresh component holds the Int default")),
+				Fresh->GetValueAsInt(TEXT("Last")), 31);
+		Package->SetDirtyFlag(false);
+	}
 
 	StructKeyType->PreEditChange(DefaultValueProperty);
 	StructKeyType->DefaultValue.InitializeAs<
@@ -10651,6 +10891,131 @@ bool FAssetDocumentAIBlackboardKeyTypeStructCanonicalReadFreshReloadTest::RunTes
 			&& ReloadedBefore.Equals(*Reloaded)
 			&& Reloaded->GetOutermost()->IsDirty() == bDirtyBefore
 			&& FindPackage(nullptr, *TargetPackageName) == nullptr);
+	return Passed;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentAIBlackboardV2LiveLayoutTest,
+	"UEAssetDoc.AIProvider.BlackboardV2.LiveLayout",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAssetDocumentAIBlackboardV2LiveLayoutTest::RunTest(const FString&)
+{
+	using namespace AssetDocumentAIBlackboardLifecycleTests;
+	// A live component keeps the key layout it initialized with. While one uses the Blackboard, or a Blackboard
+	// derived from it, every layout change is refused untouched; once it is gone the same change goes through.
+	UPackage* Package = CreatePackage(*FString::Printf(
+		TEXT("/Temp/AssetDocumentAI/BlackboardV2LiveLayout_%s"),
+		*FGuid::NewGuid().ToString(EGuidFormats::Digits)));
+	UBlackboardData* Blackboard = NewObject<UBlackboardData>(
+		Package, TEXT("Blackboard"), RF_Public | RF_Standalone | RF_Transactional);
+	UBlackboardData* Child = NewObject<UBlackboardData>(
+		Package, TEXT("Child"), RF_Public | RF_Standalone | RF_Transactional);
+	UBlackboardData* OtherParent = NewObject<UBlackboardData>(
+		Package, TEXT("OtherParent"), RF_Public | RF_Standalone | RF_Transactional);
+	TStrongObjectPtr<UBlackboardData> BlackboardGuard(Blackboard);
+	TStrongObjectPtr<UBlackboardData> ChildGuard(Child);
+	TStrongObjectPtr<UBlackboardData> OtherParentGuard(OtherParent);
+	// The engine-made SelfActor key stays last, after the authored keys.
+	TArray<FBlackboardEntry> DerivedKeys = MoveTemp(Blackboard->Keys);
+	Blackboard->Keys.Reset();
+	AddExistingStockIntKey(*Blackboard, TEXT("First"), 1);
+	AddExistingStockIntKey(*Blackboard, TEXT("Second"), 2);
+	Blackboard->Keys.Append(MoveTemp(DerivedKeys));
+	// A synchronized key makes components register with the AI system.
+	Blackboard->Keys[0].bInstanceSynced = true;
+	Blackboard->UpdateParentKeys();
+	Blackboard->UpdateKeyIDs();
+	Blackboard->UpdateIfHasSynchronizedKeys();
+	Child->Parent = Blackboard;
+	Child->UpdateParentKeys();
+	Child->UpdateKeyIDs();
+	Child->UpdateIfHasSynchronizedKeys();
+	Package->SetDirtyFlag(false);
+
+	const auto Names = [](std::initializer_list<const TCHAR*> Values)
+	{
+		TArray<FAssetDocumentRuntimeValueDto> Result;
+		for (const TCHAR* Value : Values) Result.Add(StringValue(Value));
+		return Result;
+	};
+	using FMakeInvocation = TFunction<FAssetDocumentPrimitiveInvocation(const FAssetDocumentOpaqueHandle&)>;
+	const auto Run = [&](FBlackboardLifecycleTransaction& Transaction, const FMakeInvocation& Make)
+	{
+		FBlackboardLifecycleHandleResolver Handles(Transaction.GetMutationToken());
+		const TOptional<FAssetDocumentOpaqueHandle> Handle = ResolveAIMutableAsset(
+			*this, *Blackboard, Transaction, Handles);
+		if (!Handle.IsSet()) return FAssetDocumentPrimitiveOutcome();
+		return CreateAssetDocumentAIPrimitiveProvider()->Invoke(Make(Handle.GetValue()), Handles, &Transaction);
+	};
+	const FMakeInvocation Reorder = [&](const FAssetDocumentOpaqueHandle& Handle)
+	{
+		return MakeLocalKeysReorderV2Invocation(Handle, *Blackboard, Names({TEXT("Second"), TEXT("First")}));
+	};
+	const FMakeInvocation Remove = [&](const FAssetDocumentOpaqueHandle& Handle)
+	{
+		return MakeEntryRemoveV2Invocation(Handle, *Blackboard, TEXT("Second"));
+	};
+	const FMakeInvocation SetParent = [&](const FAssetDocumentOpaqueHandle& Handle)
+	{
+		return MakeParentSetV2Invocation(Handle, *Blackboard, OtherParent);
+	};
+	const FMakeInvocation Add = [&](const FAssetDocumentOpaqueHandle& Handle)
+	{
+		return MakeEntryAddV2Invocation(Handle, *Blackboard, MakeEntryAddV2IntEntry(TEXT("Third"), 3), 2);
+	};
+	const FMakeInvocation SyncSecond = [&](const FAssetDocumentOpaqueHandle& Handle)
+	{
+		AssetDocumentAIBlackboardMutation::FAssetDocumentAIBlackboardEntryMetadataForwardWriteRequest Request;
+		Request.BlackboardPath = Blackboard->GetPathName();
+		Request.KeyName = TEXT("Second");
+		Request.ExpectedClassPath = UBlackboardKeyType_Int::StaticClass()->GetPathName();
+		Request.CanonicalProperties = ObjectValue({TEXT("DefaultValue")}, {IntegerValue(2)});
+		Request.bInstanceSynced = true;
+		return MakeUpdateExistingInvocation(Handle, Request);
+	};
+
+	bool Passed = true;
+	{
+		FScopedConsumerComponent Live = MakeRemoveConsumerComponent(*this, *Child);
+		if (!Live.IsValid()) return false;
+		for (const TPair<const TCHAR*, const FMakeInvocation*>& Change : {
+			TPair<const TCHAR*, const FMakeInvocation*>(TEXT("reorder"), &Reorder),
+			TPair<const TCHAR*, const FMakeInvocation*>(TEXT("remove"), &Remove),
+			TPair<const TCHAR*, const FMakeInvocation*>(TEXT("parent change"), &SetParent),
+			TPair<const TCHAR*, const FMakeInvocation*>(TEXT("key add"), &Add)})
+		{
+			const FString Label = FString::Printf(TEXT("A live child-Blackboard component refuses a %s"), Change.Key);
+			const FBlackboardObservation Before(*Blackboard);
+			const FBlackboardObservation ChildBefore(*Child);
+			FBlackboardLifecycleTransaction Transaction;
+			const FAssetDocumentPrimitiveOutcome Outcome = Run(Transaction, *Change.Value);
+			Passed &= RequireExactFailureTerminal(*this, Label, Outcome, Before, *Blackboard, Transaction,
+					TEXT("AIProvider.Blackboard.LayoutInUse"))
+				&& RequireObservation(*this, Label + TEXT(" preserves child"), ChildBefore, *Child)
+				&& TestTrue(*(Label + TEXT(" names the component")),
+					Outcome.Diagnostics.Num() == 1
+						&& Outcome.Diagnostics[0].Message.Contains(Live->GetName()));
+		}
+		{
+			const FString Label = TEXT("A live child-Blackboard component refuses an instance-sync change");
+			const FBlackboardObservation Before(*Blackboard);
+			FBlackboardLifecycleTransaction Transaction;
+			const FAssetDocumentPrimitiveOutcome Outcome = Run(Transaction, SyncSecond);
+			Passed &= TestTrue(*(Label + TEXT(" with its terminal")),
+					Outcome.Status != EAssetDocumentPrimitiveOutcomeStatus::Succeeded && Outcome.Diagnostics.Num() == 1
+						&& Outcome.Diagnostics[0].Code == TEXT("AIProvider.Blackboard.LayoutInUse"))
+				&& RequireObservation(*this, Label + TEXT(" preserves target"), Before, *Blackboard);
+		}
+		Passed &= TestEqual(TEXT("The live component still reads its value"), Live->GetValueAsInt(TEXT("Second")), 2);
+	}
+	{
+		const TCHAR* Label = TEXT("Without a live component the reorder goes through");
+		FBlackboardLifecycleTransaction Transaction;
+		Passed &= RequireSuccess(*this, Label, Run(Transaction, Reorder))
+			&& TestTrue(*(FString(Label) + TEXT(" in the new order")),
+				Blackboard->Keys.Num() >= 2 && Blackboard->Keys[0].EntryName == TEXT("Second"));
+	}
+	Package->SetDirtyFlag(false);
 	return Passed;
 }
 

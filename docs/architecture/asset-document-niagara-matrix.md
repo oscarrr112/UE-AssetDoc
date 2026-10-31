@@ -22,11 +22,14 @@ asset uses something the editor no longer offers).
 | Editor surface | Body location | Class | Mechanism |
 |---|---|---|---|
 | System Details, user parameters, declared parameters | `Properties`, `UserParameters`, `Parameters` | Supported | `fx.niagara.edit.v1` through the system view model; values through the Niagara value codec |
+| User and declared parameter Details metadata (slider, unit, advanced display, conditions, aliases) | `UserParameters[].Meta`, `Parameters[].Meta` | Supported | the parameter's `UNiagaraScriptVariable` Metadata (sparse; complete when listed, kept when omitted); a member with no document form reads as a marker with `Niagara.Unrepresented` and is kept |
+| Parameter Definitions subscriptions (system, its emitters, emitter, script) | none | Unrepresented (warned) | Extract warns `Niagara.UnrepresentedParameterDefinitions`; apply leaves the subscriptions as they are |
 | Emitters: add (empty / minimal / `From`), delete, rename, enable, parent removal and version | `Emitters` | Supported | `FNiagaraSystemViewModel` add / remove / rename; emitter Details |
+| Set New Parent Emitter (reparent an existing emitter onto another emitter asset) | `Emitters[].Parent` | Unsupported (refused) | `Niagara.ParentImmutable` names the editor command; the merge of the new parent's stack is not reproduced |
 | Renderers: add, delete, order, Details, bindings | `Emitters.<e>.Renderers` | Supported | stack renderer items |
 | Module stacks: add, delete, move, enable, version, display name, note | `Stacks` | Supported | `FNiagaraStackGraphUtilities` as the stack's menu |
 | Module inputs: every value mode, nested dynamic inputs, data interfaces | module `Inputs` | Supported | stack function input view model |
-| Set Parameters modules, event handlers, simulation stages | `Stacks` | Supported | stack items |
+| Set Parameters modules, event handlers, simulation stages | `Stacks` | Supported | stack items; event handlers by position; simulation stages by `Name` and `Class`, then by `RenamedFrom` (a rename); an entry pairing with no stage is a new empty stage; stage names may repeat (the stack's "+" adds stages named `None`), ops address stages by position |
 | Lightweight (stateless) emitters | `Mode: Stateless` | Supported | the stateless module list by reflection |
 | Script asset: New (Module / Function / Dynamic Input) | `Action: Create`, `Usage` | Supported | the New-asset factory of that usage; `Usage` immutable (`Niagara.UsageImmutable`) |
 | Script Details | `Settings`, top-level `Properties` | Supported | script Details |
@@ -34,6 +37,7 @@ asset uses something the editor no longer offers).
 | Graph: Add Parameter / Promote to Parameter | `Niagara:Input:<name>` | Supported | parameter input node as `FNiagaraEditorUtilities::InitializeParameterInputNode` (not exported; same result) |
 | Graph: Map Get / Set / custom HLSL / op Add pin, pin rename and type | node `Pins` | Supported | the node's Add pin + rename; numeric pins: Convert Numeric To (`UNiagaraNode::ConvertNumericPinToType`) |
 | Graph: links, pin defaults, Map Get default pins | `Links`, `PinDefaults` | Supported | schema `TryCreateConnection`; Map Get default pins after their parameter's `DefaultMode: Custom` |
+| Graph: comment box size | node `Size` (`Niagara:Comment`) | Supported | `graph.node.layout.set.v1` size (`NodeWidth` / `NodeHeight`, as the box's resize handle) |
 | Graph: function call version switch | node `Version` | Supported | as `FNiagaraFunctionCallNodeDetails::SwitchToVersion` (`ChangeScriptVersion`, then refresh) |
 | Graph: data interface function specifiers | `Properties.FunctionSpecifiers` | Supported | the node's specifier widget (`Specifiers` map) |
 | Graph: If node, Usage Selector, VM fast-path calls | `Niagara:If`, `Niagara:UsageSelector`, `Niagara:Function:Signature:*` | Read only | the menu does not offer them; `Graph.ActionNotFound` |

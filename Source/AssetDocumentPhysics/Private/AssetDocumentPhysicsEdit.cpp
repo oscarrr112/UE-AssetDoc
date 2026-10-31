@@ -22,7 +22,9 @@
 //                                                 project's generation settings); fit {"<bone>": params}: that body is
 //                                                 fitted from the mesh as the editor's Add Body does (params sparse over
 //                                                 the generation settings); without fit the shapes are written by body.shapes
-//   body.remove {bone}                            "Delete Body" (constraint fix-up to the nearest bodies below)
+//   body.remove {bone}                            "Delete Body" (constraint fix-up to the nearest bodies below); a body
+//                                                 whose bone has another body goes alone (the bone's constraints stay);
+//                                                 a bone's later bodies (<bone>~N) go before its first
 //   body.set {bone, properties}                   body Details (complete sparse over a new body's values)
 //   body.shapes {bone, shapes}                    AggGeom: each authored type listed is complete; a type not listed is
 //                                                 emptied (level sets / skinned triangle meshes are kept)
@@ -98,17 +100,21 @@ bool ReadName(FReader& Op, const TCHAR* Key, FName& Out, bool bAllowEmpty = fals
 	return true;
 }
 
+// The body a document key names (its bone; "<bone>~N" is the Nth body on that bone); OutBone is the body's bone.
 int32 FindBody(FEdit& Edit, FReader& Op, const TCHAR* Key, FName& OutBone)
 {
-	if (!ReadName(Op, Key, OutBone))
+	FName BodyKey;
+	if (!ReadName(Op, Key, BodyKey))
 	{
 		return INDEX_NONE;
 	}
-	const int32 Index = Edit.Asset.FindBodyIndex(OutBone);
+	const int32 Index = FindBodyByKey(Edit.Asset, BodyKey.ToString());
 	if (Index == INDEX_NONE)
 	{
-		Op.Fail(TEXT("PhysicsAsset.BodyNotFound"), FString::Printf(TEXT("The physics asset has no body on bone '%s'."), *OutBone.ToString()), Key);
+		Op.Fail(TEXT("PhysicsAsset.BodyNotFound"), FString::Printf(TEXT("The physics asset has no body '%s'."), *BodyKey.ToString()), Key);
+		return INDEX_NONE;
 	}
+	OutBone = Edit.Asset.SkeletalBodySetups[Index]->BoneName;
 	return Index;
 }
 
@@ -459,6 +465,8 @@ bool OpBodyRemove(FEdit& Edit, FReader& Op)
 	{
 		return false;
 	}
+	// Bodies on one bone are keyed in array order (<bone>, <bone>~2, ...): removing one hands its key to the next body on
+	// the bone, so a batch removes a bone's later keys before its earlier ones.
 	EditorEquivalent::RemoveBody(Edit.Asset, Index);
 	Edit.bChanged = true;
 	return true;
@@ -1038,7 +1046,7 @@ bool OpCollisionSet(FEdit& Edit, FReader& Op)
 		int32 Bodies[2];
 		for (int32 Side = 0; Side < 2; ++Side)
 		{
-			Bodies[Side] = Edit.Asset.FindBodyIndex(FName(*Pair.Elements[Side].StringValue));
+			Bodies[Side] = FindBodyByKey(Edit.Asset, Pair.Elements[Side].StringValue);
 			if (Bodies[Side] == INDEX_NONE)
 			{
 				return Op.Fail(TEXT("PhysicsAsset.BodyNotFound"), FString::Printf(TEXT("The physics asset has no body on bone '%s'."),

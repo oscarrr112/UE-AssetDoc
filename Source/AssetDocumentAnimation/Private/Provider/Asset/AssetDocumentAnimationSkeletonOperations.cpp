@@ -129,7 +129,7 @@ FAssetDocumentPrimitiveOutcome InvokeAnimationSkeletonSet(
  }
  auto* Desired = static_cast<USkeleton*>(NativeReference);
  if (!CanonicalSkeleton(Target)) return MakeAnimationProviderFailure(TEXT("AnimationProvider.Skeleton.InvalidTarget"), TEXT("The target Skeleton GUID baseline is not canonical."));
- if (!Compatible(Target, Desired)) return MakeAnimationProviderFailure(TEXT("AnimationProvider.Skeleton.IncompatibleReference"), IncompatibleReason(Target.SlotAnimTracks, Desired));
+ if (!KeepsSkeleton(Target, Desired) && !Compatible(Target, Desired)) return MakeAnimationProviderFailure(TEXT("AnimationProvider.Skeleton.IncompatibleReference"), IncompatibleReason(Target.SlotAnimTracks, Desired));
  const FGuid DesiredGuid = Desired ? Desired->GetGuid() : FGuid();
  const FString DesiredPath = Desired ? Desired->GetPathName() : FString();
  const FString TargetPath = Target.GetPathName();

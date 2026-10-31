@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import unittest
 
-from asset_document.diagnostics import AssetDocumentContractError
+from asset_document import tolerance
+from asset_document.diagnostics import AssetDocumentContractError, collecting_read_warnings
 from asset_document.profiles import physics_asset as physics
 from asset_document.profiles import physics_asset_apply as plan
 
@@ -287,6 +288,204 @@ class PhaseTests(unittest.TestCase):
         self.assertEqual(_ops(plan.phase_collision, body),
                          [{"op": "collision.set", "pairs": [["head", "pelvis"]], "enabled": True},
                           {"op": "collision.set", "pairs": [["spine_01", "head"]], "enabled": False}])
+
+
+class HeldContentTests(unittest.TestCase):
+    """Content older assets hold that new input may not add: read with warnings, kept while unchanged."""
+
+    def test_repeated_joint_names_and_self_constraints_are_kept(self):
+        live = _document({"Constraints": {"a": {"Child": "a", "Parent": "b"}, "a~2": {"Child": "c", "Parent": "c"}}})
+        with tolerance.authoring() as findings:
+            physics.canonicalize(live)
+        self.assertEqual([(item.path, item.code) for item in findings],
+                         [("/Body/Constraints/a~02", "PhysicsAsset.InvalidBody"),
+                          ("/Body/Constraints/a~02/Parent", "PhysicsAsset.InvalidBody")])
+        tolerance.settle(findings, live, live)
+        edited = _document({"Constraints": {"a": {"Child": "a", "Parent": "b"}, "a~2": {"Child": "c", "Parent": "c"},
+                                            "d~2": {"Child": "d", "Parent": "d"}}})
+        with tolerance.authoring() as findings:
+            physics.canonicalize(edited)
+        with self.assertRaises(AssetDocumentContractError) as caught:
+            tolerance.settle(findings, edited, live)
+        self.assertEqual({item.path for item in (caught.exception.diagnostic, *caught.exception.additional)},
+                         {"/Body/Constraints/d~02", "/Body/Constraints/d~02/Parent"})
+
+    def test_read_warnings_and_read_only_shapes_reach_extract(self):
+        records = _records()
+        records[1]["entry"]["Shapes"]["LevelSets"] = {"Unsupported": "1 LevelSets shape"}
+
+        class Calls:
+            def query(self, primitive, values):
+                return {"records": records, "next_offset": -1}
+
+        class Properties:
+            def extract(self, read, context, include_defaults):
+                return {}
+
+        original_calls, original_properties = physics.PhysicsCalls, physics._properties
+        physics.PhysicsCalls, physics._properties = (lambda context, read: Calls()), Properties
+        try:
+            with collecting_read_warnings() as warnings:
+                document = physics.extract(TARGET, None, None)
+        finally:
+            physics.PhysicsCalls, physics._properties = original_calls, original_properties
+        self.assertEqual({(item.code, item.path) for item in warnings},
+                         {("DuplicateJointName", "/Body/Constraints/head~1"),
+                          ("PhysicsAsset.Unrepresented", "/Body/Bodies/pelvis/Shapes/LevelSets")})
+        canonical = physics.canonicalize(document)
+        live = {**canonical["Body"], "_profiles": {}}
+        self.assertEqual(physics.body_diff(canonical["Body"], canonical["Body"], exact=False), [])
+        plan.check_markers(canonical["Body"], live)
+        shapes = plan.phase_body_updates({"Bodies": {"pelvis": {"Shapes": {
+            "Capsules": [{"Radius": 12, "Length": 20}], "LevelSets": {"Unsupported": "1 LevelSets shape"}}}}}, {}, live)
+        self.assertEqual(list(shapes[0].op["shapes"]), ["Capsules"])
+        with self.assertRaises(AssetDocumentContractError) as caught:
+            plan.check_markers({"Bodies": {"pelvis": {"Shapes": {"LevelSets": {"Unsupported": "edited"}}}}}, live)
+        self.assertEqual(caught.exception.diagnostic.code, "PhysicsAsset.UnrepresentedValue")
+        with self.assertRaises(AssetDocumentContractError):
+            plan.check_markers({"Bodies": {"head": {"Shapes": {"LevelSets": {"Unsupported": "1 LevelSets shape"}}}}}, live)
+
+    def test_unchanged_invalid_entries_are_not_refused(self):
+        live = plan._with_profiles(_live(), {})
+        live["Bodies"]["head"]["PhysicalAnimation"] = {"Gone": {"OrientationStrength": 1}}
+        live["Constraints"]["neck"] = {"Child": "neck", "Parent": "head", "Profiles": {"Old": {}}}
+        live["CollisionDisabled"].append(["head", "jaw"])
+        held = {"Bodies": {bone: dict(entry) for bone, entry in live["Bodies"].items()},
+                "Constraints": dict(live["Constraints"]), "CollisionDisabled": list(live["CollisionDisabled"])}
+        plan.refuse(held, live)
+        for body, path in (
+                ({"Bodies": {"head": {"PhysicalAnimation": {"Gone": {"OrientationStrength": 2}}}}},
+                 "/Body/Bodies/head/PhysicalAnimation/Gone"),
+                ({"Constraints": {"neck": {"Child": "neck", "Parent": "pelvis"}}}, "/Body/Constraints/neck/Child"),
+                ({"CollisionDisabled": [["pelvis", "jaw"]]}, "/Body/CollisionDisabled/0/1")):
+            with self.assertRaises(AssetDocumentContractError) as caught:
+                plan.refuse(body, live)
+            self.assertEqual(caught.exception.diagnostic.path, path)
+
+
+class RepeatedBoneBodyTests(unittest.TestCase):
+    """Two bodies on one bone (tool-made or corrupt content): the later one reads as <bone>~2 and is kept."""
+
+    def _records(self):
+        return [
+            {"kind": "header", "preview_mesh": MESH, "bodies": 3, "constraints": 0, "defaults": DEFAULTS},
+            {"kind": "body", "bone": "pelvis", "key": "pelvis", "entry": {"Shapes": {"Spheres": [{"Radius": 8}]}}},
+            {"kind": "body", "bone": "pelvis", "key": "pelvis~2", "entry": {"Shapes": {"Convexes": [{}]}}},
+            {"kind": "convex_vertices", "bone": "pelvis", "key": "pelvis~2", "index": 0,
+             "vertices": [{"X": 1, "Y": 0, "Z": 0}]},
+            {"kind": "body", "bone": "head", "key": "head", "entry": {"Shapes": {"Spheres": [{"Radius": 4}]}}},
+            {"kind": "collision", "pairs": [["pelvis~2", "head"]]},
+            {"kind": "body_facts", "bone": "pelvis", "key": "pelvis~2", "mass": 2.0, "in_mesh": True},
+        ]
+
+    def _live(self):
+        body, _ = physics.assemble(self._records())
+        return {**body, "_profiles": {}}
+
+    def test_each_body_has_its_own_key(self):
+        body, facts = physics.assemble(self._records())
+        self.assertEqual(list(body["Bodies"]), ["pelvis", "pelvis~2", "head"])
+        self.assertEqual(body["Bodies"]["pelvis"]["Shapes"], {"Spheres": [{"Radius": 8}]})
+        self.assertEqual(body["Bodies"]["pelvis~2"]["Shapes"]["Convexes"][0]["VertexData"], [{"X": 1, "Y": 0, "Z": 0}])
+        self.assertEqual(body["CollisionDisabled"], [["pelvis~2", "head"]])
+        self.assertEqual(list(facts["bodies"]), ["pelvis~2"])
+
+    def test_records_without_keys_are_keyed_by_bone(self):
+        body, _ = physics.assemble(_records())
+        self.assertEqual(list(body["Bodies"]), ["pelvis", "spine_01", "head"])
+
+    def test_bone_of_a_key(self):
+        self.assertEqual([physics.bone_of(key) for key in ("pelvis", "pelvis~2", "pelvis~12", "a~1", "a~0", "a~b")],
+                         ["pelvis", "pelvis", "pelvis", "a~1", "a~0", "a~b"])
+
+    def test_auto_shape_names_follow_the_bone(self):
+        body = {"Bodies": {"pelvis~2": {"Shapes": {"Spheres": [{"Radius": 8, "Name": "pelvis_sphere"}]}}}}
+        with tolerance.authoring():
+            canonical = physics.canonicalize(_document(body))
+        self.assertEqual(canonical["Body"]["Bodies"]["pelvis~2"]["Shapes"]["Spheres"], [{"Radius": 8}])
+
+    def test_the_extra_body_is_kept_and_a_new_one_is_refused(self):
+        # A <bone>~N key is judged on apply, against the asset it edits: canonicalize records nothing, so a verify of
+        # the renumbered asset (the kept body now keyed by its bone) settles nothing either.
+        document = _document(physics.assemble(self._records())[0])
+        with tolerance.authoring() as findings:
+            physics.canonicalize(document)
+        self.assertEqual(findings, [])
+        live = self._live()
+        plan.refuse({"Bodies": live["Bodies"]}, live)
+        edited = {"Bodies": {**live["Bodies"], "head~2": {"Shapes": {}}}}
+        with self.assertRaises(AssetDocumentContractError) as caught:
+            plan.refuse(edited, live)
+        self.assertEqual((caught.exception.diagnostic.path, caught.exception.diagnostic.code),
+                         ("/Body/Bodies/head~02", "PhysicsAsset.InvalidBody"))
+        # A document read before an earlier body of the bone was removed names the kept body by its former key.
+        after = {**live, "Bodies": {"pelvis": live["Bodies"]["pelvis~2"], "head": live["Bodies"]["head"]}}
+        plan.refuse(physics.in_order({"Bodies": {"pelvis~2": live["Bodies"]["pelvis~2"], "head": live["Bodies"]["head"]}},
+                                     after), after)
+
+    def test_unchanged_extract_plans_nothing_and_an_edit_names_the_extra_body(self):
+        live = self._live()
+        body = {key: value for key, value in live.items() if key != "_profiles"}
+        self.assertEqual(physics.body_diff(body, live, exact=False), [])
+        for phase in plan.PHASES:
+            self.assertEqual(_ops(phase, body, live=live), [])
+        edited = {**body, "Bodies": {**body["Bodies"], "pelvis~2": {"Properties": {"PhysicsType": "PhysType_Kinematic"},
+                                                                    "Shapes": body["Bodies"]["pelvis~2"]["Shapes"]}}}
+        self.assertEqual(_ops(plan.phase_body_updates, edited, live=live),
+                         [{"op": "body.set", "bone": "pelvis~2", "properties": {"PhysicsType": "PhysType_Kinematic"}}])
+
+    def test_later_bodies_of_a_bone_are_removed_first(self):
+        live = self._live()
+        keep_first = {"Bodies": {"pelvis": live["Bodies"]["pelvis"], "head": live["Bodies"]["head"]}}
+        plan.refuse(keep_first, live)
+        self.assertEqual(_ops(plan.phase_body_removals, keep_first, live=live), [{"op": "body.remove", "bone": "pelvis~2"}])
+
+    def test_removing_the_first_body_keeps_the_later_one_under_the_bone_key(self):
+        live = self._live()
+        keep_extra = {"Bodies": {"pelvis~2": live["Bodies"]["pelvis~2"], "head": live["Bodies"]["head"]},
+                      "CollisionDisabled": [["pelvis~2", "head"]]}
+        plan.refuse(keep_extra, live)
+        self.assertEqual(_ops(plan.phase_body_removals, keep_extra, live=live), [{"op": "body.remove", "bone": "pelvis"}])
+        # Once the first body is gone the kept one is "pelvis": the later phases and the verify name it so.
+        mapping = physics.keys_after_removals(keep_extra["Bodies"], live["Bodies"])
+        self.assertEqual(mapping, {"pelvis~2": "pelvis"})
+        renumbered = physics.rekey_bodies(keep_extra, mapping)
+        self.assertEqual(list(renumbered["Bodies"]), ["pelvis", "head"])
+        self.assertEqual(renumbered["CollisionDisabled"], [["pelvis", "head"]])
+        after = {"Bodies": {"pelvis": live["Bodies"]["pelvis~2"], "head": live["Bodies"]["head"]},
+                 "CollisionDisabled": [["pelvis", "head"]], "Constraints": {}}
+        self.assertEqual(list(physics.diff(_document(keep_extra), _document(after), exact=False)), [])
+        # Before the removal the document still differs (the first body goes).
+        before = {key: value for key, value in live.items() if key != "_profiles"}
+        self.assertNotEqual(list(physics.diff(_document(keep_extra), _document(before), exact=False)), [])
+
+    def test_keys_after_removals_order_kept_then_new(self):
+        live = ["a", "a~2", "a~3", "b"]
+        self.assertEqual(physics.keys_after_removals(["a~3", "b"], live), {"a~3": "a"})
+        self.assertEqual(physics.keys_after_removals(["a", "a~3"], live), {"a~3": "a~2"})
+        self.assertEqual(physics.keys_after_removals(["a~2", "a~4"], live), {"a~2": "a", "a~4": "a~2"})
+        self.assertEqual(physics.keys_after_removals(["a", "a~2", "a~3", "b"], live), {})
+        self.assertEqual(physics.keys_in_order(["a~3"], ["a"]), {"a~3": "a"})
+        self.assertEqual(physics.keys_in_order(["a~3"], ["a", "a~2"]), {})
+
+    def test_removing_the_later_body_plans_no_constraint_change(self):
+        # The bone's constraints name the bone, which keeps its first body: removing pelvis~2 touches no constraint.
+        joint = {"Child": "head", "Parent": "pelvis"}
+        live = {**self._live(), "Constraints": {"head": joint}}
+        body = {"Bodies": {"pelvis": live["Bodies"]["pelvis"], "head": live["Bodies"]["head"]},
+                "Constraints": {"head": joint}}
+        plan.refuse(body, live)
+        self.assertEqual(_ops(plan.phase_body_removals, body, live=live), [{"op": "body.remove", "bone": "pelvis~2"}])
+        after = {**live, "Bodies": body["Bodies"]}
+        for phase in (plan.phase_constraint_removals, plan.phase_constraint_structure, plan.phase_constraint_details):
+            self.assertEqual(_ops(phase, body, live=after), [])
+
+    def test_all_bodies_of_a_bone_go_later_first(self):
+        live = self._live()
+        body = {"Bodies": {"head": live["Bodies"]["head"]}}
+        plan.refuse(body, live)
+        self.assertEqual(_ops(plan.phase_body_removals, body, live=live),
+                         [{"op": "body.remove", "bone": "pelvis~2"}, {"op": "body.remove", "bone": "pelvis"}])
 
 
 class ErrorPathTests(unittest.TestCase):

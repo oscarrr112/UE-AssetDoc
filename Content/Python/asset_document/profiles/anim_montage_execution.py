@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Scoped Montage primitive orchestration; no retained request or native state."""
-from asset_document.diagnostics import AssetDocumentContractError, contract_error
+from asset_document.diagnostics import AssetDocumentContractError, contract_error, read_warning
 from asset_document.dto import PrimitiveRequirement
 from asset_document.regions.primitive_catalog import (
     NamedOpaqueHandleArgument, PrimitiveOutcome, PrimitiveOutcomeStatus,
     _single_handle, _optional_handle,
 )
-from asset_document.profiles.anim_montage_codec import lower_body, snapshot_to_body
+from asset_document.profiles.anim_montage_codec import lower_body, snapshot_to_body, unwritable_slot
 from asset_document.profiles import anim_montage_settings as settings_codec
 from asset_document.regions.target_lifecycle import generic_factory_lifecycle, lifecycle_requirements
 
@@ -58,6 +58,8 @@ def lower_document(document):
 
     Editor fields merge the Body-owned plain reflected settings with the
     authored Properties region; both are written by one generic Editor batch.
+    A list of instanced objects in Properties is written whole by the Montage
+    settings primitive instead (the generic batch writes plain fields only).
     """
     body = document.get("Body", {})
     lowered = lower_body({key: value for key, value in body.items() if key in SUPPORTED})
@@ -65,6 +67,9 @@ def lower_document(document):
     settings_codec.validate_settings_against_body(settings, body)
     fields, intent = settings_codec.lower_settings(settings)
     fields.update(settings_codec.validate_properties(document.get("Properties", {})))
+    for name, key in _INSTANCED_LIST_PROPERTIES.items():
+        if name in fields:
+            intent = dict(intent or {}, **{key: fields.pop(name)})
     return lowered, fields, intent, settings
 
 
@@ -78,13 +83,18 @@ def _admitted_batch(context, read_asset_handle):
     return rows, groups[0].handles[0]
 
 
-# The Montage Properties region carries plain scalar fields only (the native
-# settings snapshot projects the same set); references, text and structs are
-# owned by Body regions or not authored through this profile.
+# The Montage Properties region carries plain scalar fields and object
+# references (the native settings snapshot projects the same set; references a
+# Body region shows are rejected as managed); text and structs are owned by Body
+# regions or not authored through this profile.
 _PLAIN_PROPERTY_CODECS = frozenset({
     "bool.v1", "integer.v1", "number.v1", "string.v1", "name.v1", "enum.v1",
-    "soft_object_path.v1", "soft_class_path.v1",
+    "soft_object_path.v1", "soft_class_path.v1", "object_path.v1",
 })
+# Lists of instanced objects no Body region owns ([{"Class", "Properties"}], the
+# Details panel's array of instanced rows), by their Montage settings intent key;
+# the settings snapshot lists them too.
+_INSTANCED_LIST_PROPERTIES = {"AssetUserData": "asset_user_data"}
 
 
 def editor_rows(fields, admitted, codecs=None):
@@ -163,9 +173,12 @@ def load_references(context, lowered):
             _require_reference(context, lowered[key], cls)
     for slot in lowered.get("slots", []):
         for segment in slot["segments"]:
-            _require_reference(context, segment["animation"], None)
+            if segment["animation"] is not None:
+                _require_reference(context, segment["animation"], None)
     for key, base in (("notifies", "/Script/Engine.AnimNotify"), ("notify_states", "/Script/Engine.AnimNotifyState")):
         for row in lowered.get(key, []):
+            if row["object"] is None:
+                continue  # a skeleton notify: a name without an object
             result = invoke(context, CLASS_RESOLVE, {"class": row["object"]["class"], "expected_base": base})
             _single_handle(result, "class")
 
@@ -182,22 +195,46 @@ def skeleton_slots(context, skeleton_path):
 
 
 def check_slots(lowered, snapshot):
-    """(skeleton path, [(slot name, document path)]) the montage will need, or None when unchanged.
+    """(skeleton path, [(slot name, document path)]) of the slots the montage newly needs, or None when none.
 
-    Authored slot tracks name their slots; otherwise a new montage keeps its native DefaultSlot track
-    and an existing one keeps its tracks (checked when the Skeleton changes).
+    Authored slot tracks name their slots; a new montage keeps its native DefaultSlot track and an existing one keeps
+    its tracks. Only new needs are judged: with the Skeleton unchanged, a track on a slot the Montage already has a
+    track for is not (a slot removed from the Skeleton after the track was made stays, as the editor keeps it); a
+    Skeleton change judges every track.
     """
     skeleton = lowered.get("skeleton") if "skeleton" in lowered else (snapshot or {}).get("skeleton")
     if not skeleton or ("slots" not in lowered and "skeleton" not in lowered):
         return None
+    current = None if snapshot is None else snapshot.get("skeleton")
+    skeleton_changes = snapshot is None or ("skeleton" in lowered and lowered["skeleton"] != current)
+    existing = set() if skeleton_changes else {slot["name"] for slot in snapshot.get("slots", [])}
     if "slots" in lowered:
         names = [(slot["name"], f"/Body/SlotAnimTracks/{index}/SlotName")
-                 for index, slot in enumerate(lowered["slots"])]
+                 for index, slot in enumerate(lowered["slots"]) if slot["name"] not in existing]
     elif snapshot is None:
         names = [(NATIVE_DEFAULT_SLOT, "/Body/SlotAnimTracks")]
     else:
-        names = [(slot["name"], "/Body/Skeleton") for slot in snapshot.get("slots", [])]
-    return skeleton, names
+        names = [(slot["name"], "/Body/Skeleton") for slot in snapshot.get("slots", []) if slot["name"] not in existing]
+    return (skeleton, names) if names else None
+
+
+def warn_unknown_slots(context, body):
+    """Read warnings for slot tracks on a slot the Skeleton no longer lists (removed or renamed in the Anim Slot
+    Manager after the track was made). Best effort: a Skeleton that cannot be read gives none."""
+    tracks = body.get("SlotAnimTracks") or []
+    if not body.get("Skeleton") or not tracks:
+        return
+    try:
+        slots = skeleton_slots(context, body["Skeleton"])
+    except AssetDocumentContractError:
+        return
+    for index, track in enumerate(tracks):
+        name = track.get("SlotName")
+        if name and name.casefold() != "none" and name not in slots:
+            read_warning(f"/Body/SlotAnimTracks/{index}/SlotName", "AnimMontage.UnknownSlot",
+                         f"Skeleton {body['Skeleton']} has no slot '{name}' (removed or renamed in the Anim Slot "
+                         f"Manager). Its slots: {', '.join(slots) if slots else 'none'}. The track is kept while the "
+                         "document lists it; a new or renamed track needs a slot of the Skeleton.")
 
 
 # A Skeleton outside /Game (engine or plugin content) cannot take a Skeleton document.
@@ -224,6 +261,49 @@ def require_slots(context, lowered, snapshot):
                 "slot to the Skeleton first with a Skeleton document (Class /Script/Engine.Skeleton, Body.SlotGroups)."
                 + ("" if str(skeleton).startswith("/Game/") else READ_ONLY_SKELETON_HINT),
                 path, "AnimMontage.UnknownSlot")
+
+
+MESH_CLASS = "/Script/Engine.SkeletalMesh"
+
+
+def keep_unchanged_anomalies(context, lowered, snapshot=None, *, applying=False):
+    """The lowered document without the regions it lists as the Montage holds them but that no write can carry:
+
+    * a PreviewMesh that does not load (Extract reads it as its stored path): not written while unchanged; a new one
+      is refused (``AnimMontage.MissingReference``);
+    * SlotAnimTracks holding a segment without an animation, a track named None or two tracks on one slot: not
+      written while unchanged
+      (the tracks stay as they are); a changed slot-track list cannot carry them and is refused at that value.
+
+    Preflight compares with the snapshot. Apply (which reads no snapshot) leaves the same regions out, decided from
+    the document alone: Preflight of the same request has refused every changed one.
+    """
+    out = dict(lowered)
+    mesh = out.get("preview_mesh")
+    if mesh is not None and not resolve(context, mesh, MESH_CLASS)[0]:
+        if not applying and (snapshot is None or snapshot.get("preview_mesh") != mesh):
+            raise error(f"PreviewMesh {mesh} does not load (no such SkeletalMesh). Set the object path of an "
+                        "existing SkeletalMesh, or null.", "/Body/PreviewMesh", "AnimMontage.MissingReference")
+        del out["preview_mesh"]
+    problem = unwritable_slot(out.get("slots"))
+    if problem is not None:
+        where, code, reason = problem
+        if not applying and (snapshot is None or not _same_slots(out["slots"], snapshot)):
+            raise error(f"{reason} A slot track edit rewrites every track, and this value cannot be written: leave "
+                        "SlotAnimTracks as extracted (other regions still apply), or fix the value.", where, code)
+        del out["slots"]
+    return out
+
+
+def _same_slots(slots, snapshot):
+    """The lowered slot tracks equal the Montage's (the snapshot's), compared as the no-op check compares them."""
+    current = lower_body({"SlotAnimTracks": snapshot_to_body(snapshot)["SlotAnimTracks"]})["slots"]
+
+    def strip(rows):
+        return [{"name": row["name"], "segments": [{key: value for key, value in segment.items()
+                                                     if key not in ("previous_slot", "previous_segment")}
+                                                    for segment in row["segments"]]} for row in rows]
+    return strip(slots) == strip(current)
 
 
 def check_timeline(context, lowered, read):
@@ -302,7 +382,6 @@ def created_body(body):
 
 def preflight(document, context):
     lowered, fields, intent, settings = lower_document(document)
-    load_references(context, lowered)
     load_setting_references(context, settings)
     exists, read, _ = resolve(context, document["Target"], CLASS)
     rows = []
@@ -314,6 +393,8 @@ def preflight(document, context):
         native = snapshot.get("settings") if type(snapshot) is dict else None
         native_curve = native["time_stretch"]["curve_name"] if type(native) is dict else None
     require_slots(context, lowered, snapshot)
+    lowered = keep_unchanged_anomalies(context, lowered, snapshot)
+    load_references(context, lowered)
     if exists:
         check_timeline(context, lowered, read)
     body = document.get("Body", {})
@@ -339,6 +420,7 @@ def preflight(document, context):
 
 def apply(document, read_asset_handle, mutable_asset_handle, context):
     lowered, fields, intent, settings = lower_document(document)
+    lowered = keep_unchanged_anomalies(context, lowered, applying=True)
     load_references(context, lowered)
     load_setting_references(context, settings)
     target = animation_handle(context, mutable_asset_handle, "mutable")

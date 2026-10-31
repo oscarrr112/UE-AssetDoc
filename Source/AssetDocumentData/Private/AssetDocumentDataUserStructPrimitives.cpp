@@ -10,6 +10,7 @@
 
 #include "AssetDocumentDataUserTypes.h"
 #include "AssetDocumentEditorPickerValues.h"
+#include "AssetDocumentEditorTrialScope.h"
 
 #include "EdGraphSchema_K2.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -27,14 +28,31 @@ namespace
 {
 const FName ValueRangeKeys[] = {TEXT("ClampMin"), TEXT("ClampMax"), TEXT("UIMin"), TEXT("UIMax")};
 
+// Reads whether a User Defined Struct has its default instance (a protected member; GetDefaultInstance ensures).
+struct FUserStructDefaultsAccess : UUserDefinedStruct
+{
+	static bool HasDefaults(const UUserDefinedStruct& Struct)
+	{
+		const FUserStructOnScopeIgnoreDefaults& Defaults = Struct.*(&FUserStructDefaultsAccess::DefaultStructInstance);
+		return Defaults.IsValid() && Defaults.GetStruct() == &Struct;
+	}
+};
+
 UUserDefinedStruct* GetStruct(FCall& Call)
 {
 	UUserDefinedStruct* Struct = Cast<UUserDefinedStruct>(&Call.Asset);
-	if (Struct == nullptr || Cast<UUserDefinedStructEditorData>(Struct->EditorData) == nullptr)
+	UUserDefinedStructEditorData* EditorData = Struct != nullptr ? Cast<UUserDefinedStructEditorData>(Struct->EditorData) : nullptr;
+	if (EditorData == nullptr)
 	{
 		Fail(Call, TEXT("Data.UnsupportedAsset"), TEXT("UserDefinedStruct primitives edit User Defined Struct assets (with editor data)."),
 			TEXT("/HandleArguments/asset"));
 		return nullptr;
+	}
+	// Validate's trial copy is a transient duplicate: UUserDefinedStruct::PostDuplicate rebuilds the default instance
+	// only outside the transient package, so the copy gets it here, from the editor data the copy carries.
+	if (FAssetDocumentEditorTrialScope::IsTrialTarget(*Struct) && !FUserStructDefaultsAccess::HasDefaults(*Struct))
+	{
+		EditorData->RecreateDefaultInstance();
 	}
 	return Struct;
 }
@@ -468,6 +486,11 @@ bool HandleUserStructRead(FCall& Call, FObjectBuilder& Result)
 		{
 			Default = MakeNull();
 			bSupported = false;
+		}
+		if (!bSupported && Property != nullptr && !Var.DefaultValue.IsEmpty())
+		{
+			// A default the codec has no form for: its stored text, as a marker.
+			Default = MakeUnsupportedMarker(*Property, nullptr, &Var.DefaultValue);
 		}
 		Row.AddString(TEXT("codec"), CodecId);
 		Row.AddBool(TEXT("supported"), bSupported);

@@ -137,6 +137,7 @@ FAssetDocumentContractValidationResult ValidateLive(
   if (!Valid.bValid) return Valid;
   if (NativeReference != State.Desired.Get()) return Result(false, TEXT("AnimationProvider.InvalidHandlePayload"));
  }
+ if (KeepsSkeleton(*Montage, State.Desired.Get())) return Result(true);
  return CompatibleResult(Montage->SlotAnimTracks, State.Desired.Get());
 }
 }
@@ -197,8 +198,11 @@ static FAssetDocumentContractValidationResult PrepareAnimationSkeletonMutationBa
    if (State->Structure->Target.Get() != State->Target.Get()) return Result(false);
    State->ProjectedRetained = MakeUnique<FRetainedState>(State->Structure->DesiredSlots);
   }
-  const auto Compatibility = CompatibleResult(State->Structure ? State->ProjectedRetained->Tracks : State->Retained->Tracks, State->Desired.Get());
-  if (!Compatibility.bValid) return Compatibility;
+  if (!KeepsSkeleton(*State->Target.Get(), State->Desired.Get()))
+  {
+   const auto Compatibility = CompatibleResult(State->Structure ? State->ProjectedRetained->Tracks : State->Retained->Tracks, State->Desired.Get());
+   if (!Compatibility.bValid) return Compatibility;
+  }
  }
  if ((State->Structure && State->bCreate) || !State->BaselineCurrent()) return Result(false);
  auto Capture = MakeShared<FCapture>();

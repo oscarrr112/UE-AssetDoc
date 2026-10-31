@@ -102,6 +102,9 @@ def _node_entry(row):
     out = {"Id": row["id"], "Action": row["action"], "Position": [row.get("x", 0), row.get("y", 0)]}
     _put(out, "Version", row.get("version"), "version" in row)
     _put(out, "Comment", row.get("comment"), bool(row.get("comment")))
+    size = row.get("size")
+    _put(out, "Size", {"Width": size.get("width"), "Height": size.get("height")} if type(size) is dict else None,
+         type(size) is dict)
     _put(out, "Properties", row.get("properties"), bool(row.get("properties")))
     _put(out, "Pins", row.get("pins"), "pins" in row)
     return out
@@ -198,6 +201,7 @@ def _user_parameter(row):
         out["Value"] = {"Object": row["object"]}
     _put(out, "Description", row.get("description"), "description" in row)
     _put(out, "Category", row.get("category"), "category" in row)
+    _put(out, "Meta", row.get("meta"), "meta" in row)
     return out
 
 
@@ -214,9 +218,13 @@ def _place_module(row, system, emitters):
             handlers.append({"Properties": {}, "Modules": []})
         handlers[row["event"]]["Modules"].append(entry)
     elif group == "SimulationStage":
-        for stage in emitter.get("SimulationStages", []):
-            if stage["Name"] == row["stage"]:
-                stage["Modules"].append(entry)
+        # A stage is the one at its position (names may repeat: the stack's "+" adds stages unnamed).
+        stages = emitter.get("SimulationStages", [])
+        at = row.get("stage_index")
+        if type(at) is not int:
+            at = next((index for index, stage in enumerate(stages) if stage["Name"] == row.get("stage")), None)
+        if at is not None and 0 <= at < len(stages):
+            stages[at]["Modules"].append(entry)
     else:
         emitter.setdefault(group, []).append(entry)
 
@@ -239,6 +247,7 @@ def stack_body(rows):
         elif kind == "declared_parameter":
             declared = {"Name": row["name"], "Type": row["type"]}
             _put(declared, "Description", row.get("description"), "description" in row)
+            _put(declared, "Meta", row.get("meta"), "meta" in row)
             system["Parameters"].append(declared)
         elif kind == "emitter":
             emitters[row["name"]] = _emitter_entry(row)

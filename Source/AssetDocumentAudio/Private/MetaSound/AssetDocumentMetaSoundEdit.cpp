@@ -189,20 +189,94 @@ bool ReadPoint(FReader& Op, FStringView Key, FVector2D& Out, bool& bOutHas)
 	return true;
 }
 
-bool ReadTexts(FReader& Op, FStringView Key, TArray<FText>& Out)
+// A text in the shared text form, as an edit of Current (the Details text box's rule): the string Current displays
+// keeps it (key and String Table reference included), another string keeps its key, a text form sets that text.
+bool ReadText(FReader& Op, FStringView Key, const FText& Current, UObject& Owner, FText& Out)
+{
+	FString Text;
+	if (!Op.String(Key, Text))
+	{
+		return false;
+	}
+	Out = Current;
+	if (!EditorPropertyValueCodec::DecodeText(Text, Out, &Owner))
+	{
+		return Op.Fail(TEXT("Graph.InvalidArgument"), FString::Printf(TEXT("'%s' is not a valid text form."), *Text), Key);
+	}
+	return true;
+}
+
+// A list of texts, each an edit of the current text it continues (see ReadText): the unpaired current text whose
+// text form the item is, else one that displays the item's string, else the unpaired current text at the item's
+// index (an edited string keeps that text's key), else a new text. Inserting, removing or reordering items keeps
+// every unchanged item's text (its key or String Table reference included).
+bool ReadTexts(FReader& Op, FStringView Key, const TArray<FText>& Current, UObject& Owner, TArray<FText>& Out)
 {
 	const FValue* Values = nullptr;
 	if (!Op.Array(Key, Values))
 	{
 		return false;
 	}
+	const int32 Count = Values->Elements.Num();
 	for (const FValue& Element : Values->Elements)
 	{
 		if (Element.Kind != EValueKind::String)
 		{
 			return Op.Fail(TEXT("Graph.InvalidArgument"), TEXT("A list of strings."), Key);
 		}
-		Out.Add(FText::FromString(Element.StringValue));
+	}
+	TArray<FString> CurrentForms;
+	CurrentForms.Reserve(Current.Num());
+	for (const FText& Existing : Current)
+	{
+		CurrentForms.Add(EditorPropertyValueCodec::EncodeText(Existing));
+	}
+	TArray<bool> Paired;
+	Paired.Init(false, Current.Num());
+	TArray<int32> Continues;
+	Continues.Init(INDEX_NONE, Count);
+	auto PairWith = [&Current, &Paired, &Continues](int32 Item, TFunctionRef<bool(int32 Candidate)> Accepts)
+	{
+		for (int32 Candidate = 0; Candidate < Current.Num(); ++Candidate)
+		{
+			if (!Paired[Candidate] && Accepts(Candidate))
+			{
+				Paired[Candidate] = true;
+				Continues[Item] = Candidate;
+				return;
+			}
+		}
+	};
+	for (int32 Item = 0; Item < Count; ++Item)
+	{
+		const FString& Written = Values->Elements[Item].StringValue;
+		PairWith(Item, [&CurrentForms, &Written](int32 Candidate) { return CurrentForms[Candidate].Equals(Written, ESearchCase::CaseSensitive); });
+	}
+	for (int32 Item = 0; Item < Count; ++Item)
+	{
+		if (Continues[Item] == INDEX_NONE)
+		{
+			const FString& Written = Values->Elements[Item].StringValue;
+			PairWith(Item, [&Current, &Written](int32 Candidate) { return EditorPropertyValueCodec::IsSameText(Written, Current[Candidate]); });
+		}
+	}
+	for (int32 Item = 0; Item < Count; ++Item)
+	{
+		if (Continues[Item] == INDEX_NONE && Current.IsValidIndex(Item) && !Paired[Item])
+		{
+			Paired[Item] = true;
+			Continues[Item] = Item;
+		}
+	}
+	Out.Reserve(Count);
+	for (int32 Item = 0; Item < Count; ++Item)
+	{
+		const FString& Written = Values->Elements[Item].StringValue;
+		FText& Text = Out.Add_GetRef(Continues[Item] != INDEX_NONE ? Current[Continues[Item]] : FText::GetEmpty());
+		if (!EditorPropertyValueCodec::DecodeText(Written, Text, &Owner))
+		{
+			return Op.Fail(TEXT("Graph.InvalidArgument"), FString::Printf(TEXT("'%s' is not a valid text form."), *Written), Key);
+		}
 	}
 	return true;
 }
@@ -540,22 +614,25 @@ bool OpMetadata(FEdit& Edit, FReader& Op)
 		return false;
 	}
 	FMetaSoundFrontendDocumentBuilder& Builder = Edit.Builder;
+	const FMetasoundFrontendClassMetadata& Current = Builder.GetConstDocumentChecked().RootGraph.Metadata;
 	FString Text;
 	if (Op.Has(TEXT("display_name")))
 	{
-		if (!Op.String(TEXT("display_name"), Text))
+		FText DisplayName;
+		if (!ReadText(Op, TEXT("display_name"), Current.GetDisplayName(), Edit.Asset, DisplayName))
 		{
 			return false;
 		}
-		Builder.SetDisplayName(FText::FromString(Text));
+		Builder.SetDisplayName(DisplayName);
 	}
 	if (Op.Has(TEXT("description")))
 	{
-		if (!Op.String(TEXT("description"), Text))
+		FText Description;
+		if (!ReadText(Op, TEXT("description"), Current.GetDescription(), Edit.Asset, Description))
 		{
 			return false;
 		}
-		Builder.SetDescription(FText::FromString(Text));
+		Builder.SetDescription(Description);
 	}
 	if (Op.Has(TEXT("author")))
 	{
@@ -568,7 +645,7 @@ bool OpMetadata(FEdit& Edit, FReader& Op)
 	if (Op.Has(TEXT("keywords")))
 	{
 		TArray<FText> Keywords;
-		if (!ReadTexts(Op, TEXT("keywords"), Keywords))
+		if (!ReadTexts(Op, TEXT("keywords"), Current.GetKeywords(), Edit.Asset, Keywords))
 		{
 			return false;
 		}
@@ -577,7 +654,7 @@ bool OpMetadata(FEdit& Edit, FReader& Op)
 	if (Op.Has(TEXT("categories")))
 	{
 		TArray<FText> Categories;
-		if (!ReadTexts(Op, TEXT("categories"), Categories))
+		if (!ReadTexts(Op, TEXT("categories"), Current.GetCategoryHierarchy(), Edit.Asset, Categories))
 		{
 			return false;
 		}
@@ -721,22 +798,28 @@ bool SetPageDefaults(FEdit& Edit, FReader& Op, FName Name)
 bool SetVertexFields(FEdit& Edit, FReader& Op, FName Name, bool bInput)
 {
 	FMetaSoundFrontendDocumentBuilder& Builder = Edit.Builder;
-	FString Text;
+	const FMetasoundFrontendClassVertex* Vertex = bInput
+		? static_cast<const FMetasoundFrontendClassVertex*>(Builder.FindGraphInput(Name))
+		: static_cast<const FMetasoundFrontendClassVertex*>(Builder.FindGraphOutput(Name));
 	if (Op.Has(TEXT("display_name")))
 	{
-		if (!Op.String(TEXT("display_name"), Text))
+		FText DisplayName;
+		if (!ReadText(Op, TEXT("display_name"), Vertex != nullptr ? Vertex->Metadata.GetDisplayName() : FText::GetEmpty(),
+			Edit.Asset, DisplayName))
 		{
 			return false;
 		}
-		bInput ? Builder.SetGraphInputDisplayName(Name, FText::FromString(Text)) : Builder.SetGraphOutputDisplayName(Name, FText::FromString(Text));
+		bInput ? Builder.SetGraphInputDisplayName(Name, DisplayName) : Builder.SetGraphOutputDisplayName(Name, DisplayName);
 	}
 	if (Op.Has(TEXT("description")))
 	{
-		if (!Op.String(TEXT("description"), Text))
+		FText Description;
+		if (!ReadText(Op, TEXT("description"), Vertex != nullptr ? Vertex->Metadata.GetDescription() : FText::GetEmpty(),
+			Edit.Asset, Description))
 		{
 			return false;
 		}
-		bInput ? Builder.SetGraphInputDescription(Name, FText::FromString(Text)) : Builder.SetGraphOutputDescription(Name, FText::FromString(Text));
+		bInput ? Builder.SetGraphInputDescription(Name, Description) : Builder.SetGraphOutputDescription(Name, Description);
 	}
 	if (Op.Has(TEXT("sort_order")))
 	{
@@ -1098,7 +1181,6 @@ bool OpVariable(FEdit& Edit, FReader& Op, const FString& Kind)
 	{
 		return false;
 	}
-	FString Text;
 	if (bAdd)
 	{
 		FName Type;
@@ -1147,19 +1229,25 @@ bool OpVariable(FEdit& Edit, FReader& Op, const FString& Kind)
 	}
 	if (Op.Has(TEXT("display_name")))
 	{
-		if (!Op.String(TEXT("display_name"), Text))
+		const FMetasoundFrontendVariable* Current = Builder.FindGraphVariable(Name, &Edit.PageID);
+		FText DisplayName;
+		if (!ReadText(Op, TEXT("display_name"), Current != nullptr ? Current->DisplayName : FText::GetEmpty(), Edit.Asset,
+			DisplayName))
 		{
 			return false;
 		}
-		Builder.SetGraphVariableDisplayName(Name, FText::FromString(Text), &Edit.PageID);
+		Builder.SetGraphVariableDisplayName(Name, DisplayName, &Edit.PageID);
 	}
 	if (Op.Has(TEXT("description")))
 	{
-		if (!Op.String(TEXT("description"), Text))
+		const FMetasoundFrontendVariable* Current = Builder.FindGraphVariable(Name, &Edit.PageID);
+		FText Description;
+		if (!ReadText(Op, TEXT("description"), Current != nullptr ? Current->Description : FText::GetEmpty(), Edit.Asset,
+			Description))
 		{
 			return false;
 		}
-		Builder.SetGraphVariableDescription(Name, FText::FromString(Text), &Edit.PageID);
+		Builder.SetGraphVariableDescription(Name, Description, &Edit.PageID);
 	}
 	Edit.bChanged = true;
 	return true;
@@ -1569,10 +1657,38 @@ bool IsWithinClamp(const FProperty& Property, const void* Value, FString& OutRan
 	return (Min.IsEmpty() || Number >= FCString::Atod(*Min)) && (Max.IsEmpty() || Number <= FCString::Atod(*Max));
 }
 
+// A value holding a marker ({"Unsupported": reason, ...}) at any depth: content the codec has no form for.
+bool HoldsMarker(const FValue& Value)
+{
+	if (Value.Kind == EAssetDocumentRuntimeValueKind::Object)
+	{
+		const FValue* Reason = FindField(Value, TEXT("Unsupported"));
+		if (Reason != nullptr && Reason->Kind == EAssetDocumentRuntimeValueKind::String)
+		{
+			return true;
+		}
+	}
+	else if (Value.Kind != EAssetDocumentRuntimeValueKind::Array)
+	{
+		return false;
+	}
+	for (const FValue& Element : Value.Elements)
+	{
+		if (HoldsMarker(Element))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 // The node Details of a configurable node class (FMetaSoundNodeConfigurationDataDetails): the configuration struct's
 // editable properties, then UpdateNodeInterfaceFromConfiguration (the class interface override the configuration
 // derives; connections to pins it removes go). "properties" is complete: an omitted property has the value a new
-// node of the class gets.
+// node of the class gets, except a setting whose current value holds content the codec has no form for (the read
+// lists it as a marker, or as a value with markers inside), which keeps the node's current value. A given setting that
+// holds markers, or whose current value does, is decoded as an edit of the current value, so its markers are checked
+// against that value and the marked content stays.
 bool SetNodeConfiguration(FEdit& Edit, FReader& Op, const FGuid& NodeID)
 {
 	const FValue* Value = nullptr;
@@ -1614,6 +1730,22 @@ bool SetNodeConfiguration(FEdit& Edit, FReader& Op, const FGuid& NodeID)
 	{
 		return false;
 	}
+	const bool bSameStruct = Node->Configuration.IsValid() && Node->Configuration.GetScriptStruct() == Struct;
+	// The current value of a setting, and whether it holds marked content (nullptr / false without one).
+	auto CurrentSetting = [&Node, bSameStruct](FProperty& Property, bool& bOutMarked) -> const void*
+	{
+		bOutMarked = false;
+		if (!bSameStruct)
+		{
+			return nullptr;
+		}
+		const void* Current = Property.ContainerPtrToValuePtr<void>(Node->Configuration.GetMemory());
+		FValue Encoded;
+		FString Code;
+		bOutMarked = !UE::AssetDocument::EditorPropertyValueCodec::Encode(Property, Current, Encoded, Code)
+			|| HoldsMarker(Encoded);
+		return Current;
+	};
 	if (Properties != nullptr)
 	{
 		TArray<FString> Names;
@@ -1636,15 +1768,42 @@ bool SetNodeConfiguration(FEdit& Edit, FReader& Op, const FGuid& NodeID)
 					*Struct->GetName(), *JoinNames(Names)), Key);
 			}
 			void* Target = (*Found)->ContainerPtrToValuePtr<void>(Wanted.GetMutableMemory());
-			FString Code;
-			if (!UE::AssetDocument::EditorPropertyValueCodec::Decode(**Found, *FindField(*Properties, Key), Target, Code, &Edit.Asset))
+			const FValue& Given = *FindField(*Properties, Key);
+			bool bMarked = false;
+			const void* Current = CurrentSetting(**Found, bMarked);
+			if (Current != nullptr && (bMarked || HoldsMarker(Given)))
 			{
-				return Values.Fail(TEXT("MetaSound.InvalidConfiguration"), FString::Printf(TEXT("Invalid value for '%s' (%s)."), *Key, *Code), Key);
+				(*Found)->CopyCompleteValue(Target, Current);
+			}
+			FString Code;
+			FString Message;
+			FString ValuePath;
+			if (!UE::AssetDocument::EditorPropertyValueCodec::Decode(**Found, Given, Target, Code, &Edit.Asset, Message, ValuePath))
+			{
+				return Values.Fail(TEXT("MetaSound.InvalidConfiguration"), FString::Printf(TEXT("Invalid value for '%s' (%s)%s%s"), *Key, *Code,
+					Message.IsEmpty() ? TEXT(".") : TEXT(": "), *Message), Key + ValuePath);
 			}
 			FString Range;
 			if (!IsWithinClamp(**Found, Target, Range))
 			{
 				return Values.Fail(TEXT("MetaSound.InvalidConfiguration"), FString::Printf(TEXT("'%s' is out of its range %s."), *Key, *Range), Key);
+			}
+		}
+	}
+	if (bSameStruct)
+	{
+		for (TFieldIterator<FProperty> It(Struct); It; ++It)
+		{
+			if (!It->HasAnyPropertyFlags(CPF_Edit) || It->HasAnyPropertyFlags(CPF_Transient | CPF_Deprecated)
+				|| (Properties != nullptr && Properties->ObjectKeys.Contains(It->GetAuthoredName())))
+			{
+				continue;
+			}
+			bool bMarked = false;
+			const void* Current = CurrentSetting(**It, bMarked);
+			if (bMarked)
+			{
+				It->CopyCompleteValue(It->ContainerPtrToValuePtr<void>(Wanted.GetMutableMemory()), Current);
 			}
 		}
 	}

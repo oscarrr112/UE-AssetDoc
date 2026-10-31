@@ -10,12 +10,14 @@
 #include "AssetDocumentGraphPropertyCodec.h"
 #include "AssetDocumentEditorPickerValues.h"
 #include "AssetDocumentEditorPropertyValueCodec.h"
+#include "AssetDocumentGraphNodeSize.h"
 #include "AssetDocumentGraphRawEdits.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraph/EdGraphSchema.h"
 #include "EdGraphSchema_K2.h"
+#include "K2Node_CallFunction.h"
 #include "K2Node_FunctionResult.h"
 #include "Engine/Blueprint.h"
 #include "Kismet2/Kismet2NameValidators.h"
@@ -1061,7 +1063,14 @@ struct FPinDefaultCheck
 		}
 		else if (Kind == TEXT("text"))
 		{
-			Text = FText::FromString(Value);
+			// The shared text form, as an edit of the pin's text: its displayed string keeps it (key and String Table
+			// reference included), another string keeps its key, a text form (LOCTABLE, INVTEXT, NSLOCTEXT) sets it.
+			Text = Pin.DefaultTextValue;
+			if (!EditorPropertyValueCodec::DecodeText(Value, Text, Pin.GetOwningNodeUnchecked()))
+			{
+				Invalid = FString::Printf(TEXT("'%s' is not a valid text form."), *Value);
+				return;
+			}
 			Invalid = Validate(FString(), nullptr, Text);
 		}
 		else if (Kind == TEXT("object"))
@@ -1196,24 +1205,54 @@ bool HandleConnect(FCall& Call, FObjectBuilder& Result)
 
 // ---- graph.link.check.v1 ----------------------------------------------------
 
+// An object or class pin whose palette template type is the placed node's for good: a pin of a plain function
+// call that is not its target, not typed "self" (the Blueprint), and not an output whose class a class pick
+// decides (DeterminesOutputType). Other object pins take their types from the Blueprint, from class picks or
+// from links, so their links are left to Apply.
+bool IsFixedObjectTemplatePin(const UEdGraphPin& Pin)
+{
+	const UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Pin.GetOwningNode());
+	if (Call == nullptr || Call->GetClass() != UK2Node_CallFunction::StaticClass() || Pin.PinName == UEdGraphSchema_K2::PN_Self
+		|| Pin.PinType.PinSubCategory == UEdGraphSchema_K2::PSC_Self || Pin.PinType.PinSubCategoryObject.Get() == nullptr)
+	{
+		return false;
+	}
+	const UFunction* Function = Call->GetTargetFunction();
+	return Function != nullptr && !(Pin.Direction == EGPD_Output && Function->HasMetaData(FBlueprintMetadata::MD_DynamicOutputType));
+}
+
+
 // Read-only: which of the given links the editor would make only through a conversion node. Each end names the
 // action key of its node and a pin; the pins are those of the palette's template node of that key (what a node
 // placed from the palette has before links and settings change it). Links whose ends have no template, no such
 // pin or a wildcard pin are not judged. Result: conversions [{index, ...FConversionNeed}], checked (links judged).
+// measure: action keys whose palette templates are measured as the graph editor draws them (sizes [{key, width,
+// height, box}]; box: a comment box, its own size), for laying out the nodes a document adds.
 bool HandleLinkCheck(FCall& Call, FObjectBuilder& Result)
 {
 	FReader& Args = Call.Args;
 	const FValue* Links = nullptr;
 	const FValue* Describe = nullptr;
 	const FValue* Defaults = nullptr;
-	if (!Args.OnlyFields({TEXT("links"), TEXT("describe"), TEXT("defaults")}) || !Args.Array(TEXT("links"), Links, false)
-		|| !Args.Array(TEXT("describe"), Describe, false) || !Args.Array(TEXT("defaults"), Defaults, false))
+	const FValue* Measure = nullptr;
+	if (!Args.OnlyFields({TEXT("links"), TEXT("describe"), TEXT("defaults"), TEXT("measure")}) || !Args.Array(TEXT("links"), Links, false)
+		|| !Args.Array(TEXT("describe"), Describe, false) || !Args.Array(TEXT("defaults"), Defaults, false)
+		|| !Args.Array(TEXT("measure"), Measure, false))
 	{
 		return false;
 	}
-	if (Links == nullptr && Describe == nullptr && Defaults == nullptr)
+	if (Links == nullptr && Describe == nullptr && Defaults == nullptr && Measure == nullptr)
 	{
-		return Args.Fail(TEXT("Graph.InvalidArgument"), TEXT("links, describe or defaults is required."), TEXT("links"));
+		return Args.Fail(TEXT("Graph.InvalidArgument"), TEXT("links, describe, defaults or measure is required."), TEXT("links"));
+	}
+	TArray<FString> Measured;
+	for (int32 Index = 0; Measure != nullptr && Index < Measure->Elements.Num(); ++Index)
+	{
+		if (Measure->Elements[Index].Kind != EAssetDocumentRuntimeValueKind::String)
+		{
+			return Args.Fail(TEXT("Graph.InvalidArgument"), TEXT("measure lists action keys."), FString::Printf(TEXT("measure/%d"), Index));
+		}
+		Measured.AddUnique(Measure->Elements[Index].StringValue);
 	}
 	struct FEnd
 	{
@@ -1221,7 +1260,7 @@ bool HandleLinkCheck(FCall& Call, FObjectBuilder& Result)
 		FName Pin;
 	};
 	TArray<TPair<FEnd, FEnd>> Requested;
-	TArray<FString> Keys;
+	TArray<FString> Keys = Measured;
 	TArray<FString> Described;
 	for (int32 Index = 0; Describe != nullptr && Index < Describe->Elements.Num(); ++Index)
 	{
@@ -1301,13 +1340,14 @@ bool HandleLinkCheck(FCall& Call, FObjectBuilder& Result)
 	{
 		UEdGraphNode* const* Node = Templates.Find(End.Key);
 		UEdGraphPin* Pin = Node != nullptr && *Node != nullptr ? (*Node)->FindPin(End.Pin, Direction) : nullptr;
-		// Object pins are left out: their types depend on the Blueprint (self) and on class picks.
 		const FName Category = Pin != nullptr ? Pin->PinType.PinCategory : NAME_None;
-		const bool bJudged = Pin != nullptr && !Pin->bHidden && Category != UEdGraphSchema_K2::PC_Wildcard
-			&& Category != UEdGraphSchema_K2::PC_Object && Category != UEdGraphSchema_K2::PC_Class
-			&& Category != UEdGraphSchema_K2::PC_SoftObject && Category != UEdGraphSchema_K2::PC_SoftClass
-			&& Category != UEdGraphSchema_K2::PC_Interface;
-		return bJudged ? Pin : nullptr;
+		if (Pin == nullptr || Pin->bHidden || Category == UEdGraphSchema_K2::PC_Wildcard || Category == UEdGraphSchema_K2::PC_Interface)
+		{
+			return nullptr;
+		}
+		const bool bObject = Category == UEdGraphSchema_K2::PC_Object || Category == UEdGraphSchema_K2::PC_Class
+			|| Category == UEdGraphSchema_K2::PC_SoftObject || Category == UEdGraphSchema_K2::PC_SoftClass;
+		return !bObject || IsFixedObjectTemplatePin(*Pin) ? Pin : nullptr;
 	};
 	TArray<FValue> Conversions;
 	TArray<FValue> Refused;
@@ -1382,7 +1422,7 @@ bool HandleLinkCheck(FCall& Call, FObjectBuilder& Result)
 		// Apply leaves a pin that already holds the value as it is.
 		const bool bNumbers = Default.Kind == TEXT("value") && Default.Value.IsNumeric() && Pin->DefaultValue.IsNumeric();
 		if (Default.Kind == TEXT("value") ? Pin->DefaultValue == Default.Value || (bNumbers && FCString::Atod(*Pin->DefaultValue) == FCString::Atod(*Default.Value))
-			: Default.Kind == TEXT("text") ? Pin->DefaultTextValue.ToString() == Default.Value
+			: Default.Kind == TEXT("text") ? EditorPropertyValueCodec::IsSameText(Default.Value, Pin->DefaultTextValue)
 			: (Pin->DefaultObject != nullptr ? Pin->DefaultObject->GetPathName() : FString()) == Default.Value)
 		{
 			continue;
@@ -1401,12 +1441,41 @@ bool HandleLinkCheck(FCall& Call, FObjectBuilder& Result)
 		InvalidDefaults.Add(Entry.Build());
 	}
 	Result.Add(TEXT("invalid_defaults"), MakeArray(MoveTemp(InvalidDefaults)));
+	if (Measure != nullptr)
+	{
+		TArray<FValue> Sizes;
+		for (const FString& Key : Measured)
+		{
+			UEdGraphNode* const* Template = Templates.Find(Key);
+			if (Template == nullptr || *Template == nullptr)
+			{
+				continue;
+			}
+			FVector2D Size(0.0, 0.0);
+			bool bBox = false;
+#if WITH_EDITORONLY_DATA
+			if ((*Template)->bCanResizeNode)
+			{
+				// A comment box is drawn at its own size.
+				bBox = true;
+				Size = FVector2D(static_cast<double>((*Template)->NodeWidth), static_cast<double>((*Template)->NodeHeight));
+			}
+#endif
+			if ((bBox && Size.X > 0.0 && Size.Y > 0.0) || (!bBox && MeasureGraphNodeWidget(**Template, Size)))
+			{
+				Sizes.Add(FObjectBuilder().AddString(TEXT("key"), Key).AddInt(TEXT("width"), FMath::CeilToInt(Size.X))
+					.AddInt(TEXT("height"), FMath::CeilToInt(Size.Y)).AddBool(TEXT("box"), bBox).Build());
+			}
+		}
+		Result.Add(TEXT("sizes"), MakeArray(MoveTemp(Sizes)));
+	}
 	if (Described.IsEmpty())
 	{
 		return true;
 	}
 	// describe: whether each key places exactly one node here (as graph.node.spawn.v1 would resolve it),
-	// and the pins of its palette template, so a document's keys and pin names are checked before Apply.
+	// and the pins of its palette template, so a document's keys, pin names and by-reference inputs are checked
+	// before Apply.
 	TArray<FValue> Unresolved;
 	TArray<FValue> Templated;
 	TArray<FString> Known;
@@ -1447,6 +1516,15 @@ bool HandleLinkCheck(FCall& Call, FObjectBuilder& Result)
 			if (!Pin->PinFriendlyName.IsEmpty() && Pin->PinFriendlyName.ToString() != Pin->PinName.ToString())
 			{
 				PinRow.AddString(TEXT("display_name"), Pin->PinFriendlyName.ToString());
+			}
+			// A by-reference input that is not const is written through: the compiler refuses a read-only value on it.
+			if (Pin->PinType.bIsReference)
+			{
+				PinRow.AddBool(TEXT("by_ref"), true);
+			}
+			if (Pin->PinType.bIsConst)
+			{
+				PinRow.AddBool(TEXT("const"), true);
 			}
 			Pins.Add(PinRow.Build());
 		}
@@ -1567,7 +1645,7 @@ bool HandlePinDefault(FCall& Call, FObjectBuilder& Result)
 	}
 	Result.AddString(TEXT("default_value"), Stored->DefaultValue)
 		.AddString(TEXT("default_object"), ObjectPathOrEmpty(Stored->DefaultObject))
-		.AddString(TEXT("default_text"), Stored->DefaultTextValue.ToString());
+		.AddString(TEXT("default_text"), EditorPropertyValueCodec::EncodeText(Stored->DefaultTextValue));
 	return true;
 }
 
@@ -1728,18 +1806,45 @@ bool HandleLayout(FCall& Call, FObjectBuilder& Result)
 	TOptional<FVector2D> Position;
 	TOptional<FIntPoint> Size;
 	FString Comment;
+	FString EnabledText;
 	bool bBubble = false;
-	if (!Args.OnlyFields({TEXT("node_guid"), TEXT("position"), TEXT("size"), TEXT("comment"), TEXT("comment_bubble_visible")})
+	if (!Args.OnlyFields({TEXT("node_guid"), TEXT("position"), TEXT("size"), TEXT("comment"), TEXT("comment_bubble_visible"),
+			TEXT("enabled_state")})
 		|| !ResolveNodeGuid(Call.Graphs, Args, TEXT("node_guid"), Node) || !ReadPosition(Args, Position) || !ReadSize(Args, Size)
-		|| !Args.String(TEXT("comment"), Comment, false) || !Args.Bool(TEXT("comment_bubble_visible"), bBubble))
+		|| !Args.String(TEXT("comment"), Comment, false) || !Args.Bool(TEXT("comment_bubble_visible"), bBubble)
+		|| !Args.String(TEXT("enabled_state"), EnabledText, false))
 	{
 		return false;
+	}
+	ENodeEnabledState EnabledState = ENodeEnabledState::Enabled;
+	const bool bGhost = EnabledText == TEXT("ghost");
+	if (EnabledText == TEXT("disabled"))
+	{
+		EnabledState = ENodeEnabledState::Disabled;
+	}
+	else if (EnabledText == TEXT("development_only"))
+	{
+		EnabledState = ENodeEnabledState::DevelopmentOnly;
+	}
+	else if (Args.Has(TEXT("enabled_state")) && EnabledText != TEXT("enabled") && !bGhost)
+	{
+		return Fail(Call, TEXT("Graph.InvalidArgument"), TEXT("enabled_state is enabled, disabled, development_only or ghost."),
+			TEXTVIEW("/enabled_state"));
 	}
 	if (Size.IsSet() && !RawEdits::SetNodeSize(*Node, Size->X, Size->Y))
 	{
 		return Fail(Call, TEXT("Graph.NodeNotResizable"), FString::Printf(
 			TEXT("%s cannot be resized: only a comment box has a Size."), *Node->GetNodeTitle(ENodeTitleType::ListView).ToString()),
 			TEXTVIEW("/size"));
+	}
+	// "ghost": the editor's disabled placeholder node, as FKismetEditorUtilities::AddDefaultEventNode places a new
+	// Blueprint's default events (its placeholder comment first, so that a stated comment follows it).
+	bool bStructural = false;
+	if (bGhost && !Node->IsAutomaticallyPlacedGhostNode())
+	{
+		Node->Modify();
+		Node->MakeAutomaticallyPlacedGhostNode();
+		bStructural = true;
 	}
 	if (Position.IsSet())
 	{
@@ -1753,7 +1858,15 @@ bool HandleLayout(FCall& Call, FObjectBuilder& Result)
 	{
 		RawEdits::SetCommentBubbleVisible(*Node, bBubble);
 	}
-	NotifyChanged(Call, Node->GetGraph(), false);
+	// FBlueprintEditor::OnSetEnabledStateForSelectedNodes: Enable / Disable / Development Only, a structural change.
+	if (Args.Has(TEXT("enabled_state")) && !bGhost
+		&& (Node->GetDesiredEnabledState() != EnabledState || !Node->HasUserSetTheEnabledState()))
+	{
+		Node->Modify();
+		Node->SetEnabledState(EnabledState);
+		bStructural = true;
+	}
+	NotifyChanged(Call, Node->GetGraph(), bStructural);
 	return true;
 }
 

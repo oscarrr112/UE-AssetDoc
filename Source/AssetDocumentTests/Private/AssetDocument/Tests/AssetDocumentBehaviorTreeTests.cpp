@@ -4150,8 +4150,8 @@ bool FAssetDocumentBehaviorTreeGraphSourceValidationTest::RunTest(const FString&
 
 	TSharedPtr<FJsonObject> DuplicateXTree = MakeGraphSourceTree(TEXT("first"), 100.0, 100.0);
 	Result = BTGraphSourceTests::ValidateTree(Context, DuplicateXTree.ToSharedRef());
-	TestFalse(TEXT("sibling X tie is rejected"), Result.bSuccess);
-	TestTrue(TEXT("sibling X tie diagnostic is exact"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/Root/Children/1/Editor/Position/X"), TEXT("DuplicateBehaviorTreeSiblingCoordinate")));
+	// Siblings at the same position keep their order, as the editor does.
+	TestTrue(TEXT("sibling position tie is accepted"), Result.bSuccess);
 
 	TSharedPtr<FJsonObject> WrongRootClassTree = MakeGraphSourceTree();
 	BTTestGetObjectField(WrongRootClassTree, TEXT("Root"))->SetStringField(TEXT("Class"), TEXT("/Script/AIModule.BTTask_Wait"));
@@ -4191,10 +4191,14 @@ bool FAssetDocumentBehaviorTreeGraphSourceValidationTest::RunTest(const FString&
 		Orphan->CreateNewGuid();
 		Orphan->PostPlacedNewNode();
 		Orphan->AllocateDefaultPins();
-		TSharedRef<FJsonObject> Ignored = MakeShared<FJsonObject>();
-		Result = BTGraphSourceTests::ExtractTree(MakeTreeContext(OrphanTree), Ignored);
-		TestFalse(TEXT("extract rejects an unreachable graph node"), Result.bSuccess);
-		TestTrue(TEXT("unreachable graph diagnostic is exact"), BTTestHasDiagnostic(Result, TEXT("/Body/Tree/Nodes"), TEXT("UnreachableBehaviorTreeGraphNode")));
+		TSharedRef<FJsonObject> Extracted = MakeShared<FJsonObject>();
+		Result = BTGraphSourceTests::ExtractTree(MakeTreeContext(OrphanTree), Extracted);
+		// A main node without a parent is a detached branch, read beside Root.
+		TestTrue(TEXT("extract reads a node without a parent"), Result.bSuccess);
+		const TArray<TSharedPtr<FJsonValue>>* Detached = nullptr;
+		TestTrue(TEXT("the node without a parent reads as Tree.Detached"),
+			Extracted->TryGetArrayField(TEXT("Detached"), Detached) && Detached && Detached->Num() == 1
+			&& (*Detached)[0]->AsObject()->GetStringField(TEXT("Id")) == Orphan->NodeGuid.ToString(EGuidFormats::Digits));
 	}
 
 	UBehaviorTree* CycleTree = BTGraphSourceTests::CreateTree();

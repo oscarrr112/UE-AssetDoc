@@ -4,6 +4,7 @@
 #include "AssetDocumentGraphPropertyCodec.h"
 #include "AssetDocumentEditorPropertyValueCodec.h"
 
+#include "StructUtils/InstancedStruct.h"
 #include "UObject/EnumProperty.h"
 #include "UObject/SoftObjectPath.h"
 #include "UObject/TextProperty.h"
@@ -103,6 +104,98 @@ bool IsPropertyEditable(const FProperty& Property)
 		&& !Property.HasAnyPropertyFlags(CPF_EditConst | CPF_Deprecated);
 }
 
+namespace
+{
+// An FInstancedStruct: {"Struct": "<struct path>", "Properties": {<every field>}}, or null when it holds no struct.
+FValue AssetDocumentGraphPropertyCodec_EncodeInstancedStruct(const FInstancedStruct& Instanced)
+{
+	const UScriptStruct* Type = Instanced.GetScriptStruct();
+	if (Type == nullptr || Instanced.GetMemory() == nullptr)
+	{
+		return MakeNull();
+	}
+	FObjectBuilder Properties;
+	for (TFieldIterator<FProperty> It(Type); It; ++It)
+	{
+		Properties.Add(It->GetName(), EncodePropertyValue(**It, It->ContainerPtrToValuePtr<void>(Instanced.GetMemory())));
+	}
+	FObjectBuilder Builder;
+	Builder.Add(TEXT("Struct"), MakeString(Type->GetPathName()));
+	Builder.Add(TEXT("Properties"), Properties.Build());
+	return Builder.Build();
+}
+
+// The same struct edits the held value (fields the value omits keep theirs); another struct starts from its defaults.
+// A BaseStruct restriction is the struct picker's.
+bool AssetDocumentGraphPropertyCodec_DecodeInstancedStruct(const FStructProperty& Property, FInstancedStruct& Instanced,
+	const FValue& Value, FString& OutError)
+{
+	if (Value.Kind == EAssetDocumentRuntimeValueKind::Null)
+	{
+		Instanced.Reset();
+		return true;
+	}
+	const FValue* StructPath = Value.Kind == EAssetDocumentRuntimeValueKind::Object ? FindField(Value, TEXT("Struct")) : nullptr;
+	const FValue* Fields = Value.Kind == EAssetDocumentRuntimeValueKind::Object ? FindField(Value, TEXT("Properties")) : nullptr;
+	if (StructPath == nullptr || StructPath->Kind != EAssetDocumentRuntimeValueKind::String
+		|| (Fields != nullptr && Fields->Kind != EAssetDocumentRuntimeValueKind::Object))
+	{
+		OutError = FString::Printf(TEXT("%s expects {\"Struct\": \"<struct path>\", \"Properties\": {...}} or null."), *Property.GetName());
+		return false;
+	}
+	UScriptStruct* Type = FindObject<UScriptStruct>(nullptr, *StructPath->StringValue);
+	if (Type == nullptr)
+	{
+		Type = LoadObject<UScriptStruct>(nullptr, *StructPath->StringValue);
+	}
+	if (Type == nullptr)
+	{
+		OutError = FString::Printf(TEXT("'%s' is not a struct."), *StructPath->StringValue);
+		return false;
+	}
+	// An array element reads the metadata of its array property.
+	const FProperty* MetadataProperty = Property.GetOwnerProperty() != nullptr ? Property.GetOwnerProperty() : &Property;
+	const FString BaseStructName = MetadataProperty->GetMetaData(TEXT("BaseStruct"));
+	if (!BaseStructName.IsEmpty())
+	{
+		const UScriptStruct* Base = FindFirstObject<UScriptStruct>(*BaseStructName, EFindFirstObjectOptions::None);
+		if (Base == nullptr)
+		{
+			Base = LoadObject<UScriptStruct>(nullptr, *BaseStructName);
+		}
+		if (Base != nullptr && !Type->IsChildOf(Base))
+		{
+			OutError = FString::Printf(TEXT("%s takes a %s struct; '%s' is not one."), *Property.GetName(), *Base->GetName(),
+				*StructPath->StringValue);
+			return false;
+		}
+	}
+	if (Instanced.GetScriptStruct() != Type || Instanced.GetMutableMemory() == nullptr)
+	{
+		Instanced.InitializeAs(Type);
+	}
+	if (Fields == nullptr)
+	{
+		return true;
+	}
+	for (int32 Index = 0; Index < Fields->ObjectKeys.Num(); ++Index)
+	{
+		FProperty* Field = Type->FindPropertyByName(FName(*Fields->ObjectKeys[Index]));
+		if (Field == nullptr)
+		{
+			OutError = FString::Printf(TEXT("Struct %s has no field '%s'."), *Type->GetName(), *Fields->ObjectKeys[Index]);
+			return false;
+		}
+		if (!DecodePropertyValue(*Field, Field->ContainerPtrToValuePtr<void>(Instanced.GetMutableMemory()),
+			Fields->Elements[Index], OutError))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+} // namespace
+
 FValue EncodePropertyValue(const FProperty& Property, const void* ValuePtr)
 {
 	if (Property.ArrayDim > 1)
@@ -140,7 +233,8 @@ FValue EncodePropertyValue(const FProperty& Property, const void* ValuePtr)
 	}
 	if (const FTextProperty* Text = CastField<FTextProperty>(&Property))
 	{
-		return MakeString(Text->GetPropertyValue(ValuePtr).ToString());
+		// The shared text form: the source string, or LOCTABLE / INVTEXT / NSLOCTEXT when that keeps the text's identity.
+		return MakeString(EditorPropertyValueCodec::EncodeText(Text->GetPropertyValue(ValuePtr)));
 	}
 	if (const FSoftObjectProperty* Soft = CastField<FSoftObjectProperty>(&Property))
 	{
@@ -157,6 +251,10 @@ FValue EncodePropertyValue(const FProperty& Property, const void* ValuePtr)
 		if (Struct->Struct == TBaseStructure<FSoftObjectPath>::Get())
 		{
 			return MakeString(static_cast<const FSoftObjectPath*>(ValuePtr)->ToString());
+		}
+		if (Struct->Struct == FInstancedStruct::StaticStruct())
+		{
+			return AssetDocumentGraphPropertyCodec_EncodeInstancedStruct(*static_cast<const FInstancedStruct*>(ValuePtr));
 		}
 		FObjectBuilder Builder;
 		for (TFieldIterator<FProperty> It(Struct->Struct); It; ++It)
@@ -336,7 +434,15 @@ bool DecodePropertyValue(const FProperty& Property, void* ValuePtr, const FValue
 		}
 		if (const FTextProperty* Text = CastField<FTextProperty>(&Property))
 		{
-			Text->SetPropertyValue(ValuePtr, FText::FromString(Value.StringValue));
+			// An edit of the stored text: its displayed string keeps it (key and String Table reference included),
+			// another string keeps its key, a text form sets that text.
+			FText Edited = Text->GetPropertyValue(ValuePtr);
+			if (!EditorPropertyValueCodec::DecodeText(Value.StringValue, Edited))
+			{
+				OutError = FString::Printf(TEXT("'%s' is not a valid text form for %s."), *Value.StringValue, *Property.GetName());
+				return false;
+			}
+			Text->SetPropertyValue(ValuePtr, Edited);
 			return true;
 		}
 	}
@@ -397,6 +503,10 @@ bool DecodePropertyValue(const FProperty& Property, void* ValuePtr, const FValue
 		{
 			*static_cast<FSoftObjectPath*>(ValuePtr) = FSoftObjectPath(Value.StringValue);
 			return true;
+		}
+		if (Struct->Struct == FInstancedStruct::StaticStruct() && Value.Kind != EAssetDocumentRuntimeValueKind::String)
+		{
+			return AssetDocumentGraphPropertyCodec_DecodeInstancedStruct(*Struct, *static_cast<FInstancedStruct*>(ValuePtr), Value, OutError);
 		}
 		if (Value.Kind == EAssetDocumentRuntimeValueKind::String)
 		{

@@ -22,6 +22,7 @@ warnings.
 """
 from __future__ import annotations
 
+from asset_document import markers
 from asset_document.diagnostics import DiagnosticSeverity, RuntimeDiagnostic, with_diagnostics
 from asset_document.profiles import data_table_common as common
 from asset_document.profiles import physics_asset as physics
@@ -109,7 +110,30 @@ def _differs(authored, live, defaults=None):
 # ---------------------------------------------------------------------------
 # Refusals that need no write
 # ---------------------------------------------------------------------------
+def check_markers(body, live):
+    """Read-only shapes are shown as markers: one left as extracted (or omitted) keeps them, an edited one is
+    refused."""
+    for bone, entry in body.get("Bodies", {}).items():
+        current = live.get("Bodies", {}).get(bone, {}).get("Shapes", {})
+        for kind in physics.READ_ONLY_SHAPE_TYPES:
+            if kind in entry.get("Shapes", {}):
+                markers.require_unchanged(f"/Body/Bodies/{escape(bone)}/Shapes/{kind}", entry["Shapes"][kind],
+                                          current.get(kind), physics.PREFIX)
+
+
+def _same_constraint(entry, current):
+    return current is not None and (current.get("Child"), current.get("Parent")) == (entry["Child"], entry["Parent"])
+
+
 def refuse(body, live):
+    """Entries a document adds or changes must be valid; entries it keeps as the asset has them are not judged
+    (older content can hold profile data of an unlisted profile, or a constraint or collision pair on a bone that has
+    no body: the status reports them)."""
+    for bone in body.get("Bodies", {}):
+        if bone not in live.get("Bodies", {}) and physics.bone_of(bone) != bone:
+            raise error(f"/Body/Bodies/{escape(bone)}", "A body key is its bone, and a bone has one body (extract keys "
+                        "a second body on one bone <bone>~N; such a body is kept and edited by that key while the asset "
+                        "has it).", "PhysicsAsset.InvalidBody")
     mesh = body.get("PreviewMesh", live.get("PreviewMesh")) or ""
     if not mesh:
         new_bodies = [bone for bone in body.get("Bodies", {}) if bone not in live.get("Bodies", {})]
@@ -123,25 +147,36 @@ def refuse(body, live):
                         "PhysicsAsset.ShapesRequired")
     profiles = dict(live.get("_profiles", {}))
     for bone, entry in body.get("Bodies", {}).items():
-        for name in entry.get("PhysicalAnimation", {}):
+        held = live.get("Bodies", {}).get(bone, {}).get("PhysicalAnimation", {})
+        for name, data in entry.get("PhysicalAnimation", {}).items():
+            if name in held and not _differs(data, held[name]):
+                continue
             if name not in profiles.get("PhysicalAnimationProfiles", []):
                 raise error(f"/Body/Bodies/{escape(bone)}/PhysicalAnimation/{escape(name)}",
                             f"'{name}' is not a physical animation profile of the asset: list it in "
                             "Properties.PhysicalAnimationProfiles.", "PhysicsAsset.UnknownProfile")
     for joint, entry in body.get("Constraints", {}).items():
-        for name in entry.get("Profiles", {}):
+        held = live.get("Constraints", {}).get(joint, {}).get("Profiles", {})
+        for name, data in entry.get("Profiles", {}).items():
+            if name in held and not _differs(data, held[name]):
+                continue
             if name not in profiles.get("ConstraintProfiles", []):
                 raise error(f"/Body/Constraints/{escape(joint)}/Profiles/{escape(name)}",
                             f"'{name}' is not a constraint profile of the asset: list it in Properties.ConstraintProfiles.",
                             "PhysicsAsset.UnknownProfile")
     bodies = set(body.get("Bodies", live.get("Bodies", {})))
     for joint, entry in body.get("Constraints", {}).items():
+        if _same_constraint(entry, live.get("Constraints", {}).get(joint)):
+            continue
         for key in ("Child", "Parent"):
             if entry[key] not in bodies:
                 raise error(f"/Body/Constraints/{escape(joint)}/{key}", f"'{entry[key]}' has no body: a constraint joins "
                             f"two bodies.{common.describe_candidates(entry[key], sorted(bodies), 'Bodies')}",
                             "PhysicsAsset.BodyNotFound")
+    held_pairs = physics._pair_set(live.get("CollisionDisabled", []))
     for index, pair in enumerate(body.get("CollisionDisabled", [])):
+        if frozenset(pair) in held_pairs:
+            continue
         for side, bone in enumerate(pair):
             if bone not in bodies:
                 raise error(f"/Body/CollisionDisabled/{index}/{side}",
@@ -253,9 +288,9 @@ def phase_body_updates(body, properties, live):
         where = f"/Body/Bodies/{escape(bone)}"
         if "Shapes" in entry:
             changes = []
-            physics.shapes_diff("", entry["Shapes"], current.get("Shapes", {}), False, changes, bone)
+            physics.shapes_diff("", entry["Shapes"], current.get("Shapes", {}), False, changes, physics.bone_of(bone))
             if changes:
-                shapes = {kind: elements for kind, elements in entry["Shapes"].items()}
+                shapes = {kind: elements for kind, elements in entry["Shapes"].items() if kind in physics.SHAPE_TYPES}
                 ops.append(Op({"op": "body.shapes", "bone": bone, "shapes": shapes}, f"{where}/Shapes",
                               values={"shapes": f"{where}/Shapes"}))
         if _differs(entry.get("Properties", {}), current.get("Properties", {}), physics.body_defaults()["Properties"]):
@@ -411,24 +446,32 @@ def apply(canonical, read, mutable, context, created=False):
     """Core calls apply only when the document differs from the asset (always for a created asset). A created asset
     whose document has no Bodies gets the editor's generation first. The Body (with the profile lists) is applied
     phase by phase against fresh reads, then the other Properties as the Details panel writes them."""
-    body = canonical.get("Body", {})
     region = physics._properties()
     properties = canonical.get("Properties", {})
     region.check_owned(properties)
     calls = physics.PhysicsCalls(context, read, mutable)
     live = _live(calls)
+    body = physics.in_order(canonical.get("Body", {}), live)
     changed = []
     generate = created and "Bodies" not in body
     warnings = create_only_warnings(body, live, generate)
+    check_markers(body, live)
     if generate or physics.body_diff(body, live, exact=False) or _profiles_differ(properties, live):
         before = physics.status(calls)
         edits = Edits(calls)
         if generate and edits.run([generation_op(body)]):
             live = _live(calls)
         refuse(body, _with_profiles(live, properties))
+        # Removing an earlier body of a bone renumbers the later ones: the phases after the removals name the bodies
+        # by their new keys.
+        renumbered = (physics.rekey_bodies(body, physics.keys_after_removals(body["Bodies"], live.get("Bodies", {})))
+                      if "Bodies" in body else body)
+        current = body
         for phase in PHASES:
-            if edits.run(phase(body, properties, live)):
+            if edits.run(phase(current, properties, live)):
                 live = _live(calls)
+            if phase is phase_body_removals:
+                current = renumbered
         changed.extend(edits.changed)
         failure, outcome = validation_outcome(before, physics.status(calls))
         if failure is not None:
@@ -440,9 +483,10 @@ def apply(canonical, read, mutable, context, created=False):
 
 def preflight(canonical, read, context):
     """Refusals that need no write."""
-    body = canonical.get("Body", {})
     properties = canonical.get("Properties", {})
     live = _live(physics.PhysicsCalls(context, read))
+    body = physics.in_order(canonical.get("Body", {}), live)
+    check_markers(body, live)
     if physics.body_diff(body, live, exact=False) or _profiles_differ(properties, live):
         refuse(body, _with_profiles(live, properties))
 

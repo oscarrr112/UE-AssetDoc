@@ -7,6 +7,8 @@
 
 #include "Provider/AssetDocumentAIProviderContracts.h"
 
+#include "AssetDocumentEditorPropertyValueCodec.h"
+
 #include "BehaviorTree/Blackboard/BlackboardKeyType.h"
 #include "BehaviorTree/Blackboard/BlackboardKeyType_Enum.h"
 #include "BehaviorTree/Blackboard/BlackboardKeyType_NativeEnum.h"
@@ -360,8 +362,42 @@ bool ReadDirectValueKeyTypeProperties(
 	return true;
 }
 
+void AddEntryReadWarning(TArray<FAssetDocumentRuntimeValueDto>* OutWarnings, const TCHAR* Path,
+	const TCHAR* Code, FString Message)
+{
+	if (OutWarnings == nullptr) return;
+	OutWarnings->Add(ObjectValue({TEXT("code"), TEXT("message"), TEXT("path")},
+		{StringValue(Code), StringValue(MoveTemp(Message)), StringValue(Path)}));
+}
+
+// The marker that stands where a value with no document form would be: the reason, and the engine's export text.
+FAssetDocumentRuntimeValueDto UnrepresentedEntryValue(FString Reason, FString Text)
+{
+	return ObjectValue({TEXT("Text"), TEXT("Unsupported")},
+		{StringValue(MoveTemp(Text)), StringValue(MoveTemp(Reason))});
+}
+
+// An Enum key's default as stored: its enumerator name, or the raw value when EnumType is unset or has no
+// readable enumerator with that value.
+FAssetDocumentRuntimeValueDto EnumKeyDefaultValue(const UBlackboardKeyType_Enum& Key)
+{
+	if (Key.EnumType != nullptr && Key.EnumType->GetIndexByValue(Key.DefaultValue) != INDEX_NONE)
+	{
+		FString Enumerator = Key.EnumType->GetNameStringByValue(Key.DefaultValue);
+		if (!Enumerator.IsEmpty() && Enumerator != TEXT("MAX") && !Enumerator.EndsWith(TEXT("_MAX")))
+		{
+			return StringValue(MoveTemp(Enumerator));
+		}
+	}
+	return IntegerValue(static_cast<int64>(Key.DefaultValue));
+}
+
+// Stock Object, Class and Enum keys are read as stored. A default that does not satisfy BaseClass is kept with a
+// read warning (only the engine can tell); a missing BaseClass or EnumType, a raw Enum default and a mismatched
+// EnumName are judged by the document's own rules.
 bool CollectStockEntryReadbackProperties(
-	UBlackboardKeyType& KeyType, FAssetDocumentRuntimeValueDto& OutProperties, bool& bHandled)
+	UBlackboardKeyType& KeyType, FAssetDocumentRuntimeValueDto& OutProperties, bool& bHandled,
+	TArray<FAssetDocumentRuntimeValueDto>* OutWarnings)
 {
 	bHandled = true;
 	if (AssetDocumentAIBlackboardMutation::IsAssetDocumentAIBlackboardDirectValueKeyType(KeyType.GetClass()))
@@ -371,43 +407,38 @@ bool CollectStockEntryReadbackProperties(
 	if (KeyType.GetClass() == UBlackboardKeyType_Object::StaticClass())
 	{
 		const UBlackboardKeyType_Object& Typed = static_cast<const UBlackboardKeyType_Object&>(KeyType);
-		if (Typed.BaseClass == nullptr || (Typed.DefaultValue != nullptr && !Typed.DefaultValue->IsA(Typed.BaseClass))) return false;
+		if (Typed.BaseClass != nullptr && Typed.DefaultValue != nullptr && !Typed.DefaultValue->IsA(Typed.BaseClass))
+		{
+			AddEntryReadWarning(OutWarnings, TEXT("/KeyTypeProperties/DefaultValue"),
+				TEXT("BlackboardData.DefaultValueNotOfBaseClass"), FString::Printf(
+					TEXT("DefaultValue %s is not a %s (BaseClass); the engine keeps it as stored."),
+					*Typed.DefaultValue->GetPathName(), *Typed.BaseClass->GetPathName()));
+		}
 		OutProperties = ObjectValue({TEXT("BaseClass"), TEXT("DefaultValue")},
-			{ClassReferenceValue(*Typed.BaseClass), AssetReferenceOrNull(Typed.DefaultValue)});
+			{ClassReferenceOrNull(Typed.BaseClass), AssetReferenceOrNull(Typed.DefaultValue)});
 		return true;
 	}
 	if (KeyType.GetClass() == UBlackboardKeyType_Class::StaticClass())
 	{
 		const UBlackboardKeyType_Class& Typed = static_cast<const UBlackboardKeyType_Class&>(KeyType);
-		if (Typed.BaseClass == nullptr || (Typed.DefaultValue != nullptr && !Typed.DefaultValue->IsChildOf(Typed.BaseClass))) return false;
+		if (Typed.BaseClass != nullptr && Typed.DefaultValue != nullptr && !Typed.DefaultValue->IsChildOf(Typed.BaseClass))
+		{
+			AddEntryReadWarning(OutWarnings, TEXT("/KeyTypeProperties/DefaultValue"),
+				TEXT("BlackboardData.DefaultValueNotOfBaseClass"), FString::Printf(
+					TEXT("DefaultValue %s is not a subclass of %s (BaseClass); the engine keeps it as stored."),
+					*Typed.DefaultValue->GetPathName(), *Typed.BaseClass->GetPathName()));
+		}
 		OutProperties = ObjectValue({TEXT("BaseClass"), TEXT("DefaultValue")},
-			{ClassReferenceValue(*Typed.BaseClass), ClassReferenceOrNull(Typed.DefaultValue)});
+			{ClassReferenceOrNull(Typed.BaseClass), ClassReferenceOrNull(Typed.DefaultValue)});
 		return true;
 	}
 	if (KeyType.GetClass() == UBlackboardKeyType_Enum::StaticClass())
 	{
 		const UBlackboardKeyType_Enum& Typed = static_cast<const UBlackboardKeyType_Enum&>(KeyType);
-		if (Typed.EnumType == nullptr) return false;
-		const int32 Index = Typed.EnumType->GetIndexByValue(Typed.DefaultValue);
-		if (Index == INDEX_NONE) return false;
-		const FString Enumerator = Typed.EnumType->GetNameStringByValue(Typed.DefaultValue);
-		if (Enumerator.IsEmpty() || Enumerator == TEXT("MAX") || Enumerator.EndsWith(TEXT("_MAX")))
-		{
-			return false;
-		}
-		const FString EnumTypePath = Typed.EnumType->GetPathName();
-		const bool bNativeType = EnumTypePath.StartsWith(TEXT("/Script/"));
-		if ((Typed.EnumName.IsEmpty() && bNativeType)
-			|| (!Typed.EnumName.IsEmpty() && (!bNativeType || Typed.EnumName != EnumTypePath)))
-		{
-			return false;
-		}
 		OutProperties = ObjectValue({TEXT("DefaultValue"), TEXT("EnumName"), TEXT("EnumType")},
-			{StringValue(Enumerator), StringValue(Typed.EnumName), AssetReferenceValue(*Typed.EnumType)});
+			{EnumKeyDefaultValue(Typed), StringValue(Typed.EnumName), AssetReferenceOrNull(Typed.EnumType)});
 		return true;
 	}
-	if (KeyType.IsA<UBlackboardKeyType_Object>() || KeyType.IsA<UBlackboardKeyType_Class>()
-		|| KeyType.IsA<UBlackboardKeyType_Enum>()) return false;
 	bHandled = false;
 	return true;
 }
@@ -437,25 +468,89 @@ bool ReadEntryReadbackLeaf(const IPropertyHandle& Handle, UBlackboardKeyType& Ke
 	}
 	if (KeyType.IsA<UBlackboardKeyType_Enum>() && Property->GetName() == TEXT("DefaultValue"))
 	{
-		const UBlackboardKeyType_Enum& EnumKey = static_cast<const UBlackboardKeyType_Enum&>(KeyType);
-		if (EnumKey.EnumType == nullptr) return false;
-		const FString Name = EnumKey.EnumType->GetNameStringByValue(EnumKey.DefaultValue);
-		if (Name.IsEmpty()) return false;
-		OutValue = StringValue(Name); return true;
+		OutValue = EnumKeyDefaultValue(static_cast<const UBlackboardKeyType_Enum&>(KeyType));
+		return true;
 	}
 	if (KeyType.IsA<UBlackboardKeyType_Enum>() && Property->GetName() == TEXT("EnumName"))
 	{
-		const UBlackboardKeyType_Enum& EnumKey = static_cast<const UBlackboardKeyType_Enum&>(KeyType);
-		if (EnumKey.EnumType == nullptr || EnumKey.EnumName != EnumKey.EnumType->GetPathName()) return false;
-		OutValue = StringValue(EnumKey.EnumType->GetPathName()); return true;
+		OutValue = StringValue(static_cast<const UBlackboardKeyType_Enum&>(KeyType).EnumName);
+		return true;
 	}
 	FString IgnoredKind;
 	return ReadLeaf(Handle, OutValue, IgnoredKind);
 }
 
+// Every editable property of Owner's own class in the details rows, scalar or not, by name.
+void GatherEntryReadbackHandles(const TArray<TSharedRef<IDetailTreeNode>>& Nodes, UObject& Owner,
+	TMap<FString, TSharedRef<IPropertyHandle>>& OutHandles)
+{
+	for (const TSharedRef<IDetailTreeNode>& Node : Nodes)
+	{
+		const TSharedPtr<IPropertyHandle> Handle = Node->CreatePropertyHandle();
+		const FProperty* Property = Handle.IsValid() ? Handle->GetProperty() : nullptr;
+		if (Property != nullptr && Handle->IsValidHandle() && Property->GetOwner<UClass>() != nullptr
+			&& Property->HasAnyPropertyFlags(CPF_Edit)
+			&& !Property->HasAnyPropertyFlags(CPF_Transient | CPF_EditConst | CPF_InstancedReference))
+		{
+			TArray<UObject*> Outers;
+			Handle->GetOuterObjects(Outers);
+			if (Outers.Num() == 1 && Outers[0] == &Owner) OutHandles.Add(Property->GetName(), Handle.ToSharedRef());
+		}
+		TArray<TSharedRef<IDetailTreeNode>> Children;
+		Node->GetChildren(Children, true);
+		GatherEntryReadbackHandles(Children, Owner, OutHandles);
+	}
+}
+
+// Object members in ascending key order, as canonical values require.
+void SortEntryReadbackObjectKeys(FAssetDocumentRuntimeValueDto& Value)
+{
+	for (FAssetDocumentRuntimeValueDto& Child : Value.Elements) SortEntryReadbackObjectKeys(Child);
+	if (Value.Kind != EAssetDocumentRuntimeValueKind::Object || Value.ObjectKeys.Num() != Value.Elements.Num()) return;
+	TArray<int32> Order;
+	for (int32 Index = 0; Index < Value.ObjectKeys.Num(); ++Index) Order.Add(Index);
+	Order.Sort([&Value](const int32 Left, const int32 Right) { return Value.ObjectKeys[Left] < Value.ObjectKeys[Right]; });
+	TArray<FString> Keys;
+	TArray<FAssetDocumentRuntimeValueDto> Elements;
+	for (const int32 Index : Order)
+	{
+		Keys.Add(MoveTemp(Value.ObjectKeys[Index]));
+		Elements.Add(MoveTemp(Value.Elements[Index]));
+	}
+	Value.ObjectKeys = MoveTemp(Keys);
+	Value.Elements = MoveTemp(Elements);
+}
+
+// A key-type property the scalar rows do not read, in the shared generic value codec's document form (a static
+// array as an array of its elements). A value the codec cannot encode is a marker with the property's export text.
+FAssetDocumentRuntimeValueDto EncodeEntryReadbackProperty(FProperty& Property, UBlackboardKeyType& KeyType)
+{
+	FString Diagnostic;
+	TArray<FAssetDocumentRuntimeValueDto> Elements;
+	for (int32 Index = 0; Index < Property.ArrayDim; ++Index)
+	{
+		FAssetDocumentRuntimeValueDto Element;
+		if (!UE::AssetDocument::EditorPropertyValueCodec::Encode(
+			Property, Property.ContainerPtrToValuePtr<void>(&KeyType, Index), Element, Diagnostic)) break;
+		SortEntryReadbackObjectKeys(Element);
+		Elements.Add(MoveTemp(Element));
+	}
+	if (Property.ArrayDim > 0 && Elements.Num() == Property.ArrayDim)
+	{
+		FAssetDocumentRuntimeValueDto Value = Property.ArrayDim == 1 ? MoveTemp(Elements[0]) : ArrayValue(MoveTemp(Elements));
+		if (IsAssetDocumentAICanonicalRuntimeValue(Value)) return Value;
+		Diagnostic = TEXT("no canonical value");
+	}
+	FString Text;
+	Property.ExportTextItem_InContainer(Text, &KeyType, nullptr, &KeyType, PPF_None);
+	return UnrepresentedEntryValue(FString::Printf(TEXT("%s (%s) has no document form (%s); AssetDoc keeps the value."),
+		*Property.GetName(), *Property.GetCPPType(), Diagnostic.IsEmpty() ? TEXT("unsupported") : *Diagnostic), MoveTemp(Text));
+}
+
 bool CollectEntryReadbackProperties(
 	UBlackboardKeyType& ExactKeyType,
-	FAssetDocumentRuntimeValueDto& OutProperties)
+	FAssetDocumentRuntimeValueDto& OutProperties,
+	TArray<FAssetDocumentRuntimeValueDto>* OutWarnings = nullptr)
 {
 	const UClass* KeyTypeClass = ExactKeyType.GetClass();
 	if (KeyTypeClass == nullptr || KeyTypeClass->HasAnyClassFlags(
@@ -468,7 +563,7 @@ bool CollectEntryReadbackProperties(
 			BuildAssetDocumentAIBlackboardCanonicalKeyTypeProperties(ExactKeyType, OutProperties);
 	}
 	bool bStockHandled = false;
-	if (!CollectStockEntryReadbackProperties(ExactKeyType, OutProperties, bStockHandled)) return false;
+	if (!CollectStockEntryReadbackProperties(ExactKeyType, OutProperties, bStockHandled, OutWarnings)) return false;
 	if (bStockHandled) return true;
 	FPropertyEditorModule* const PropertyEditor =
 		FModuleManager::LoadModulePtr<FPropertyEditorModule>(TEXT("PropertyEditor"));
@@ -478,8 +573,9 @@ bool CollectEntryReadbackProperties(
 	TSharedPtr<IPropertyRowGenerator> Rows = PropertyEditor->CreatePropertyRowGenerator(Args);
 	Rows->SetObjects({&ExactKeyType});
 
+	// Scalar leaves read through their rows; any other property through the shared value codec.
 	TMap<FString, TSharedRef<IPropertyHandle>> Handles;
-	if (!GatherTopLevelHandles(Rows->GetRootTreeNodes(), ExactKeyType, Handles, true)) return false;
+	GatherEntryReadbackHandles(Rows->GetRootTreeNodes(), ExactKeyType, Handles);
 	TArray<FString> Names;
 	Handles.GetKeys(Names);
 	Names.Sort();
@@ -487,10 +583,13 @@ bool CollectEntryReadbackProperties(
 	TArray<FAssetDocumentRuntimeValueDto> PropertyValues;
 	for (const FString& Name : Names)
 	{
+		const TSharedRef<IPropertyHandle>& Handle = Handles.FindChecked(Name);
+		FProperty& Property = *Handle->GetProperty();
 		FAssetDocumentRuntimeValueDto Value;
-		if (!ReadEntryReadbackLeaf(*Handles.FindChecked(Name), ExactKeyType, Value))
+		if (Property.ArrayDim != 1 || !IsAdmittedLeaf(Property, *Handle)
+			|| !ReadEntryReadbackLeaf(*Handle, ExactKeyType, Value))
 		{
-			return false;
+			Value = EncodeEntryReadbackProperty(Property, ExactKeyType);
 		}
 		PropertyKeys.Add(Name);
 		PropertyValues.Add(MoveTemp(Value));
@@ -592,7 +691,8 @@ FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBlackboardEntryReadback(
 	FAssetDocumentPrimitiveOutcome Outcome;
 	if (!ResolveEntryReadback(Invocation, Readback, Outcome)) return Outcome;
 	FAssetDocumentRuntimeValueDto Properties;
-	if (!CollectEntryReadbackProperties(*Readback.KeyType, Properties))
+	TArray<FAssetDocumentRuntimeValueDto> Warnings;
+	if (!CollectEntryReadbackProperties(*Readback.KeyType, Properties, &Warnings))
 	{
 		return Failure(TEXT("AIProvider.AuthorityUnavailable"),
 			TEXT("The public PropertyEditor readback authority is unavailable."));
@@ -609,6 +709,12 @@ FAssetDocumentPrimitiveOutcome HandleAssetDocumentAIBlackboardEntryReadback(
 				ClassReferenceValue(*Readback.KeyType->GetClass()), MoveTemp(Properties),
 				StringValue(Readback.Entry->EntryName.ToString()),
 				BooleanValue(static_cast<bool>(Readback.Entry->bInstanceSynced))})});
+	// Read warnings (relative to the entry) are present only when the entry has some.
+	if (!Warnings.IsEmpty())
+	{
+		Outcome.Value.ObjectKeys.Add(TEXT("warnings"));
+		Outcome.Value.Elements.Add(ArrayValue(MoveTemp(Warnings)));
+	}
 	return Outcome;
 }
 
@@ -860,7 +966,32 @@ bool AssetDocumentAIBlackboardMutation::BuildAssetDocumentAIBlackboardCanonicalK
 				&StructKey);
 		if (!Read.bSucceeded)
 		{
-			return false;
+			using EFailure = AssetDocumentAIBlackboardKeyTypeStructCanonicalRead::EFailure;
+			if (Read.Failure == EFailure::InvalidContext || Read.Failure == EFailure::SchemaDrift) return false;
+			// A value the Struct key form cannot hold is kept: DefaultValue is a marker with its export text.
+			const TCHAR* Detail = Read.Failure == EFailure::UnstableText
+				? TEXT("a text member is localized, keyed or generated; the Struct key form holds culture-invariant text only")
+				: Read.Failure == EFailure::InvalidEnum
+				? TEXT("an enum member is a bitflag enum or holds a hidden, spacer or unknown enumerator")
+				: Read.Failure == EFailure::UnsupportedProperty
+				? TEXT("a member has a kind the Struct key form cannot hold (bitmask, weak or instanced reference, ...)")
+				: Read.Failure == EFailure::UnstableReference
+				? TEXT("a reference member names a transient or mismatched object")
+				: Read.Failure == EFailure::NonFiniteNumber
+				? TEXT("a number member is not finite")
+				: Read.Failure == EFailure::BudgetExceeded
+				? TEXT("the value exceeds the Struct key form's size limits")
+				: TEXT("the value has no canonical form");
+			FString Text;
+			if (const FStructProperty* DefaultValueProperty = FindFProperty<FStructProperty>(
+				UBlackboardKeyType_Struct::StaticClass(), GET_MEMBER_NAME_CHECKED(UBlackboardKeyType_Struct, DefaultValue)))
+			{
+				DefaultValueProperty->ExportTextItem_Direct(Text, &StructKey.DefaultValue, nullptr, &StructKey, PPF_None);
+			}
+			OutProperties = ObjectValue({TEXT("DefaultValue")}, {UnrepresentedEntryValue(
+				FString::Printf(TEXT("Struct DefaultValue has no document form: %s; AssetDoc keeps the value."), Detail),
+				MoveTemp(Text))});
+			return IsAssetDocumentAICanonicalRuntimeValue(OutProperties);
 		}
 		OutProperties = ObjectValue({TEXT("DefaultValue")}, {Read.Value});
 		return IsAssetDocumentAICanonicalRuntimeValue(OutProperties);

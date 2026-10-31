@@ -13,9 +13,10 @@ against a fresh read of the rig:
   functions: function renames and adds (My Blueprint's Functions "+": an empty function, with the editor's execute
       pin when the document's function has an ``ExecuteContext`` IO input)
   interface: each function's access, colour, category / keywords / description, exposed pins (Details Inputs /
-      Outputs: renames, removes, retypes, adds, order, argument defaults) and local variables
+      Outputs: renames, removes, retypes, adds, order, argument defaults), pin layout (labels, pin categories) and
+      local variables
   structure (repeated until every graph exists): graph renames / removes / adds, then per graph (event graphs, function
-      bodies, collapse graphs, parents first): a collapse graph's pins and header, node renames, node removes (also
+      bodies, collapse graphs, parents first): a collapse graph's pins, pin layout and header, node renames, node removes (also
       nodes whose kind changes: they are re-made), node adds in the graph's ``Order`` (palette spawn; a new collapse
       node is empty and its graph is planned in the next round; a node's pin types and operands right after it)
   shape: wildcard pin types (``PinTypes``), aggregate operands (``Aggregate``), traits
@@ -61,13 +62,15 @@ NODE_KEYS = KIND_KEYS + ("Method", "Setter", "PinTypes", "VariableMap", "Aggrega
                          "ColorBubble", "RenamedFrom")
 GRAPH_KEYS = ("Nodes", "Order", "RenamedFrom")
 HEADER_KEYS = ("Category", "Keywords", "Description")
-COLLAPSE_KEYS = ("Inputs", "Outputs", "Entry", "Return", "Nodes", "Order", "LocalVariables") + HEADER_KEYS
-FUNCTION_KEYS = COLLAPSE_KEYS + ("Public", "Color", "RenamedFrom")
+COLLAPSE_KEYS = ("Inputs", "Outputs", "Entry", "Return", "Nodes", "Order", "LocalVariables", "PinCategories") + HEADER_KEYS
+FUNCTION_KEYS = COLLAPSE_KEYS + ("Public", "Color", "Variant", "RenamedFrom")
 INTERFACE_NODES = ("Entry", "Return")
 INTERFACE_NODE_KEYS = ("Position", "Inputs", "Defaults", "Expanded")
-PIN_KEYS = ("Name", "Type", "Direction", "Default", "RenamedFrom")
+PIN_KEYS = ("Name", "Type", "Direction", "Default", "DisplayName", "RenamedFrom")
+PIN_CATEGORY_KEYS = ("Name", "Pins", "Expanded")
 LOCAL_KEYS = ("Name", "Type", "Default", "RenamedFrom")
 EXECUTE_PIN = "ExecuteContext"
+DEFAULT_PIN_CATEGORY = "Default"
 COMMENT_DEFAULTS = {"FontSize": 18, "Bubble": False, "ColorBubble": False}
 LAYOUT_STEP = (400.0, 150.0)
 # Rounds of the structure phase: one per nesting level of new collapse graphs (and one to find nothing left).
@@ -244,6 +247,8 @@ def _validate_interface(scope, container):
                 raise error(f"{at}/Direction", f"Direction in {key} is {' or '.join(directions)}.", "ControlRig.InvalidBody")
             if pin["Name"] in names:
                 raise error(f"{at}/Name", f"Pin '{pin['Name']}' is listed twice.", "ControlRig.InvalidBody")
+            if "DisplayName" in pin and type(pin["DisplayName"]) is not str:
+                raise error(f"{at}/DisplayName", "DisplayName is the pin's label (\"\" for none).", "ControlRig.InvalidBody")
             if "Default" in pin and (scope[0] != "Functions" or len(scope) > 2):
                 raise error(f"{at}/Default", "A collapse node's pins take their values on the node (Defaults).",
                             "ControlRig.InvalidBody")
@@ -268,11 +273,62 @@ def _validate_interface(scope, container):
             if local["Name"] in seen:
                 raise error(f"{at}/Name", f"Local variable '{local['Name']}' is listed twice.", "ControlRig.InvalidBody")
             seen.add(local["Name"])
+    if "PinCategories" in container:
+        _validate_pin_categories(container["PinCategories"], f"{where}/PinCategories")
     for key in HEADER_KEYS:
         if key in container and type(container[key]) is not str:
             raise error(f"{where}/{key}", f"{key} is a string.", "ControlRig.InvalidBody")
     if "Public" in container and type(container["Public"]) is not bool:
         raise error(f"{where}/Public", "Public is true or false.", "ControlRig.InvalidBody")
+    if "Variant" in container:
+        variant = container["Variant"]
+        tags = variant.get("Tags", []) if type(variant) is dict else None
+        if type(variant) is not dict or any(key != "Tags" for key in variant) or type(tags) is not list \
+                or any(type(tag) is not str or not tag for tag in tags) or len(set(tags)) != len(tags):
+            raise error(f"{where}/Variant", "Variant is {Tags: [tag names, each once]}.", "ControlRig.InvalidBody")
+
+
+def _validate_pin_categories(categories, where):
+    if type(categories) is not list:
+        raise error(where, "PinCategories is the list of pin categories in order: {Name, Pins?, Expanded?}.",
+                    "ControlRig.InvalidBody")
+    names, pins = set(), set()
+    for index, category in enumerate(categories):
+        at = f"{where}/{index}"
+        if type(category) is not dict or type(category.get("Name")) is not str or not category["Name"].strip() \
+                or any(key not in PIN_CATEGORY_KEYS for key in category):
+            raise error(at, "A pin category is {Name, Pins?, Expanded?}.", "ControlRig.InvalidBody")
+        if category["Name"] in names:
+            raise error(f"{at}/Name", f"Pin category '{category['Name']}' is listed twice.", "ControlRig.InvalidBody")
+        names.add(category["Name"])
+        if "Expanded" in category and type(category["Expanded"]) is not bool:
+            raise error(f"{at}/Expanded", "Expanded is true or false.", "ControlRig.InvalidBody")
+        listed = category.get("Pins", [])
+        if type(listed) is not list or any(type(pin) is not str or not pin for pin in listed):
+            raise error(f"{at}/Pins", "Pins lists the category's input pins (pin paths) in order.", "ControlRig.InvalidBody")
+        for pin in listed:
+            if pin in pins:
+                raise error(f"{at}/Pins", f"Pin '{pin}' is in two categories.", "ControlRig.InvalidBody")
+            pins.add(pin)
+
+
+def variant_tags(container):
+    """A function's Variant tag names (none when it lists no Variant)."""
+    variant = container.get("Variant")
+    return list(variant.get("Tags", [])) if type(variant) is dict else []
+
+
+def pin_categories(categories):
+    """PinCategories as the read lists them (Pins and Expanded only when set; the default category always expanded)."""
+    out = []
+    for category in categories or []:
+        entry = {"Name": category["Name"]}
+        if category.get("Pins"):
+            entry["Pins"] = list(category["Pins"])
+        if category.get("Expanded") and category["Name"].lower() != DEFAULT_PIN_CATEGORY.lower():
+            entry["Expanded"] = True
+        out.append(entry)
+    return out
 
 
 def _validate_node(entry, where):
@@ -561,6 +617,9 @@ def _header_ops(scope, container, current, make_op, function):
         if "Color" in container and not common.same(container["Color"], current.get("Color"), False):
             op["color"] = container["Color"]
             fields["color"] = f"{where}/Color"
+        if "Variant" in container and variant_tags(container) != variant_tags(current):
+            op["tags"] = variant_tags(container)
+            fields["tags"] = f"{where}/Variant/Tags"
     return [make_op(op, where, fields)] if len(op) > 2 else []
 
 
@@ -628,6 +687,33 @@ def _pin_ops(scope, container, current, make_op, function):
     return renames + removes + types + adds + order + defaults
 
 
+def _layout_ops(scope, container, current, make_op):
+    """The Details panel's pin layout: pin categories (when listed) and the labels of pins that list a DisplayName."""
+    where = scope_path(scope)
+    op = {"op": "function.layout", "graph": list(scope)}
+    fields = {}
+    if "PinCategories" in container and pin_categories(container["PinCategories"]) != pin_categories(
+            current.get("PinCategories")):
+        op["categories"] = [{"name": category["Name"], "pins": list(category.get("Pins", [])),
+                             "expanded": bool(category.get("Expanded", False))} for category in container["PinCategories"]]
+        fields["categories"] = f"{where}/PinCategories"
+    have = {pin["Name"]: pin for pin, _ in pins_of(current)}
+    labels = {}
+    for key in ("Inputs", "Outputs"):
+        for index, pin in enumerate(container.get(key) or []):
+            if "DisplayName" not in pin:
+                continue
+            live = have.get(pin["Name"]) or have.get(_renamed(pin, pin["Name"])) or {}
+            # A label equal to the pin's name is no label (the read leaves it out).
+            label = "" if pin["DisplayName"] == pin["Name"] else pin["DisplayName"]
+            if label != live.get("DisplayName", ""):
+                labels[pin["Name"]] = label
+                fields.setdefault("display_names", f"{where}/{key}/{index}/DisplayName")
+    if labels:
+        op["display_names"] = labels
+    return [make_op(op, where, fields)] if len(op) > 2 else []
+
+
 def _local_ops(scope, container, current, make_op):
     """Local variables as My Blueprint's Local Variables edit them: renames, removes, retypes, adds, defaults."""
     graph = list(scope)
@@ -680,6 +766,7 @@ def _interface(body, live, make_op):
         scope = ("Functions", name)
         ops += _header_ops(scope, container, current, make_op, True)
         ops += _pin_ops(scope, container, current, make_op, True)
+        ops += _layout_ops(scope, container, current, make_op)
         ops += _local_ops(scope, container, current, make_op)
     return ops
 
@@ -742,6 +829,7 @@ def _structure(body, live, deprecated, make_op, planned=None):
             _check_collapse_locals(scope, container, current)
             interface_ops += _header_ops(scope, container, current, make_op, False)
             interface_ops += _pin_ops(scope, container, current, make_op, False)
+            interface_ops += _layout_ops(scope, container, current, make_op)
         graph_ops.append(_container_structure(scope, container, current, deprecated, make_op, max_x))
     node_removes = [op for item in graph_ops for op in item[0]]
     node_renames = [op for item in graph_ops for op in item[1]]

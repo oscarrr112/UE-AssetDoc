@@ -345,7 +345,10 @@ public:
   }
   bIncomingEmpty=Root && RootLinks==0
    && UE::AssetDocumentAI::BehaviorTreeDerivedCompletion::Private::IsExactEmptyAuthoredGraph(*Incoming);
-  if (!Root || (!bIncomingEmpty && (RootLinks != 1 || !RootChild || !Cast<UBTCompositeNode>(RootChild->NodeInstance))))
+  // A root without a child may keep detached branches; the projection above
+  // has already proven them a coherent authored graph.
+  bIncomingRootless=Root && RootLinks==0 && !bIncomingEmpty;
+  if (!Root || (!bIncomingEmpty && !bIncomingRootless && (RootLinks != 1 || !RootChild || !Cast<UBTCompositeNode>(RootChild->NodeInstance))))
    return Failure(TEXT("PreimageMismatch"), TEXT("Incoming graph requires its complete single composite-rooted tree."));
   if (Root->BlackboardAsset != Scratch->Tree->BlackboardAsset)
    return Failure(TEXT("PreimageMismatch"), TEXT("Incoming root must match its own scratch Blackboard header."));
@@ -433,14 +436,25 @@ public:
    Incoming->CreateBTFromGraph(nullptr);
    if (Tree->RootNode || !Tree->RootDecorators.IsEmpty() || !Tree->RootDecoratorOps.IsEmpty()) return TransferFailure();
   }
+  else if (bIncomingRootless)
+  {
+   Incoming->CreateBTFromGraph(nullptr);
+   if (Tree->RootNode || !Tree->RootDecorators.IsEmpty() || !Tree->RootDecoratorOps.IsEmpty()) return TransferFailure();
+  }
   FClosure Current; const auto R = CaptureClosure(*Tree, *Incoming, Current); if (!R.bValid) return R;
   TMap<FString, FString> ReferencePaths;
   for (const auto& Entry : IncomingPaths) ReferencePaths.Add(Entry.Value, Entry.Key->GetPathName());
   FAssetDocumentRuntimeValueDto ExpectedValue = IncomingValue;
   RemapOwnedReferences(ExpectedValue, ReferencePaths);
   auto* ExpectedRoot = Field(ExpectedValue, TEXT("root")); TSet<FString> SeenEnums;
-  if (!ExpectedRoot || !ApplyEnumExpectation(*ExpectedRoot, EnumTransitions, SeenEnums)
-   || SeenEnums.Num() != EnumTransitions.Num()) return TransferFailure();
+  if (!ExpectedRoot || !ApplyEnumExpectation(*ExpectedRoot, EnumTransitions, SeenEnums)) return TransferFailure();
+  if (auto* ExpectedDetached = Field(ExpectedValue, TEXT("detached")))
+  {
+   if (ExpectedDetached->Kind != EAssetDocumentRuntimeValueKind::Array) return TransferFailure();
+   for (auto& Branch : ExpectedDetached->Elements)
+    if (!ApplyEnumExpectation(Branch, EnumTransitions, SeenEnums)) return TransferFailure();
+  }
+  if (SeenEnums.Num() != EnumTransitions.Num()) return TransferFailure();
   const auto* Int = FindFProperty<FIntProperty>(UBTDecorator_Blackboard::StaticClass(), TEXT("IntValue"));
   for (const auto& Entry : EnumTransitions)
    if (!Int || Int->GetPropertyValue_InContainer(Entry.Value.Instance) != Entry.Value.After) return TransferFailure();
@@ -569,6 +583,7 @@ public:
  TMap<FString, FEnumTransition> EnumTransitions;
  UBehaviorTreeGraphNode_Root* IncomingRoot = nullptr;
  bool bIncomingEmpty = false;
+ bool bIncomingRootless = false;
  TWeakObjectPtr<UBlackboardData> ScratchBlackboard;
  FName DesiredGraphName;
  bool bDirty = false, bStarted = false, bAssigned = false, bRestored = false;

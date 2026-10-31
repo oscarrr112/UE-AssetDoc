@@ -11,14 +11,22 @@
 //                                  Animation Blueprint; RotationOffsetBlendSpaceGraph for aim offsets)
 //   Anim:LinkedInputPose           in an anim layer: the layer's Inputs "+" (Details of the layer graph)
 // Every other node (variable getters, math, transition rule getters...) is a K2
-// node and is delegated to the K2 adapter, so its keys stay "K2:...".
+// node and is delegated to the K2 adapter, so its keys stay "K2:...". A getter of a source (Time Remaining
+// (ratio) of an asset player, State Weight of a state...) is keyed "K2:AnimGetter:<class>:<function>@<source>" and
+// placed through the palette action of that source; the key without "@<source>" names the only such getter the
+// graph offers.
 // DescribeNode reports extras.properties: the node's non-default editable values as
 // "Node.<Field>" / "<Property>", "ShowPin.<Property>" for exposed-pin toggles and
-// "Bindings" for property bindings; SetNodeSetting applies ShowPin.* and Bindings.
+// "Bindings" for property bindings, "Functions.<OnInitialUpdate|OnBecomeRelevant|OnUpdate>" for bound node
+// functions; SetNodeSetting applies ShowPin.*, Bindings and Functions.*, and a K2 node's settings through the K2
+// adapter.
 // A Control Rig node (AnimGraphNode_ControlRig) offers the rig's public variables and animatable controls as input
 // pins only once they are exposed (Details > Input, the "use pin" checkbox: CustomPinProperties, not exposed by
 // default, also for a variable the rig gets later): "ShowPin.<Variable>" reads and writes that checkbox. Writing it
-// first refreshes the node's list from the rig as the Details panel does when it opens.
+// first refreshes the node's list from the rig as the Details panel does when it opens. Linked Anim Graph and Linked
+// Anim Layer nodes (the other custom property nodes) offer the variables of the class they run the same way, with
+// the instance-editable ones exposed by default; "ShowPin.<Variable>" is reported where it differs from that, and a
+// document that leaves it out keeps it.
 // Blend Space Graph nodes add their blend space's settings ("BlendSpace.*") and "Samples"
 // (AssetDocumentAnimBlendSpaceGraphRawEdits); the sample graphs are reported as the node's owned
 // subgraphs (role "blend_space_sample"). The Output Pose of an anim layer reports "LayerGroup"
@@ -30,6 +38,7 @@
 #include "AnimBlueprint/AssetDocumentAnimBlueprintAdapters.h"
 #include "AnimBlueprint/AssetDocumentAnimBlendSpaceGraphRawEdits.h"
 #include "AnimBlueprint/AssetDocumentAnimGraphNodeBindingRawEdits.h"
+#include "AnimBlueprint/AssetDocumentAnimGraphNodeFunctions.h"
 
 #include "Algo/Find.h"
 #include "AnimGraphNode_Base.h"
@@ -50,15 +59,21 @@
 #include "AnimGraphNode_TransitionResult.h"
 #include "AnimGraphNode_UseCachedPose.h"
 #include "AnimationGraphSchema.h"
+#include "AnimStateNodeBase.h"
+#include "AnimStateTransitionNode.h"
 #include "Animation/AnimBlueprint.h"
+#include "Animation/AnimationAsset.h"
 #include "Animation/BlendSpace.h"
 #include "BlueprintActionDatabase.h"
+#include "BlueprintActionFilter.h"
 #include "BlueprintNodeSpawner.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraphSchema_K2.h"
 #include "EdGraphSchema_K2_Actions.h"
+#include "K2Node_AnimGetter.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/Kismet2NameValidators.h"
+#include "Misc/ScopeExit.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UnrealType.h"
 
@@ -268,11 +283,12 @@ bool MapControlRigSetting(const UEdGraphNode& Node, FString& InOutPath, FAssetDo
 	return true;
 }
 
-// The rig variables and controls a Control Rig node can expose as pins, with their "use pin" state
-// (UAnimGraphNode_CustomProperty::CustomPinProperties, protected; read through its property). Null for other nodes.
+// The variables a custom property node (Control Rig, Linked Anim Graph, Linked Anim Layer) can expose as pins of the
+// class it runs, with their "use pin" state (UAnimGraphNode_CustomProperty::CustomPinProperties, protected; read
+// through its property). Null for other nodes.
 TArray<FOptionalPinFromProperty>* ExposablePins(const UEdGraphNode& Node)
 {
-	if (!IsControlRigNode(Node))
+	if (!Node.IsA<UAnimGraphNode_CustomProperty>())
 	{
 		return nullptr;
 	}
@@ -284,6 +300,18 @@ TArray<FOptionalPinFromProperty>* ExposablePins(const UEdGraphNode& Node)
 		return nullptr;
 	}
 	return const_cast<TArray<FOptionalPinFromProperty>*>(Property->ContainerPtrToValuePtr<TArray<FOptionalPinFromProperty>>(&Node));
+}
+
+// A new node's "use pin" state of an exposable variable: a Control Rig node exposes none; a linked graph or layer node
+// exposes the instance-editable variables of its class (FCustomPropertyOptionalPinManager::GetRecordDefaults).
+bool ExposedByDefault(const UEdGraphNode& Node, FName Name)
+{
+	if (IsControlRigNode(Node))
+	{
+		return false;
+	}
+	const FProperty* Property = CastChecked<UAnimGraphNode_Base>(&Node)->GetPinProperty(Name);
+	return Property != nullptr && !Property->HasAnyPropertyFlags(CPF_DisableEditOnInstance);
 }
 
 int32 FindExposablePin(const TArray<FOptionalPinFromProperty>& Pins, FStringView Name)
@@ -309,9 +337,10 @@ void ClearInputMapping(UAnimGraphNode_Base& Node, FName Name)
 	Map.RemovePair(&Name);
 }
 
-// The Details panel's Input "use pin" checkbox of a Control Rig node (UAnimGraphNode_ControlRig::
-// OnPropertyExposeCheckboxChanged): the state flips, the node is rebuilt without keeping the hidden pin as an orphan,
-// an exposed variable loses its curve mapping and the Blueprint is structurally modified.
+// The Details panel's "use pin" checkbox of a Control Rig node (UAnimGraphNode_ControlRig::
+// OnPropertyExposeCheckboxChanged) and of a linked graph or layer node's Exposable Properties
+// (UAnimGraphNode_CustomProperty::SetCustomPinVisibility): the state flips, the node is rebuilt without keeping the
+// hidden pin as an orphan, an exposed rig variable loses its curve mapping and the Blueprint is structurally modified.
 void SetExposedPin(UAnimGraphNode_Base& Node, int32 Index, bool bShow)
 {
 	TArray<FOptionalPinFromProperty>& Pins = *ExposablePins(Node);
@@ -516,10 +545,15 @@ FValue CollectNodeProperties(const UAnimGraphNode_Base& Node, FValue& OutDefault
 	{
 		for (const FOptionalPinFromProperty& Pin : *Exposable)
 		{
-			if (Pin.bCanToggleVisibility && Pin.bShowPin)
+			const bool bDefault = ExposedByDefault(Node, Pin.PropertyName);
+			if (Pin.bCanToggleVisibility && Pin.bShowPin != bDefault)
 			{
-				SetField(Out, TEXT("ShowPin.") + Pin.PropertyName.ToString(), MakeBoolValue(true));
-				SetField(OutDefaults, TEXT("ShowPin.") + Pin.PropertyName.ToString(), MakeBoolValue(false));
+				SetField(Out, TEXT("ShowPin.") + Pin.PropertyName.ToString(), MakeBoolValue(Pin.bShowPin));
+				if (IsControlRigNode(Node))
+				{
+					// A linked graph or layer node's exposed variables have no reported default: omitted keeps them.
+					SetField(OutDefaults, TEXT("ShowPin.") + Pin.PropertyName.ToString(), MakeBoolValue(bDefault));
+				}
 			}
 		}
 	}
@@ -529,6 +563,8 @@ FValue CollectNodeProperties(const UAnimGraphNode_Base& Node, FValue& OutDefault
 		SetField(Out, TEXT("Bindings"), MoveTemp(Bindings));
 		SetField(OutDefaults, TEXT("Bindings"), MakeObjectValue());
 	}
+	// Bound node functions have no reported default: a document that leaves one out keeps it.
+	NodeFunctions::QueryNodeFunctions(Node, Out);
 	if (const UAnimGraphNode_BlendSpaceGraphBase* BlendSpaceNode = Cast<UAnimGraphNode_BlendSpaceGraphBase>(&Node))
 	{
 		BlendSpaceRawEdits::QueryBlendSpace(*BlendSpaceNode, Out);
@@ -592,6 +628,246 @@ bool SpawnLayerInputPose(const FAssetDocumentGraphSpawnRequest& Request, UBluepr
 	return true;
 }
 
+namespace
+{
+// Transition-rule and anim graph getters (UK2Node_AnimGetter: Time Remaining (ratio), State Weight, Current State
+// Time, ...) are K2 calls of an anim instance function that read one source: an asset player, a state (or alias), a
+// transition or a state machine. The palette registers one action per source (UK2Node_AnimGetter::GetMenuActions,
+// filed under the Animation Blueprint) whose customize delegate gives the node its source. A getter is keyed by its
+// function and that source: "K2:AnimGetter:<class>:<function>@<source>", the source named as the editor's title of
+// the getter names it ("Time Remaining (ratio) (<source>)"): the asset of an asset player, the name of a state, alias
+// or state machine; a transition is "<from state>-><to state>". A getter without a source (or whose source has no
+// such name) has the key without "@".
+const FString AnimGetterPrefix = TEXT("K2:AnimGetter:");
+
+// Whether the getter function takes the named parameter (UK2Node_AnimGetter::GetterRequiresParameter).
+bool AnimGetterTakes(const UFunction& Getter, const TCHAR* Parameter)
+{
+	for (TFieldIterator<FProperty> It(&Getter); It && It->HasAnyPropertyFlags(CPF_Parm); ++It)
+	{
+		if (It->GetName() == Parameter)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+// "K2:AnimGetter:<class declaring the function>:<function>", as the K2 adapter keys a call of it.
+FString AnimGetterFunctionKey(const UFunction* Function)
+{
+	if (Function == nullptr)
+	{
+		return FString();
+	}
+	while (const UFunction* Super = Function->GetSuperFunction())
+	{
+		Function = Super;
+	}
+	UClass* Owner = Function->GetOwnerClass();
+	const UClass* Authoritative = Owner != nullptr ? Owner->GetAuthoritativeClass() : nullptr;
+	const FString OwnerPath = Authoritative != nullptr ? Authoritative->GetPathName()
+		: (Owner != nullptr ? Owner->GetPathName() : Function->GetOuter()->GetPathName());
+	return AnimGetterPrefix + OwnerPath + TEXT(":") + Function->GetName();
+}
+
+// The name of the source a getter of Function reads (see above); empty when it reads none or the name cannot be part
+// of a key (a key holds no ':', '@' or '#', and no white space but inner spaces).
+FString AnimGetterSourceName(const UFunction& Function, const UAnimGraphNode_Base* SourceNode, const UAnimStateNodeBase* SourceStateNode)
+{
+	FString Name;
+	if (AnimGetterTakes(Function, TEXT("AssetPlayerIndex")))
+	{
+		const UAnimationAsset* Asset = SourceNode != nullptr ? SourceNode->GetAnimationAsset() : nullptr;
+		Name = Asset != nullptr ? Asset->GetName() : FString();
+	}
+	else if (AnimGetterTakes(Function, TEXT("MachineIndex")))
+	{
+		if (AnimGetterTakes(Function, TEXT("StateIndex")) || AnimGetterTakes(Function, TEXT("TransitionIndex")))
+		{
+			if (const UAnimStateTransitionNode* Transition = Cast<UAnimStateTransitionNode>(SourceStateNode))
+			{
+				const UAnimStateNodeBase* From = Transition->GetPreviousState();
+				const UAnimStateNodeBase* To = Transition->GetNextState();
+				Name = From != nullptr && To != nullptr ? From->GetStateName() + TEXT("->") + To->GetStateName() : FString();
+			}
+			else if (SourceStateNode != nullptr)
+			{
+				Name = SourceStateNode->GetStateName();
+			}
+		}
+		else if (SourceNode != nullptr)
+		{
+			Name = SourceNode->GetNodeTitle(ENodeTitleType::ListView).ToString();
+		}
+	}
+	const bool bKeyable = !Name.IsEmpty() && !FChar::IsWhitespace(Name[0]) && !Name.Contains(TEXT(":")) && !Name.Contains(TEXT("@"))
+		&& !Name.Contains(TEXT("#")) && !Name.Contains(TEXT("\n")) && !Name.Contains(TEXT("\r")) && !Name.Contains(TEXT("\t"));
+	return bKeyable ? Name : FString();
+}
+
+FString AnimGetterKey(const UFunction* Function, const UAnimGraphNode_Base* SourceNode, const UAnimStateNodeBase* SourceStateNode)
+{
+	const FString Base = AnimGetterFunctionKey(Function);
+	const FString Source = Function != nullptr ? AnimGetterSourceName(*Function, SourceNode, SourceStateNode) : FString();
+	return Base.IsEmpty() || Source.IsEmpty() ? Base : Base + TEXT("@") + Source;
+}
+
+// One getter action of the palette: its spawner, key, function display name and whether the palette offers it in
+// the graph (UK2Node_AnimGetter::IsActionFilteredOut: a transition rule offers the getters of its previous state and
+// that state's asset players).
+struct FAnimGetterAction
+{
+	UBlueprintNodeSpawner* Spawner = nullptr;
+	FString Key;
+	FString Display;
+	bool bOffered = false;
+};
+
+// The getter actions the action database holds for Blueprint, each read by running its customize delegate on a
+// scratch node (the delegate only sets the node's source, function and contexts).
+TArray<FAnimGetterAction> AnimGetterActions(UBlueprint& Blueprint, UEdGraph& Graph)
+{
+	TArray<FAnimGetterAction> Out;
+	const FBlueprintActionDatabase::FActionList* Actions = FBlueprintActionDatabase::Get().GetAllActions().Find(FObjectKey(&Blueprint));
+	if (Actions == nullptr)
+	{
+		return Out;
+	}
+	// The scratch node is outered to the graph (not added to it), so the getter's function reference finds the
+	// Blueprint's class as a placed node does; it leaves the graph when the read ends.
+	const TStrongObjectPtr<UK2Node_AnimGetter> Scratch(NewObject<UK2Node_AnimGetter>(&Graph, NAME_None, RF_Transient));
+	ON_SCOPE_EXIT
+	{
+		Scratch->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional | REN_DoNotDirty);
+	};
+	FBlueprintActionFilter Filter;
+	Filter.Context.Blueprints.Add(&Blueprint);
+	Filter.Context.Graphs.Add(&Graph);
+	const bool bFilterable = Blueprint.IsA<UAnimBlueprint>();
+	for (UBlueprintNodeSpawner* Spawner : *Actions)
+	{
+		if (Spawner == nullptr || Spawner->NodeClass == nullptr || !Spawner->NodeClass->IsChildOf(UK2Node_AnimGetter::StaticClass())
+			|| !Spawner->CustomizeNodeDelegate.IsBound())
+		{
+			continue;
+		}
+		Scratch->SourceNode = nullptr;
+		Scratch->SourceStateNode = nullptr;
+		Scratch->GetterClass = nullptr;
+		Scratch->SourceAnimBlueprint = nullptr;
+		Scratch->Contexts.Reset();
+		Scratch->FunctionReference = FMemberReference();
+		Spawner->CustomizeNodeDelegate.Execute(Scratch.Get(), true);
+		// A getter's function resolves in its getter class; an action that sets none names no getter.
+		UClass* GetterClass = Scratch->GetterClass.Get();
+		const UFunction* Function = GetterClass != nullptr ? Scratch->FunctionReference.ResolveMember<UFunction>(GetterClass) : nullptr;
+		if (Function == nullptr)
+		{
+			continue;
+		}
+		FAnimGetterAction& Action = Out.AddDefaulted_GetRef();
+		Action.Spawner = Spawner;
+		Action.Key = AnimGetterKey(Function, Scratch->SourceNode, Scratch->SourceStateNode);
+		const FString Source = AnimGetterSourceName(*Function, Scratch->SourceNode, Scratch->SourceStateNode);
+		Action.Display = Source.IsEmpty() ? Function->GetDisplayNameText().ToString()
+			: FString::Printf(TEXT("%s (%s)"), *Function->GetDisplayNameText().ToString(), *Source);
+		Action.bOffered = bFilterable && !static_cast<UK2Node*>(Scratch.Get())->IsActionFilteredOut(Filter);
+	}
+	return Out;
+}
+
+// Places a getter by its key through the palette action of that source: among the actions of the key, the one the
+// graph's palette offers, else the only one. A key without the source names the getter of its function the graph
+// offers when it offers one.
+bool SpawnAnimGetter(const FAssetDocumentGraphSpawnRequest& Request, UBlueprint& Blueprint,
+	FAssetDocumentGraphSpawnResult& OutResult, FAssetDocumentGraphError& OutError)
+{
+	// The actions follow the Blueprint's current nodes (asset players and states placed earlier in this apply).
+	FBlueprintActionDatabase::Get().RefreshAssetActions(&Blueprint);
+	const TArray<FAnimGetterAction> Actions = AnimGetterActions(Blueprint, *Request.Graph);
+	FString FunctionKey;
+	FString Source;
+	if (!Request.ActionKey.Split(TEXT("@"), &FunctionKey, &Source))
+	{
+		FunctionKey = Request.ActionKey;
+	}
+	TArray<const FAnimGetterAction*> Named;
+	for (const FAnimGetterAction& Action : Actions)
+	{
+		FString ActionFunction;
+		FString ActionSource;
+		if (!Action.Key.Split(TEXT("@"), &ActionFunction, &ActionSource))
+		{
+			ActionFunction = Action.Key;
+		}
+		if (ActionFunction.Equals(FunctionKey, ESearchCase::IgnoreCase) && (Source.IsEmpty() || ActionSource.Equals(Source, ESearchCase::CaseSensitive)))
+		{
+			Named.Add(&Action);
+		}
+	}
+	if (Named.IsEmpty() && !Source.IsEmpty())
+	{
+		for (const FAnimGetterAction& Action : Actions)
+		{
+			if (Action.Key.Equals(Request.ActionKey, ESearchCase::IgnoreCase))
+			{
+				Named.Add(&Action);
+			}
+		}
+	}
+	TArray<const FAnimGetterAction*> Offered = Named.FilterByPredicate([](const FAnimGetterAction* Action) { return Action->bOffered; });
+	const FAnimGetterAction* Chosen = Offered.Num() == 1 ? Offered[0] : (Offered.IsEmpty() && Named.Num() == 1 ? Named[0] : nullptr);
+	if (Chosen == nullptr)
+	{
+		const TArray<const FAnimGetterAction*> Listed = Offered.IsEmpty() ? Named : Offered;
+		TArray<FString> Keys;
+		for (const FAnimGetterAction& Action : Actions)
+		{
+			if (Named.IsEmpty() ? Action.bOffered && Action.Key.StartsWith(FunctionKey, ESearchCase::IgnoreCase) : Listed.Contains(&Action))
+			{
+				Keys.AddUnique(Action.Key);
+			}
+		}
+		Keys.Sort();
+		TArray<FValue> Candidates;
+		for (const FString& Key : Keys)
+		{
+			Candidates.Add(MakeStringValue(Key));
+		}
+		if (Named.IsEmpty())
+		{
+			OutError.Set(TEXT("Graph.ActionNotFound"), FString::Printf(
+				TEXT("No getter %s is available to %s: the source after \"@\" is the asset of an asset player, or the name of a state, ")
+				TEXT("alias or state machine (\"<from>-><to>\" for a transition), as the getter's title shows it.%s"),
+				*Request.ActionKey, *Blueprint.GetName(),
+				Keys.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" This graph offers: %s."), *FString::Join(Keys, TEXT(", ")))));
+		}
+		else
+		{
+			OutError.Set(TEXT("Graph.ActionAmbiguous"), FString::Printf(
+				TEXT("Getter key %s names %d sources of that name (%s); the graph cannot tell which one is meant."),
+				*Request.ActionKey, Listed.Num(), *FString::Join(Keys, TEXT(", "))));
+		}
+		OutError.AddContext(TEXT("candidates"), MakeArrayValue(MoveTemp(Candidates)));
+		return false;
+	}
+	UEdGraphNode* Node = Chosen->Spawner->Invoke(Request.Graph, IBlueprintNodeBinder::FBindingSet(), SpawnLocation(Request));
+	if (Node == nullptr)
+	{
+		OutError.Set(TEXT("Graph.ActionNotFound"), FString::Printf(TEXT("Action %s did not produce a node."), *Request.ActionKey));
+		return false;
+	}
+	OutResult.Node = Node;
+	OutResult.bReused = false;
+	if (Request.FromPin != nullptr)
+	{
+		Node->AutowireNewNode(Request.FromPin);
+	}
+	return true;
+}
+} // namespace
+
 class FAnimGraphSchemaAdapter final : public IAssetDocumentGraphSchemaAdapter
 {
 public:
@@ -631,12 +907,30 @@ public:
 		for (FAssetDocumentGraphActionRecord& Record : K2Actions)
 		{
 			const UClass* NodeClass = FindObject<UClass>(nullptr, *Record.NodeClassPath);
-			if (NodeClass == nullptr || !NodeClass->IsChildOf(UAnimGraphNode_Base::StaticClass()))
+			if (NodeClass == nullptr || (!NodeClass->IsChildOf(UAnimGraphNode_Base::StaticClass())
+				&& !NodeClass->IsChildOf(UK2Node_AnimGetter::StaticClass())))
 			{
 				OutActions.Add(MoveTemp(Record));
 			}
 		}
 		const TSet<FString> Exact(Query.ExactKeys);
+		// Getters, keyed by their source (the K2 records above name them by the palette's internal signature).
+		for (const FAnimGetterAction& Getter : AnimGetterActions(*Blueprint, *Query.Graph))
+		{
+			if (!Getter.bOffered || (!Query.KeyPrefix.IsEmpty() && !Getter.Key.StartsWith(Query.KeyPrefix))
+				|| (!Exact.IsEmpty() && !Exact.Contains(Getter.Key)))
+			{
+				continue;
+			}
+			FAssetDocumentGraphActionRecord& Record = OutActions.AddDefaulted_GetRef();
+			Record.ActionKey = Getter.Key;
+			Record.NodeClassPath = UK2Node_AnimGetter::StaticClass()->GetPathName();
+			if (Query.bWantUiText || !Query.Text.IsEmpty())
+			{
+				Record.DisplayName = Getter.Display;
+				Record.Category = TEXT("Animation");
+			}
+		}
 		auto Offer = [&](const FString& Key, const UClass* NodeClass, const FString& Display)
 		{
 			if ((!Query.KeyPrefix.IsEmpty() && !Key.StartsWith(Query.KeyPrefix)) || (!Exact.IsEmpty() && !Exact.Contains(Key)))
@@ -699,6 +993,16 @@ public:
 	{
 		FString Kind;
 		FString Arg;
+		if (Request.ActionKey.StartsWith(AnimGetterPrefix) && !Request.ActionKey.Contains(TEXT("#")))
+		{
+			UBlueprint* GetterBlueprint = BlueprintOf(Request.Asset, Request.Graph);
+			if (GetterBlueprint == nullptr || Request.Graph == nullptr)
+			{
+				OutError.Set(TEXT("Graph.GraphOperationUnsupported"), TEXT("Anim graph actions need an Animation Blueprint graph."));
+				return false;
+			}
+			return SpawnAnimGetter(Request, *GetterBlueprint, OutResult, OutError);
+		}
 		if (!SplitKey(Request.ActionKey, Kind, Arg))
 		{
 			const TSharedPtr<IAssetDocumentGraphSchemaAdapter> K2 = FindK2SchemaAdapter();
@@ -843,6 +1147,18 @@ public:
 			{
 				K2->DescribeNode(Node, Out);
 			}
+			const UK2Node_AnimGetter* Getter = Cast<UK2Node_AnimGetter>(&Node);
+			if (Getter != nullptr && Out.ActionKey.StartsWith(AnimGetterPrefix) && !Out.ActionKey.Contains(TEXT("@"))
+				&& !Out.ActionKey.Contains(TEXT("#")))
+			{
+				// The source the getter reads (the K2 key names its function only).
+				const UFunction* Function = Getter->GetTargetFunction();
+				const FString Source = Function != nullptr ? AnimGetterSourceName(*Function, Getter->SourceNode, Getter->SourceStateNode) : FString();
+				if (!Source.IsEmpty())
+				{
+					Out.ActionKey += TEXT("@") + Source;
+				}
+			}
 			return;
 		}
 		Out.ActionKey = NodeKey(Node);
@@ -980,7 +1296,14 @@ public:
 		UAnimGraphNode_Base* AnimNode = Cast<UAnimGraphNode_Base>(&Node);
 		if (AnimNode == nullptr)
 		{
-			return true;
+			// A K2 node of an anim graph (a Property Access node feeding a pin): the K2 adapter's settings.
+			const TSharedPtr<IAssetDocumentGraphSchemaAdapter> K2 = FindK2SchemaAdapter();
+			return !K2.IsValid() || K2->SetNodeSetting(Asset, Node, Path, Value, bOutHandled, OutError);
+		}
+		if (NodeFunctions::IsNodeFunctionSetting(Path))
+		{
+			bOutHandled = true;
+			return NodeFunctions::SetNodeFunction(*AnimNode, Path, Value, OutError);
 		}
 		if (Path == TEXTVIEW("Bindings"))
 		{
@@ -1029,8 +1352,8 @@ public:
 			[Property](const FOptionalPinFromProperty& Pin) { return Pin.PropertyName.ToString() == Property; });
 		if (Index == INDEX_NONE && ExposablePins(*AnimNode) != nullptr)
 		{
-			// A rig variable or control: the list the Details panel shows, rebuilt from the rig (a variable the rig got
-			// after the node was last rebuilt is not in it yet).
+			// A variable of the class the node runs (a rig's variable or control): the list the Details panel shows,
+			// rebuilt from that class (a variable it got after the node was last rebuilt is not in it yet).
 			int32 Exposable = FindExposablePin(*ExposablePins(*AnimNode), Property);
 			if (Exposable == INDEX_NONE)
 			{
@@ -1064,8 +1387,11 @@ public:
 						RigNames.Add(Pin.PropertyName.ToString());
 					}
 				}
-				Exposable = FString::Printf(TEXT("; the rig's public variables and controls: %s"),
-					RigNames.IsEmpty() ? TEXT("none (make the variable Public in the rig)") : *FString::Join(RigNames, TEXT(", ")));
+				Exposable = IsControlRigNode(Node)
+					? FString::Printf(TEXT("; the rig's public variables and controls: %s"),
+						RigNames.IsEmpty() ? TEXT("none (make the variable Public in the rig)") : *FString::Join(RigNames, TEXT(", ")))
+					: FString::Printf(TEXT("; the variables of the class it runs: %s"),
+						RigNames.IsEmpty() ? TEXT("none (set its class first)") : *FString::Join(RigNames, TEXT(", ")));
 			}
 			OutError.Set(TEXT("Graph.InvalidArgument"), FString::Printf(TEXT("%s has no optional pin '%.*s' (optional pins: %s%s)."),
 				*Node.GetClass()->GetName(), Property.Len(), Property.GetData(), *FString::Join(Names, TEXT(", ")), *Exposable),

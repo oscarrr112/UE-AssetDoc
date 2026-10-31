@@ -19,6 +19,8 @@ import re
 from contextvars import ContextVar
 from typing import Callable, Iterator
 
+from asset_document.tolerance import reading_live
+
 GAME_ROOT = "/Game/"
 _ADMITTED: ContextVar[str | None] = ContextVar("asset_document_read_only_target", default=None)
 
@@ -56,8 +58,9 @@ def extract_document(
     read_only: bool,
 ) -> dict:
     """The canonical extract of ``target``; ``read_only`` (the Extract operation) admits an
-    engine or plugin target while it is read."""
-    with _admitting(target if read_only else None):
+    engine or plugin target while it is read. The asset's own state is read as it is: authored
+    rules become read warnings (``tolerance.reading_live``)."""
+    with _admitting(target if read_only else None), reading_live():
         return canonicalize(extract())
 
 
@@ -68,6 +71,7 @@ def is_live_inspect_path(value: object) -> bool:
 
 
 def inspect_live(object_path: str, inspect: Callable[[], dict]) -> dict:
-    """Inspect of a live asset; an engine or plugin asset is admitted while it is read."""
-    with _admitting(object_path.rsplit(".", 1)[0]):
+    """Inspect of a live asset; an engine or plugin asset is admitted while it is read. Its state
+    is read as it is (``tolerance.reading_live``)."""
+    with _admitting(object_path.rsplit(".", 1)[0]), reading_live():
         return inspect()

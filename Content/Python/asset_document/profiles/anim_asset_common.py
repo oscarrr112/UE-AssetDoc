@@ -18,6 +18,7 @@ from asset_document.diff.model import Difference, DiffKind
 from asset_document.dto import PrimitiveRequirement
 from asset_document.profiles import data_table_common as common
 from asset_document.regions.primitive_catalog import NamedOpaqueHandleArgument, _single_handle
+from asset_document.tolerance import authored_rule
 
 ROUTE = "animation_asset_profile"
 PROVIDER = "animation_asset"
@@ -53,6 +54,22 @@ def object_path(value, path, code, what):
         raise error(path, f"{what} is the object path of an asset, e.g. /Game/Characters/SK_Hero.SK_Hero "
                           f"(got {value!r}).", code)
     return value
+
+
+def reference(value, path, code, what, prefix):
+    """A reference that must be set: an object path, or null when the asset it named is gone (deleted, not migrated).
+    null is read as it is with ``<prefix>.MissingReference``; a document may keep it where the asset has it, not set
+    it anew (``tolerance.authored_rule``)."""
+    if value is None:
+        authored_rule(path, f"{prefix}.MissingReference", f"{what} names no asset (the asset it used is missing). Set "
+                      "it to the object path of an existing asset.")
+        return None
+    return object_path(value, path, code, what)
+
+
+def live_reference(value):
+    """A reference as a read primitive reports it ("" when unset or not loadable) in the document form: null."""
+    return None if value in ("", None) else value
 
 
 def optional_path(value, path, code, what):
@@ -116,5 +133,6 @@ def value_diff(changes, path, authored, live, exact):
 
 __all__ = ("ANIM_SEQUENCE_CLASS", "AnimCalls", "BLEND_SPACE_EDIT", "BLEND_SPACE_READ", "COMPOSITE_EDIT",
            "COMPOSITE_READ", "POSE_ASSET_EDIT", "POSE_ASSET_READ", "PROVIDER", "ROUTE", "SKELETAL_MESH_CLASS",
-           "SKELETON_CLASS", "SKELETON_EDIT", "SKELETON_READ", "object_path", "optional_path", "requirements",
+           "SKELETON_CLASS", "SKELETON_EDIT", "SKELETON_READ", "live_reference", "object_path", "optional_path",
+           "reference", "requirements",
            "resolve_context", "value_diff")

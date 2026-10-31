@@ -84,20 +84,34 @@ bool EncodeValue(const FNiagaraTypeDefinition& Type, const uint8* Data, FValue& 
 // "SpriteRenderer"); classes outside the convention (or outside /Script/Niagara*) by class path.
 FString ClassLabel(const UClass* Class, const TCHAR* Prefix, const TCHAR* Suffix);
 
+// What SparseProperties lists for a property the codec cannot represent whose value differs from the default:
+// nothing (Drop), or the marker {"Unsupported": "<C++ type> has no document form; AssetDoc keeps the value.",
+// "Text": <export text>} under its name (Mark), which a write never sends back.
+enum class EUnencodable : uint8
+{
+	Drop,
+	Mark,
+};
+
 // Edit-visible (CPF_Edit) properties of Struct whose value in Container differs from Defaults, encoded with
 // the Editor typed value codec (floats shortest). Skip names are never listed; properties the codec
-// cannot represent are appended to OutUnsupported (when given).
+// cannot represent are appended to OutUnsupported (when given) and listed as Unencodable says.
 FValue SparseProperties(const UStruct& Struct, const void* Container, const void* Defaults,
-	TConstArrayView<FName> Skip = {}, TArray<FString>* OutUnsupported = nullptr);
+	TConstArrayView<FName> Skip = {}, TArray<FString>* OutUnsupported = nullptr, EUnencodable Unencodable = EUnencodable::Drop);
 
 // True when the property's document form (SparseProperties) equals the default's: reset skips it.
 bool PropertyMatchesDefault(FProperty& Property, const void* ValuePtr, const void* DefaultPtr);
 
+// True when the codec has a document form for the value at ValuePtr (false: it reads as a marker, and a complete
+// write keeps it rather than resetting it).
+bool CanEncodeProperty(FProperty& Property, const void* ValuePtr);
+
 // SparseProperties of an object against its class default object.
-FValue SparseObjectProperties(const UObject& Object, TConstArrayView<FName> Skip = {}, TArray<FString>* OutUnsupported = nullptr);
+FValue SparseObjectProperties(const UObject& Object, TConstArrayView<FName> Skip = {}, TArray<FString>* OutUnsupported = nullptr,
+	EUnencodable Unencodable = EUnencodable::Drop);
 
 // {"Class": <label>, "Properties": {...}} of a data interface value.
-FValue DescribeDataInterface(const UNiagaraDataInterface& DataInterface);
+FValue DescribeDataInterface(const UNiagaraDataInterface& DataInterface, EUnencodable Unencodable = EUnencodable::Drop);
 
 // The registered Niagara type whose TypeToken is Token (false when none is).
 bool TypeFromToken(const FString& Token, FNiagaraTypeDefinition& OutType);

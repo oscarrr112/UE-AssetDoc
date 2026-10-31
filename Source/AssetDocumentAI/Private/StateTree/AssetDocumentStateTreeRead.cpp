@@ -162,6 +162,84 @@ FValue MakeTreeRecord(const UStateTree& Tree, const UStateTreeEditorData& Editor
 	Record.AddBool(TEXT("ready"), Tree.IsReadyToRun());
 	return Record.Build();
 }
+
+// The parts of a record over the page budget: each object field's members move, in order, to "part" records that
+// follow it ({kind: part, field, values{}}); a list member over the budget goes in slices ({kind: part, field, name,
+// items[]}). The reader folds the parts back into the record. A single value that is neither fits nor is a list
+// stays in the record.
+void AppendSplit(TArray<FValue>& Out, FValue Record, int32 Budget)
+{
+	if (CountValueNodes(Record) <= Budget)
+	{
+		Out.Add(MoveTemp(Record));
+		return;
+	}
+	constexpr int32 PartNodes = 8;
+	TArray<FValue> Parts;
+	for (int32 Field = 0; Field < Record.ObjectKeys.Num(); ++Field)
+	{
+		FValue& Values = Record.Elements[Field];
+		if (Values.Kind != EAssetDocumentRuntimeValueKind::Object || Values.Elements.IsEmpty())
+		{
+			continue;
+		}
+		const FString FieldName = Record.ObjectKeys[Field];
+		FValue Batch = MakeEmptyObject();
+		int32 BatchNodes = PartNodes;
+		auto Flush = [&]()
+		{
+			if (!Batch.Elements.IsEmpty())
+			{
+				Parts.Add(FObjectBuilder().AddString(TEXT("kind"), TEXT("part")).AddString(TEXT("field"), FieldName)
+					.Add(TEXT("values"), MoveTemp(Batch)).Build());
+			}
+			Batch = MakeEmptyObject();
+			BatchNodes = PartNodes;
+		};
+		auto AddSlice = [&](const FString& Name, TArray<FValue>&& Items)
+		{
+			Parts.Add(FObjectBuilder().AddString(TEXT("kind"), TEXT("part")).AddString(TEXT("field"), FieldName)
+				.AddString(TEXT("name"), Name).Add(TEXT("items"), MakeArray(MoveTemp(Items))).Build());
+		};
+		for (int32 Member = 0; Member < Values.Elements.Num(); ++Member)
+		{
+			FValue& Value = Values.Elements[Member];
+			const FString& Name = Values.ObjectKeys[Member];
+			const int32 Nodes = CountValueNodes(Value) + 1;
+			if (Nodes + PartNodes > Budget && Value.Kind == EAssetDocumentRuntimeValueKind::Array)
+			{
+				Flush();
+				TArray<FValue> Slice;
+				int32 SliceNodes = PartNodes + 1;
+				for (FValue& Item : Value.Elements)
+				{
+					const int32 ItemNodes = CountValueNodes(Item);
+					if (!Slice.IsEmpty() && SliceNodes + ItemNodes > Budget)
+					{
+						AddSlice(Name, MoveTemp(Slice));
+						Slice.Reset();
+						SliceNodes = PartNodes + 1;
+					}
+					SliceNodes += ItemNodes;
+					Slice.Add(MoveTemp(Item));
+				}
+				AddSlice(Name, MoveTemp(Slice));
+				continue;
+			}
+			if (BatchNodes + Nodes > Budget)
+			{
+				Flush();
+			}
+			BatchNodes += Nodes;
+			Batch.ObjectKeys.Add(Name);
+			Batch.Elements.Add(MoveTemp(Value));
+		}
+		Flush();
+		Values = MakeEmptyObject();
+	}
+	Out.Add(MoveTemp(Record));
+	Out.Append(MoveTemp(Parts));
+}
 } // namespace
 
 FValue MakeParametersRecord(const UStateTreeEditorData& EditorData, const UStateTreeState* State)
@@ -226,19 +304,25 @@ bool HandleRead(FCall& Call, FObjectBuilder& Result)
 	{
 		return Call.Args.Fail(TEXT("Graph.InvalidArgument"), TEXT("offset must be >= 0."), TEXT("offset"));
 	}
-	TArray<FValue> Records;
-	Records.Add(MakeTreeRecord(*Tree, *EditorData));
-	Records.Add(MakeParametersRecord(*EditorData, nullptr));
-	AppendNodes(Records, EditorData->Evaluators, ENodeList::Evaluators, nullptr, nullptr);
-	AppendNodes(Records, EditorData->GlobalTasks, ENodeList::GlobalTasks, nullptr, nullptr);
+	TArray<FValue> Built;
+	Built.Add(MakeTreeRecord(*Tree, *EditorData));
+	Built.Add(MakeParametersRecord(*EditorData, nullptr));
+	AppendNodes(Built, EditorData->Evaluators, ENodeList::Evaluators, nullptr, nullptr);
+	AppendNodes(Built, EditorData->GlobalTasks, ENodeList::GlobalTasks, nullptr, nullptr);
 	for (int32 Index = 0; Index < EditorData->SubTrees.Num(); ++Index)
 	{
 		if (EditorData->SubTrees[Index] != nullptr)
 		{
-			AppendState(Records, *EditorData, *EditorData->SubTrees[Index], Index);
+			AppendState(Built, *EditorData, *EditorData->SubTrees[Index], Index);
 		}
 	}
-	AppendBindingRecords(Records, *EditorData);
+	AppendBindingRecords(Built, *EditorData);
+	TArray<FValue> Records;
+	for (FValue& Record : Built)
+	{
+		// The page holds 8 nodes of its own.
+		AppendSplit(Records, MoveTemp(Record), QueryValueNodeBudget - 8);
+	}
 
 	TArray<FValue> Page;
 	int32 NodeCount = 8;

@@ -311,7 +311,18 @@ TArray<FString> BodyNames(const TSharedPtr<FJsonObject>& Document, const TCHAR* 
 	{
 		for (const TSharedPtr<FJsonValue>& Value : *Values)
 		{
-			Names.Add(Value->AsString());
+			// A row is a name, or an object with Name.
+			const TSharedPtr<FJsonObject>* Row = nullptr;
+			FString Name;
+			if (Value->TryGetObject(Row))
+			{
+				(*Row)->TryGetStringField(TEXT("Name"), Name);
+			}
+			else
+			{
+				Value->TryGetString(Name);
+			}
+			Names.Add(Name);
 		}
 	}
 	return Names;

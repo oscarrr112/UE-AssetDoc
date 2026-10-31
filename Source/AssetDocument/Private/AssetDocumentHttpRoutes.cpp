@@ -427,6 +427,9 @@ TSharedPtr<FJsonObject> HandleExtract(const TSharedRef<FAssetDocumentService>& S
 	TryGetBoolFieldAny(Json, {TEXT("include_all_writable"), TEXT("IncludeAllWritable")}, ExtractRequest.bIncludeAllWritable);
 	// The extract a client edits carries its BaseRevision (a stale apply of it is refused: Document.StaleBase).
 	ExtractRequest.bIncludeBaseRevision = true;
+	// Graph node sizes beside the document (the result's "layout"), unless include_layout is false.
+	ExtractRequest.bIncludeLayout = true;
+	TryGetBoolFieldAny(Json, {TEXT("include_layout"), TEXT("IncludeLayout")}, ExtractRequest.bIncludeLayout);
 
 	const FAssetDocumentResult Result = RunOnGameThread([Service, ExtractRequest]()
 	{

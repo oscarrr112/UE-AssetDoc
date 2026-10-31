@@ -67,8 +67,8 @@ complete; transitions are complete values except `Conditions`.
 | Condition operand / indent / evaluation mode, task enabled / considered for completion | Supported | |
 | Transitions: all triggers except delegate, all target kinds, priority, delay, enabled, conditions | Supported | completion triggers cannot be delayed (`InvalidDelay`) |
 | Property bindings: parameters, context data, evaluators, global tasks, state parameters, events, tasks / conditions of parent states, property functions (nested) | Supported | accessibility and type checked like the binding menu |
-| `OnDelegate` delegate listener / dispatcher bindings | Unsupported | the binding is a delegate dispatcher pairing the document does not model; the trigger can be read |
-| Output bindings, property references from outputs | Read-only | not part of the authored bindings |
+| `OnDelegate` delegate listener (the dispatcher a transition listens to) | Read-only | extracted as the transition's `Delegate: {"Source": "<ref>:<dispatcher>"}` (the binding targeting `<transition ID>.DelegateListener`); listed unchanged or omitted it is kept, a changed one fails with `StateTree.DelegateReadOnly`. UE test `UEAssetDoc.Fidelity.StateTree.OutputAndDelegateBindings` |
+| Output bindings (an output property bound to a parameter) | Read-only | extracted as the node's `OutputBindings: {"<output path>": "<ref>:<parameter>"}` (`Node:` prefix for a node-struct output); listed unchanged or omitted they are kept, a changed one fails with `StateTree.OutputBindingsReadOnly`. Property references from outputs are not shown. UE test `UEAssetDoc.Fidelity.StateTree.OutputAndDelegateBindings` |
 | Apply into an open StateTree editor | Supported | in place; the editor's view model refreshes its views on the apply's edits and on a rollback (no extra handling); test `StateTree.OpenEditorApply` |
 | Editor colors, themes, expansion, `bExpanded` | Unsupported | editor presentation only |
 | Editor data extensions / custom editor data classes' extra fields | Unsupported | schema-specific; Inspect shows the editor data class |

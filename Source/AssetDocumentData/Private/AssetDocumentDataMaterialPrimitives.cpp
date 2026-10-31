@@ -210,7 +210,13 @@ TArray<FString> ExpressionClassLabels()
 	return Labels;
 }
 
-UClass* ResolveExpressionClass(const FString& Text, FString& OutProblem)
+// Classes the Material Editor does not place, whose nodes the engine does not save either (a deprecated class, or one
+// replaced by a newer version); an older material can still hold nodes of them.
+constexpr EClassFlags UnplaceableClassFlags = CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists;
+
+// bExisting: the class of a node the graph already holds (read as it is, even when it can no longer be placed);
+// otherwise the class of a new node.
+UClass* ResolveExpressionClass(const FString& Text, FString& OutProblem, bool bExisting = false)
 {
 	UClass* Class = nullptr;
 	if (Text.StartsWith(TEXT("/")))
@@ -233,7 +239,7 @@ UClass* ResolveExpressionClass(const FString& Text, FString& OutProblem)
 			Suggestions.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" Did you mean: %s?"), *FString::Join(Suggestions, TEXT(", "))));
 		return nullptr;
 	}
-	if (Class->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
+	if (!bExisting && Class->HasAnyClassFlags(UnplaceableClassFlags))
 	{
 		OutProblem = FString::Printf(TEXT("%s is abstract or deprecated; the Material Editor cannot place it."), *ClassLabel(*Class));
 		return nullptr;
@@ -987,7 +993,8 @@ UMaterialExpression* CreateExpression(const FHost& Host, UClass& Class, int32 X,
 }
 
 // A new node of each class, created the editor way in a transient material / function (the values an omitted
-// property means). Discarded with the call.
+// property means). Discarded with the call. A class the editor does not place has none: its nodes read every
+// property, and an omitted property keeps the node's value.
 class FBaselines
 {
 public:
@@ -1012,6 +1019,11 @@ public:
 		if (TStrongObjectPtr<UMaterialExpression>* Known = Nodes.Find(&Class))
 		{
 			return Known->Get();
+		}
+		if (Class.HasAnyClassFlags(UnplaceableClassFlags))
+		{
+			Nodes.Add(&Class, TStrongObjectPtr<UMaterialExpression>());
+			return nullptr;
 		}
 		if (!Host.IsValid())
 		{
@@ -1088,6 +1100,10 @@ FValue DescribeExpression(UMaterialExpression& Expression, FBaselines& Baselines
 	Row.Add(TEXT("properties"), EncodeProperties(Expression, Baselines, Context));
 	Row.Add(TEXT("inputs"), EncodeInputs(Expression));
 	Row.Add(TEXT("outputs"), MakeStringArray(OutputLabels(Expression)));
+	if (Expression.GetClass()->HasAnyClassFlags(UnplaceableClassFlags))
+	{
+		Row.AddBool(TEXT("unplaceable"), true);
+	}
 	if (bPins)
 	{
 		Row.Add(TEXT("pins"), DescribePins(Expression));
@@ -1723,7 +1739,8 @@ bool ReadInstanceOverrides(FCall& Call, const FHost& Host, const FValue& Names, 
 } // namespace AssetDocumentDataMaterialPrimitivesLocal
 
 // {classes: [label]} -> {classes: {label: {properties: {every authored property of a new node}, pins}}}: the
-// values an omitted property means, and the pins of a new node (expression catalogue lookup).
+// values an omitted property means, and the pins of a new node (expression catalogue lookup). A class the editor
+// does not place (deprecated, or replaced by a newer version) has no row.
 bool ReadClasses(FCall& Call, const FHost& Host, const FValue& Labels, FObjectBuilder& Result)
 {
 	FBaselines Baselines(Host.Function != nullptr);
@@ -1733,7 +1750,7 @@ bool ReadClasses(FCall& Call, const FHost& Host, const FValue& Labels, FObjectBu
 	{
 		const FValue& Label = Labels.Elements[Index];
 		FString Problem;
-		UClass* Class = Label.Kind == EAssetDocumentRuntimeValueKind::String ? ResolveExpressionClass(Label.StringValue, Problem) : nullptr;
+		UClass* Class = Label.Kind == EAssetDocumentRuntimeValueKind::String ? ResolveExpressionClass(Label.StringValue, Problem, true) : nullptr;
 		if (Class == nullptr)
 		{
 			return Call.Args.Fail(TEXT("Material.UnknownExpressionClass"), Problem.IsEmpty() ? FString(TEXT("A class is a string.")) : Problem,

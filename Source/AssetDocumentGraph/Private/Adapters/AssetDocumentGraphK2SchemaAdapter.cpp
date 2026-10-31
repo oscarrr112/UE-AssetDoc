@@ -7,6 +7,8 @@
 // Contract: docs/architecture/asset-document-graph-primitives.md §5-§6.
 
 #include "Adapters/AssetDocumentGraphBuiltinAdapters.h"
+#include "Adapters/AssetDocumentGraphPropertyAccessNode.h"
+#include "AssetDocumentGraphBlueprintOpenEditorHandler.h"
 #include "AssetDocumentGraphEditorConfirmations.h"
 #include "Adapters/AssetDocumentGraphSortedKeys.h"
 
@@ -28,10 +30,12 @@
 #include "Components/ActorComponent.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraphNode_Comment.h"
+#include "EdGraph/EdGraphNode_Documentation.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "K2Node_AddComponent.h"
 #include "K2Node_AddPinInterface.h"
+#include "K2Node_BaseAsyncTask.h"
 #include "K2Node_BaseMCDelegate.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_CallParentFunction.h"
@@ -40,7 +44,9 @@
 #include "K2Node_Composite.h"
 #include "K2Node_CustomEvent.h"
 #include "K2Node_ClassDynamicCast.h"
+#include "K2Node_BreakStruct.h"
 #include "K2Node_DynamicCast.h"
+#include "K2Node_MakeStruct.h"
 #include "K2Node_EditablePinBase.h"
 #include "K2Node_Event.h"
 #include "K2Node_FunctionEntry.h"
@@ -59,6 +65,7 @@
 #include "K2Node_Variable.h"
 #include "K2Node_VariableGet.h"
 #include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
 #include "Kismet2/WildcardNodeUtils.h"
 #include "Kismet2/Kismet2NameValidators.h"
 #include "EdGraphSchema_K2_Actions.h"
@@ -287,6 +294,48 @@ FString SubjectObjectKey(const UEdGraphNode& Node, const FString& Kind)
 			const UBlueprint* SubjectBlueprint = Cast<UBlueprint>(Subject);
 			return JoinKey(Kind, SubjectBlueprint != nullptr && SubjectBlueprint->GeneratedClass != nullptr
 				? OwnerPath(SubjectBlueprint->GeneratedClass.Get()) : OwnerPath(Subject), FString());
+		}
+	}
+	return FString();
+}
+
+// An async-task node (Async Load Game From Slot, a gameplay ability task) whose palette action is a function
+// spawner of its factory function: keyed by the factory function, as ComputeSpawnerBaseKey keys that spawner.
+// Empty for async-task classes with one plain action of their own (AI MoveTo), which key as plain nodes.
+FString AsyncTaskFactoryKey(const UK2Node_BaseAsyncTask& Node, const FString& Kind)
+{
+	// Read through reflection rather than GetFactoryFunction, which logs an error for a node whose factory class
+	// or function is gone (such a node keys as a plain node and reports what it names).
+	static const FObjectPropertyBase* FactoryClassProperty =
+		FindFProperty<FObjectPropertyBase>(UK2Node_BaseAsyncTask::StaticClass(), TEXT("ProxyFactoryClass"));
+	static const FNameProperty* FactoryNameProperty =
+		FindFProperty<FNameProperty>(UK2Node_BaseAsyncTask::StaticClass(), TEXT("ProxyFactoryFunctionName"));
+	const UClass* ProxyFactoryClass = FactoryClassProperty != nullptr
+		? Cast<UClass>(FactoryClassProperty->GetObjectPropertyValue_InContainer(&Node)) : nullptr;
+	const FName* FactoryName = FactoryNameProperty != nullptr ? FactoryNameProperty->ContainerPtrToValuePtr<FName>(&Node) : nullptr;
+	const UFunction* Factory = ProxyFactoryClass != nullptr && FactoryName != nullptr && !FactoryName->IsNone()
+		? ProxyFactoryClass->FindFunctionByName(*FactoryName) : nullptr;
+	const UClass* FactoryClass = Factory != nullptr ? Factory->GetOwnerClass() : nullptr;
+	if (FactoryClass == nullptr)
+	{
+		return FString();
+	}
+	// The database files actions of a Blueprint class under the Blueprint asset.
+	const UBlueprint* FactoryBlueprint = UBlueprint::GetBlueprintFromClass(FactoryClass);
+	const UObject* DatabaseOwner = FactoryBlueprint != nullptr
+		? static_cast<const UObject*>(FactoryBlueprint) : static_cast<const UObject*>(FactoryClass);
+	const FBlueprintActionDatabase::FActionList* Actions = FBlueprintActionDatabase::Get().GetAllActions().Find(FObjectKey(DatabaseOwner));
+	if (Actions == nullptr)
+	{
+		return FString();
+	}
+	const UClass* NodeClass = Node.GetClass();
+	for (const UBlueprintNodeSpawner* Spawner : *Actions)
+	{
+		const UBlueprintFunctionNodeSpawner* FunctionSpawner = Cast<UBlueprintFunctionNodeSpawner>(Spawner);
+		if (FunctionSpawner != nullptr && FunctionSpawner->NodeClass == NodeClass && FunctionSpawner->GetFunction() == Factory)
+		{
+			return JoinKey(Kind, FunctionOwnerPath(Factory), Factory->GetName());
 		}
 	}
 	return FString();
@@ -570,6 +619,14 @@ FString ComputeNodeKey(const UEdGraphNode& Node)
 	if (const UObject* Subject = NodeFieldSubject(Node); Subject != nullptr && HasFieldSpawner(NodeClass, Subject))
 	{
 		return JoinKey(Kind, OwnerPath(Subject), FString());
+	}
+	if (const UK2Node_BaseAsyncTask* AsyncTask = Cast<UK2Node_BaseAsyncTask>(&Node))
+	{
+		const FString FactoryKey = AsyncTaskFactoryKey(*AsyncTask, Kind);
+		if (!FactoryKey.IsEmpty())
+		{
+			return FactoryKey;
+		}
 	}
 	// Plain node classes: the key is "K2:<Kind>" only when the database holds
 	// exactly one plain action for this class (or the node signature picks one).
@@ -1593,26 +1650,161 @@ bool IsTypeSelectorPin(const UEdGraphNode& Node, const UEdGraphPin& Pin)
 	return Select != nullptr && Select->FindPin(TEXT("Index")) == &Pin;
 }
 
-FValue MakeSignatureFlags(const UK2Node_FunctionEntry& Entry)
-{
-	const int32 Flags = Entry.GetFunctionFlags();
-	return FObjectBuilder()
-		.AddBool(TEXT("pure"), (Flags & FUNC_BlueprintPure) != 0)
-		.AddBool(TEXT("const"), (Flags & FUNC_Const) != 0)
-		.AddBool(TEXT("call_in_editor"), Entry.MetaData.bCallInEditor)
-		.AddString(TEXT("access"), AccessToString(Flags))
-		.AddString(TEXT("category"), Entry.MetaData.Category.ToString())
-		.AddString(TEXT("tooltip"), Entry.MetaData.ToolTip.ToString())
-		.AddString(TEXT("keywords"), Entry.MetaData.Keywords.ToString())
-		.Build();
-}
-
 // A colour as the Details panel edits it, its channels rounded to 6 decimals (float noise left out).
 FValue K2CommentBoxColor(const FLinearColor& Color)
 {
 	auto Channel = [](float Value) { return MakeNumber(FMath::RoundToDouble(static_cast<double>(Value) * 1e6) / 1e6); };
 	return FObjectBuilder().Add(TEXT("R"), Channel(Color.R)).Add(TEXT("G"), Channel(Color.G)).Add(TEXT("B"), Channel(Color.B))
 		.Add(TEXT("A"), Channel(Color.A)).Build();
+}
+
+// The Details panel's graph metadata a function and a macro share: Description (tooltip), Category, Keywords,
+// Compact Node Title and Instance Color.
+void K2AddSharedGraphMetadata(FObjectBuilder& Builder, const FKismetUserDeclaredFunctionMetadata& MetaData)
+{
+	Builder.AddString(TEXT("category"), MetaData.Category.ToString())
+		.AddString(TEXT("tooltip"), MetaData.ToolTip.ToString())
+		.AddString(TEXT("keywords"), MetaData.Keywords.ToString())
+		.AddString(TEXT("compact_node_title"), MetaData.CompactNodeTitle.ToString())
+		.Add(TEXT("instance_color"), K2CommentBoxColor(MetaData.InstanceTitleColor));
+}
+
+FValue MakeSignatureFlags(const UK2Node_FunctionEntry& Entry)
+{
+	const int32 Flags = Entry.GetFunctionFlags();
+	FObjectBuilder Builder;
+	Builder.AddBool(TEXT("pure"), (Flags & FUNC_BlueprintPure) != 0)
+		.AddBool(TEXT("const"), (Flags & FUNC_Const) != 0)
+		.AddBool(TEXT("exec"), (Flags & FUNC_Exec) != 0)
+		.AddBool(TEXT("call_in_editor"), Entry.MetaData.bCallInEditor)
+		.AddBool(TEXT("thread_safe"), Entry.MetaData.bThreadSafe)
+		.AddBool(TEXT("unsafe_during_actor_construction"), Entry.MetaData.bIsUnsafeDuringActorConstruction)
+		.AddBool(TEXT("deprecated"), Entry.MetaData.bIsDeprecated)
+		.AddString(TEXT("deprecation_message"), Entry.MetaData.DeprecationMessage)
+		.AddString(TEXT("access"), AccessToString(Flags));
+	K2AddSharedGraphMetadata(Builder, Entry.MetaData);
+	return Builder.Build();
+}
+
+// A macro graph's entry tunnel holds the macro's Details metadata (FBlueprintEditorUtils::GetGraphFunctionMetaData).
+UK2Node_Tunnel* FindMacroEntryTunnel(UEdGraph& Graph)
+{
+	const UBlueprint* Blueprint = FBlueprintEditorUtils::FindBlueprintForGraph(&Graph);
+	if (Blueprint == nullptr || !Blueprint->MacroGraphs.Contains(&Graph))
+	{
+		return nullptr;
+	}
+	for (UEdGraphNode* Node : Graph.Nodes)
+	{
+		UK2Node_Tunnel* Tunnel = Cast<UK2Node_Tunnel>(Node);
+		if (Tunnel != nullptr && Tunnel->GetClass() == UK2Node_Tunnel::StaticClass() && Tunnel->bCanHaveOutputs && !Tunnel->bCanHaveInputs)
+		{
+			return Tunnel;
+		}
+	}
+	return nullptr;
+}
+
+FValue MakeMacroSignatureFlags(const UK2Node_Tunnel& Entry)
+{
+	FObjectBuilder Builder;
+	K2AddSharedGraphMetadata(Builder, Entry.MetaData);
+	return Builder.Build();
+}
+
+// Reads {R, G, B, A?} (A defaults to 1).
+bool K2ReadColor(FReader& Reader, FStringView Key, FLinearColor& OutColor)
+{
+	const FValue* Object = nullptr;
+	if (!Reader.Object(Key, Object))
+	{
+		return false;
+	}
+	FReader Channels = Reader.Child(Key, *Object);
+	double R = 0.0, G = 0.0, B = 0.0, A = 1.0;
+	if (!Channels.OnlyFields({TEXT("R"), TEXT("G"), TEXT("B"), TEXT("A")}) || !Channels.Number(TEXT("R"), R)
+		|| !Channels.Number(TEXT("G"), G) || !Channels.Number(TEXT("B"), B) || !Channels.Number(TEXT("A"), A, false))
+	{
+		return false;
+	}
+	OutColor = FLinearColor(static_cast<float>(R), static_cast<float>(G), static_cast<float>(B), static_cast<float>(A));
+	return true;
+}
+
+// Sets the Details metadata a function and a macro share (category, tooltip, keywords, compact_node_title,
+// instance_color) as FBlueprintGraphActionDetails does. Function may be null (not compiled yet).
+bool K2SetSharedGraphMetadata(FReader& Reader, UEdGraph& Graph, FKismetUserDeclaredFunctionMetadata& MetaData, UFunction* Function)
+{
+	if (Reader.Has(TEXT("category")))
+	{
+		FString Category;
+		if (!Reader.String(TEXT("category"), Category))
+		{
+			return false;
+		}
+		FBlueprintEditorUtils::SetBlueprintFunctionOrMacroCategory(
+			&Graph, FText::TrimPrecedingAndTrailing(FText::FromString(Category)), /*bDontRecompile=*/true);
+	}
+	if (Reader.Has(TEXT("tooltip")))
+	{
+		FString Tooltip;
+		if (!Reader.String(TEXT("tooltip"), Tooltip))
+		{
+			return false;
+		}
+		MetaData.ToolTip = FText::FromString(Tooltip);
+		if (Function != nullptr)
+		{
+			Function->SetMetaData(FBlueprintMetadata::MD_Tooltip, *Tooltip);
+		}
+	}
+	if (Reader.Has(TEXT("keywords")))
+	{
+		FString Keywords;
+		if (!Reader.String(TEXT("keywords"), Keywords))
+		{
+			return false;
+		}
+		const FText Trimmed = FText::TrimPrecedingAndTrailing(FText::FromString(Keywords));
+		MetaData.Keywords = Trimmed;
+		if (Function != nullptr)
+		{
+			Function->SetMetaData(FBlueprintMetadata::MD_FunctionKeywords, *Trimmed.ToString());
+		}
+	}
+	if (Reader.Has(TEXT("compact_node_title")))
+	{
+		// FBlueprintGraphActionDetails::OnCompactNodeTitleTextCommitted.
+		FString Title;
+		if (!Reader.String(TEXT("compact_node_title"), Title))
+		{
+			return false;
+		}
+		const FText Trimmed = FText::TrimPrecedingAndTrailing(FText::FromString(Title));
+		MetaData.CompactNodeTitle = Trimmed;
+		if (Function != nullptr)
+		{
+			if (Trimmed.IsEmpty())
+			{
+				Function->RemoveMetaData(FBlueprintMetadata::MD_CompactNodeTitle);
+			}
+			else
+			{
+				Function->SetMetaData(FBlueprintMetadata::MD_CompactNodeTitle, *Trimmed.ToString());
+			}
+		}
+	}
+	if (Reader.Has(TEXT("instance_color")))
+	{
+		// The Instance Color picker (FBlueprintGraphActionDetails::ColorBlock_OnMouseButtonDown).
+		FLinearColor Color;
+		if (!K2ReadColor(Reader, TEXT("instance_color"), Color))
+		{
+			return false;
+		}
+		MetaData.InstanceTitleColor = Color;
+	}
+	return true;
 }
 
 FValue K2CommentBoxEnum(const UObject& Owner, FName PropertyName)
@@ -1637,6 +1829,144 @@ void K2DescribeCommentBox(const UEdGraphNode_Comment& Comment, FObjectBuilder& S
 	Defaults.AddBool(TEXT("bColorCommentBubble"), Fresh->bColorCommentBubble);
 	Settings.Add(TEXT("MoveMode"), K2CommentBoxEnum(Comment, GET_MEMBER_NAME_CHECKED(UEdGraphNode_Comment, MoveMode)));
 	Defaults.Add(TEXT("MoveMode"), K2CommentBoxEnum(*Editor, GET_MEMBER_NAME_CHECKED(UGraphEditorSettings, DefaultCommentNodeMoveMode)));
+}
+
+// A custom event's replication flags as its Details panel shows them: an event that overrides a parent's event
+// takes the parent's (and the panel does not let them change).
+uint32 K2CustomEventNetFlags(const UK2Node_CustomEvent& Event)
+{
+	if (Event.IsOverride())
+	{
+		const UBlueprint* Blueprint = Event.GetBlueprint();
+		const UFunction* Parent = Blueprint != nullptr && Blueprint->ParentClass != nullptr
+			? FindUField<UFunction>(Blueprint->ParentClass, Event.CustomFunctionName) : nullptr;
+		return Parent != nullptr ? static_cast<uint32>(Parent->FunctionFlags & FUNC_NetFuncFlags) : 0u;
+	}
+	return Event.FunctionFlags & static_cast<uint32>(FUNC_NetFuncFlags);
+}
+
+// Details > Replicates, named after the UFUNCTION specifier each entry stands for.
+const TCHAR* K2CustomEventReplication(uint32 NetFlags)
+{
+	if ((NetFlags & FUNC_Net) == 0)
+	{
+		return TEXT("None");
+	}
+	if ((NetFlags & FUNC_NetMulticast) != 0)
+	{
+		return TEXT("Multicast");
+	}
+	if ((NetFlags & FUNC_NetServer) != 0)
+	{
+		return TEXT("Server");
+	}
+	return (NetFlags & FUNC_NetClient) != 0 ? TEXT("Client") : TEXT("None");
+}
+
+// A custom event's Details-panel settings: Replicates, Reliable, Call In Editor, Deprecated and its message.
+void K2DescribeCustomEvent(const UK2Node_CustomEvent& Event, FObjectBuilder& Settings, FObjectBuilder& Defaults)
+{
+	const uint32 NetFlags = K2CustomEventNetFlags(Event);
+	const uint32 Reliable = Event.IsOverride() ? NetFlags : Event.FunctionFlags;
+	Settings.AddString(TEXT("Replication"), K2CustomEventReplication(NetFlags));
+	Defaults.AddString(TEXT("Replication"), TEXT("None"));
+	Settings.AddBool(TEXT("Reliable"), (Reliable & FUNC_NetReliable) != 0);
+	Defaults.AddBool(TEXT("Reliable"), false);
+	Settings.AddBool(TEXT("CallInEditor"), Event.bCallInEditor);
+	Defaults.AddBool(TEXT("CallInEditor"), false);
+	Settings.AddBool(TEXT("Deprecated"), Event.bIsDeprecated);
+	Defaults.AddBool(TEXT("Deprecated"), false);
+	Settings.AddString(TEXT("DeprecationMessage"), Event.DeprecationMessage);
+	Defaults.AddString(TEXT("DeprecationMessage"), FString());
+}
+
+bool IsK2CustomEventSetting(FStringView Path)
+{
+	return Path == TEXTVIEW("Replication") || Path == TEXTVIEW("Reliable") || Path == TEXTVIEW("CallInEditor")
+		|| Path == TEXTVIEW("Deprecated") || Path == TEXTVIEW("DeprecationMessage");
+}
+
+// Sets one custom event setting as its Details panel does (FBlueprintGraphActionDetails: SetNetFlags,
+// OnIsReliableReplicationFunctionModified, OnEditorCallableEventModified, OnDeprecatedChanged,
+// OnDeprecationMessageTextCommitted). The caller notifies the Blueprint (structural).
+bool K2SetCustomEventSetting(UK2Node_CustomEvent& Event, FStringView Path, const FValue& Value, FAssetDocumentGraphError& OutError)
+{
+	const bool bText = Path == TEXTVIEW("Replication") || Path == TEXTVIEW("DeprecationMessage");
+	if (bText ? Value.Kind != EAssetDocumentRuntimeValueKind::String : Value.Kind != EAssetDocumentRuntimeValueKind::Boolean)
+	{
+		OutError.Set(TEXT("Graph.InvalidArgument"), FString::Printf(TEXT("%s is %s."), *FString(Path),
+			bText ? TEXT("a string") : TEXT("true or false")), TEXT("/value"));
+		return false;
+	}
+	if (Path == TEXTVIEW("Replication") || Path == TEXTVIEW("Reliable"))
+	{
+		uint32 Wanted = 0;
+		if (Path == TEXTVIEW("Replication"))
+		{
+			static const TPair<const TCHAR*, uint32> Choices[] = {
+				{TEXT("None"), 0u}, {TEXT("Multicast"), static_cast<uint32>(FUNC_NetMulticast)},
+				{TEXT("Server"), static_cast<uint32>(FUNC_NetServer)}, {TEXT("Client"), static_cast<uint32>(FUNC_NetClient)}};
+			const TPair<const TCHAR*, uint32>* Choice = nullptr;
+			for (const TPair<const TCHAR*, uint32>& Item : Choices)
+			{
+				if (Value.StringValue.Equals(Item.Key, ESearchCase::CaseSensitive))
+				{
+					Choice = &Item;
+				}
+			}
+			if (Choice == nullptr)
+			{
+				OutError.Set(TEXT("Graph.InvalidArgument"), FString::Printf(
+					TEXT("Replication '%s' is not one of None, Multicast, Server, Client."), *Value.StringValue), TEXT("/value"));
+				return false;
+			}
+			Wanted = Choice->Value;
+		}
+		const uint32 NetFlags = K2CustomEventNetFlags(Event);
+		const bool bSame = Path == TEXTVIEW("Replication")
+			? FCString::Strcmp(K2CustomEventReplication(NetFlags), K2CustomEventReplication(Wanted != 0 ? (Wanted | FUNC_Net) : 0u)) == 0
+			: (((Event.IsOverride() ? NetFlags : Event.FunctionFlags) & FUNC_NetReliable) != 0) == Value.BooleanValue;
+		if (bSame)
+		{
+			return true;
+		}
+		if (Event.IsOverride())
+		{
+			OutError.Set(TEXT("Graph.PropertyNotEditable"), FString::Printf(
+				TEXT("%s overrides an event declared in a parent class; its replication settings are the parent's."),
+				*Event.CustomFunctionName.ToString()), TEXT("/value"));
+			return false;
+		}
+		Event.Modify();
+		if (Path == TEXTVIEW("Replication"))
+		{
+			Event.FunctionFlags &= ~static_cast<uint32>(FUNC_Net | FUNC_NetMulticast | FUNC_NetServer | FUNC_NetClient);
+			Event.FunctionFlags |= Wanted != 0 ? (Wanted | static_cast<uint32>(FUNC_Net)) : 0u;
+		}
+		else if (Value.BooleanValue)
+		{
+			Event.FunctionFlags |= static_cast<uint32>(FUNC_NetReliable);
+		}
+		else
+		{
+			Event.FunctionFlags &= ~static_cast<uint32>(FUNC_NetReliable);
+		}
+		return true;
+	}
+	Event.Modify();
+	if (Path == TEXTVIEW("CallInEditor"))
+	{
+		Event.bCallInEditor = Value.BooleanValue;
+	}
+	else if (Path == TEXTVIEW("Deprecated"))
+	{
+		Event.bIsDeprecated = Value.BooleanValue;
+	}
+	else
+	{
+		Event.DeprecationMessage = Value.StringValue;
+	}
+	return true;
 }
 
 FString AuthoredName(const UEdGraphNode& Node)
@@ -1778,6 +2108,13 @@ bool CallCanTogglePurity(const UK2Node_CallFunction& Call)
 // Whether Node reports "Pure" (DescribeNode extras properties / property_defaults) and its default.
 bool DescribePurity(const UEdGraphNode& Node, bool& bOutPure, bool& bOutDefault)
 {
+	if (const UK2Node_DynamicCast* DynamicCast = Cast<UK2Node_DynamicCast>(&Node))
+	{
+		// "Convert to pure cast"; a cast is impure unless the editor's Favor Pure Cast Nodes setting placed it pure.
+		bOutPure = DynamicCast->IsNodePure();
+		bOutDefault = false;
+		return true;
+	}
 	if (const UK2Node_VariableGet* Get = Cast<UK2Node_VariableGet>(&Node))
 	{
 		if (!VariableGetCanTogglePurity(*Get))
@@ -1798,9 +2135,16 @@ bool DescribePurity(const UEdGraphNode& Node, bool& bOutPure, bool& bOutDefault)
 	return true;
 }
 
-// "Convert to Validated Get / Branch / pure Get" or "Show / Hide Exec pins".
+// "Convert to Validated Get / Branch / pure Get", "Show / Hide Exec pins" or "Convert to pure / impure cast".
 bool TogglePurity(UEdGraphNode& Node)
 {
+	if (UK2Node_DynamicCast* DynamicCast = Cast<UK2Node_DynamicCast>(&Node))
+	{
+		// UK2Node_DynamicCast::TogglePurity without its transaction.
+		DynamicCast->Modify();
+		DynamicCast->SetPurity(!DynamicCast->IsNodePure());
+		return true;
+	}
 	if (UK2Node_VariableGet* Get = Cast<UK2Node_VariableGet>(&Node))
 	{
 		if (!VariableGetCanTogglePurity(*Get))
@@ -1911,6 +2255,171 @@ bool SetSetFieldsShown(UK2Node_SetFieldsInStruct& Node, const FValue& Value, FAs
 	FPropertyChangedEvent Changed(Property, EPropertyChangeType::ValueSet);
 	Node.PostEditChangeProperty(Changed);
 	return true;
+}
+
+// ---- Make / Break Struct pin visibility ("HiddenFields") --------------------------------------
+// A member is hidden on a new node when it or its struct says so (FStructOperationOptionalPinManager::GetRecordDefaults).
+bool K2StructFieldHiddenByDefault(const UScriptStruct* Struct, FName Name)
+{
+	const FProperty* Property = Struct != nullptr ? FindFProperty<FProperty>(Struct, Name) : nullptr;
+	if (Property == nullptr)
+	{
+		return false;
+	}
+	const UStruct* Owner = Property->GetOwnerStruct();
+	return Property->HasMetaData(TEXT("PinHiddenByDefault")) || (Owner != nullptr && Owner->HasMetaData(TEXT("HiddenByDefault")));
+}
+
+TArray<FOptionalPinFromProperty>* K2StructPinOptions(UEdGraphNode& Node)
+{
+	if (Node.IsA<UK2Node_SetFieldsInStruct>())
+	{
+		return nullptr;  // its shown members are "Fields"
+	}
+	if (UK2Node_MakeStruct* Make = Cast<UK2Node_MakeStruct>(&Node))
+	{
+		return &Make->ShowPinForProperties;
+	}
+	UK2Node_BreakStruct* Break = Cast<UK2Node_BreakStruct>(&Node);
+	return Break != nullptr ? &Break->ShowPinForProperties : nullptr;
+}
+
+// The Details panel's "Show pin" checkboxes of a Make / Break Struct node: the members whose pin is hidden, and the
+// ones a new node hides.
+bool K2DescribeHiddenFields(const UEdGraphNode& Node, TArray<FString>& OutHidden, TArray<FString>& OutDefault)
+{
+	TArray<FOptionalPinFromProperty>* Options = K2StructPinOptions(const_cast<UEdGraphNode&>(Node));
+	if (Options == nullptr)
+	{
+		return false;
+	}
+	const UScriptStruct* Struct = CastChecked<UK2Node_StructOperation>(&Node)->StructType;
+	for (const FOptionalPinFromProperty& Field : *Options)
+	{
+		if (!Field.bShowPin)
+		{
+			OutHidden.Add(Field.PropertyName.ToString());
+		}
+		if (K2StructFieldHiddenByDefault(Struct, Field.PropertyName))
+		{
+			OutDefault.Add(Field.PropertyName.ToString());
+		}
+	}
+	return true;
+}
+
+// Sets the hidden members as the Details panel's checkboxes do (PreEditChange / bShowPin / PostEditChangeProperty,
+// which reconstructs the node).
+bool K2SetHiddenFields(UK2Node& Node, TArray<FOptionalPinFromProperty>& Options, const FValue& Value, FAssetDocumentGraphError& OutError)
+{
+	TSet<FName> Hidden;
+	if (Value.Kind != EAssetDocumentRuntimeValueKind::Array)
+	{
+		OutError.Set(TEXT("Graph.InvalidArgument"), TEXT("HiddenFields is an array of member names."), TEXT("/value"));
+		return false;
+	}
+	for (int32 Index = 0; Index < Value.Elements.Num(); ++Index)
+	{
+		const FValue& Element = Value.Elements[Index];
+		const FName Name = Element.Kind == EAssetDocumentRuntimeValueKind::String ? FName(*Element.StringValue) : NAME_None;
+		const FOptionalPinFromProperty* Field = Options.FindByPredicate([Name](const FOptionalPinFromProperty& Item) { return Item.PropertyName == Name; });
+		if (Name.IsNone() || Field == nullptr || !Field->bCanToggleVisibility)
+		{
+			TArray<FString> Members;
+			for (const FOptionalPinFromProperty& Item : Options)
+			{
+				if (Item.bCanToggleVisibility)
+				{
+					Members.Add(Item.PropertyName.ToString());
+				}
+			}
+			OutError.Set(TEXT("Graph.PropertyNotEditable"), FString::Printf(TEXT("'%s' is not a member whose pin can be hidden. Members: %s."),
+				Element.Kind == EAssetDocumentRuntimeValueKind::String ? *Element.StringValue : TEXT("(not a string)"),
+				*FString::Join(Members, TEXT(", "))), *FString::Printf(TEXT("/value/%d"), Index));
+			return false;
+		}
+		Hidden.Add(Name);
+	}
+	FProperty* Property = FOptionalPinFromProperty::StaticStruct()->FindPropertyByName(GET_MEMBER_NAME_CHECKED(FOptionalPinFromProperty, bShowPin));
+	Node.Modify();
+	Node.PreEditChange(Property);
+	for (FOptionalPinFromProperty& Field : Options)
+	{
+		if (Field.bCanToggleVisibility)
+		{
+			Field.bShowPin = !Hidden.Contains(Field.PropertyName);
+		}
+	}
+	FPropertyChangedEvent Changed(Property, EPropertyChangeType::ValueSet);
+	Node.PostEditChangeProperty(Changed);
+	return true;
+}
+
+// ---- Other node Details properties -------------------------------------------------------------
+// A K2 node's own Details-panel properties (CPF_Edit on instances, declared by a K2 node class: an input event's
+// Consume Input and modifiers, a switch's cases, a Math Expression's text) whose values differ from a new node's (the
+// class defaults). Pin visibility lists have their own settings ("Fields", "HiddenFields"); an input key node's key
+// is part of its action key.
+void K2DescribeDetailsProperties(const UK2Node& Node, FObjectBuilder& Settings, FObjectBuilder& Defaults, bool& bOutAny)
+{
+	const UObject* Fresh = Node.GetClass()->GetDefaultObject();
+	for (TFieldIterator<FProperty> It(Node.GetClass()); It; ++It)
+	{
+		const FProperty* Property = *It;
+		const UClass* Owner = Property->GetOwnerClass();
+		if (!Property->HasAnyPropertyFlags(CPF_Edit) || Property->HasAnyPropertyFlags(CPF_EditConst | CPF_DisableEditOnInstance | CPF_Deprecated)
+			|| Owner == nullptr || !Owner->IsChildOf(UK2Node::StaticClass())
+			|| Property->GetFName() == TEXT("ShowPinForProperties")
+			|| (CastField<FStructProperty>(Property) != nullptr && CastField<FStructProperty>(Property)->Struct->GetFName() == TEXT("Key")))
+		{
+			continue;
+		}
+		const void* Value = Property->ContainerPtrToValuePtr<void>(&Node);
+		const void* Default = Property->ContainerPtrToValuePtr<void>(Fresh);
+		if (Property->Identical(Value, Default))
+		{
+			continue;
+		}
+		Settings.Add(Property->GetName(), EncodePropertyValue(*Property, Value));
+		Defaults.Add(Property->GetName(), EncodePropertyValue(*Property, Default));
+		bOutAny = true;
+	}
+}
+
+// ---- Add Component template -------------------------------------------------------------------
+// The template properties an Add Component node's Details panel changed from the component class's defaults
+// (the mesh, materials, collision) with their values, as the Components region states a component's values: the
+// ones the panel edits on a template (not Visible-only, transient or instance-only ones). A changed value holding
+// an instanced subobject (owned by this template) has no document value; its name is listed in OutInstanced.
+FValue K2AddComponentChangedTemplateProperties(const UK2Node_AddComponent& Node, TArray<FString>& OutInstanced)
+{
+	FObjectBuilder Changed;
+	UActorComponent* Template = Node.GetTemplateFromNode();
+	if (Template == nullptr)
+	{
+		return Changed.Build();
+	}
+	const UObject* Fresh = Template->GetClass()->GetDefaultObject();
+	for (TFieldIterator<FProperty> It(Template->GetClass()); It; ++It)
+	{
+		const FProperty* Property = *It;
+		if (!Property->HasAnyPropertyFlags(CPF_Edit)
+			|| Property->HasAnyPropertyFlags(CPF_EditConst | CPF_Transient | CPF_Deprecated | CPF_DisableEditOnTemplate))
+		{
+			continue;
+		}
+		if (Property->Identical_InContainer(Template, Fresh, 0, PPF_DeepCompareInstances))
+		{
+			continue;
+		}
+		if (Property->ContainsInstancedObjectProperty())
+		{
+			OutInstanced.Add(Property->GetName());
+			continue;
+		}
+		Changed.Add(Property->GetName(), EncodePropertyValue(*Property, Property->ContainerPtrToValuePtr<void>(Template)));
+	}
+	return Changed.Build();
 }
 
 // ---- Promotable operators (Add, Multiply, Less, ...) -------------------------------------------
@@ -2434,6 +2943,24 @@ public:
 				return true;
 			}
 		}
+		if (Match->Spawner->NodeClass != nullptr && (Match->Spawner->NodeClass->IsChildOf<UEdGraphNode_Comment>()
+			|| Match->Spawner->NodeClass->IsChildOf<UEdGraphNode_Documentation>()))
+		{
+			// The editor's comment and documentation spawners size the new node around the node selection of the focused
+			// graph tab of the Blueprint's open editor, whichever graph that tab shows; when no selected node has a widget
+			// (a graph panel rebuilds its widgets on its next tick after NotifyGraphChanged) they take an unset, FLT_MAX
+			// rectangle, which the engine cannot convert. A document node is placed as with the editor closed.
+			ClearOpenEditorGraphSelection(*Blueprint);
+			FSlateRect SelectionBounds(0.f, 0.f, 0.f, 0.f);
+			if (FKismetEditorUtilities::GetNumberOfSelectedNodes(Blueprint) > 0
+				&& !FKismetEditorUtilities::GetBoundsForSelectedNodes(Blueprint, SelectionBounds, 0.f))
+			{
+				OutError.Set(TEXT("Graph.EditorSelectionUnusable"), FString::Printf(
+					TEXT("Action %s sizes its node around the nodes selected in the open Blueprint editor, which cannot be measured now. "
+						"Clear the selection in the editor (or close the editor) and apply again."), *Request.ActionKey));
+				return false;
+			}
+		}
 		TSet<UEdGraphNode*> Before(Request.Graph->Nodes);
 		UEdGraphNode* Node = Match->Spawner->Invoke(Request.Graph, Match->Bindings, Location);
 		if (Node == nullptr)
@@ -2530,6 +3057,11 @@ public:
 			}
 			Extras.Add(TEXT("user_pins"), MakeStringArray(Names));
 		}
+		if (Out.ImplicitRole == TEXT("entry") && !Node.IsA<UK2Node_FunctionEntry>() && Node.GetGraph() != nullptr
+			&& FindMacroEntryTunnel(*Node.GetGraph()) == &Node)
+		{
+			Extras.Add(TEXT("signature_flags"), MakeMacroSignatureFlags(*CastChecked<UK2Node_Tunnel>(&Node)));
+		}
 		if (const UK2Node_FunctionEntry* Entry = Cast<UK2Node_FunctionEntry>(&Node))
 		{
 			Extras.Add(TEXT("signature_flags"), MakeSignatureFlags(*Entry));
@@ -2607,10 +3139,45 @@ public:
 			K2DescribeCommentBox(*Comment, Settings, SettingDefaults);
 			bSettings = true;
 		}
+		if (PropertyAccessNode::IsPropertyAccessNode(Node))
+		{
+			// A Property Access node's path and call site (no defaults: omitted keeps them).
+			PropertyAccessNode::Describe(Node, Settings);
+			bSettings = true;
+		}
+		if (const UK2Node_CustomEvent* CustomEvent = Cast<UK2Node_CustomEvent>(&Node))
+		{
+			K2DescribeCustomEvent(*CustomEvent, Settings, SettingDefaults);
+			bSettings = true;
+		}
+		TArray<FString> HiddenFields;
+		TArray<FString> HiddenByDefault;
+		if (K2DescribeHiddenFields(Node, HiddenFields, HiddenByDefault))
+		{
+			// "HiddenFields": the members whose pin the Details panel hides (a new node hides the ones marked so).
+			Settings.Add(TEXT("HiddenFields"), MakeStringArray(HiddenFields));
+			SettingDefaults.Add(TEXT("HiddenFields"), MakeStringArray(HiddenByDefault));
+			bSettings = true;
+		}
+		if (const UK2Node* K2Node = Cast<UK2Node>(&Node))
+		{
+			K2DescribeDetailsProperties(*K2Node, Settings, SettingDefaults, bSettings);
+		}
 		if (bSettings)
 		{
 			Extras.Add(TEXT("properties"), Settings.Build());
 			Extras.Add(TEXT("property_defaults"), SettingDefaults.Build());
+		}
+		if (const UK2Node_AddComponent* AddComponent = Cast<UK2Node_AddComponent>(&Node))
+		{
+			// "template_changed": the template properties that differ from the component class's defaults;
+			// "template_instanced": changed ones holding instanced subobjects, which have no document value.
+			TArray<FString> Instanced;
+			Extras.Add(TEXT("template_changed"), K2AddComponentChangedTemplateProperties(*AddComponent, Instanced));
+			if (!Instanced.IsEmpty())
+			{
+				Extras.Add(TEXT("template_instanced"), MakeStringArray(Instanced));
+			}
 		}
 		Out.Extras = Extras.Build();
 	}
@@ -3313,6 +3880,24 @@ public:
 		bool& bOutHandled, FAssetDocumentGraphError& OutError) const override
 	{
 		bOutHandled = false;
+		if (PropertyAccessNode::IsPropertyAccessNode(Node))
+		{
+			const bool bSet = PropertyAccessNode::SetSetting(Node, Path, Value, bOutHandled, OutError);
+			if (bOutHandled)
+			{
+				return bSet;
+			}
+		}
+		if (IsK2CustomEventSetting(Path))
+		{
+			UK2Node_CustomEvent* CustomEvent = Cast<UK2Node_CustomEvent>(&Node);
+			if (CustomEvent == nullptr)
+			{
+				return true;
+			}
+			bOutHandled = true;
+			return K2SetCustomEventSetting(*CustomEvent, Path, Value, OutError);
+		}
 		if (Path == TEXTVIEW("LocalVariables"))
 		{
 			UK2Node_FunctionEntry* Entry = Cast<UK2Node_FunctionEntry>(&Node);
@@ -3332,6 +3917,16 @@ public:
 			}
 			bOutHandled = true;
 			return SetDelegateFunction(*CreateDelegate, Value, OutError);
+		}
+		if (Path == TEXTVIEW("HiddenFields"))
+		{
+			TArray<FOptionalPinFromProperty>* Options = K2StructPinOptions(Node);
+			if (Options == nullptr)
+			{
+				return true;
+			}
+			bOutHandled = true;
+			return K2SetHiddenFields(*CastChecked<UK2Node>(&Node), *Options, Value, OutError);
 		}
 		if (Path == TEXTVIEW("Fields"))
 		{
@@ -3380,13 +3975,21 @@ public:
 	{
 		UBlueprint* Blueprint = BlueprintOf(&Asset, &Graph);
 		UK2Node_FunctionEntry* Entry = FindFunctionEntry(Graph);
+		if (Blueprint != nullptr && Entry == nullptr)
+		{
+			if (UK2Node_Tunnel* MacroEntry = FindMacroEntryTunnel(Graph))
+			{
+				return SetMacroFlags(*Blueprint, Graph, *MacroEntry, Flags, OutFlags, OutError);
+			}
+		}
 		if (Blueprint == nullptr || Entry == nullptr)
 		{
 			return IAssetDocumentGraphSchemaAdapter::SetFunctionFlags(Asset, Graph, Flags, OutFlags, OutError);
 		}
 		FReader Reader(Flags, TEXT("/flags"), OutError);
-		if (!Reader.OnlyFields({TEXT("pure"), TEXT("const"), TEXT("call_in_editor"), TEXT("access"),
-			TEXT("category"), TEXT("tooltip"), TEXT("keywords")}))
+		if (!Reader.OnlyFields({TEXT("pure"), TEXT("const"), TEXT("exec"), TEXT("call_in_editor"), TEXT("thread_safe"),
+			TEXT("unsafe_during_actor_construction"), TEXT("deprecated"), TEXT("deprecation_message"), TEXT("access"),
+			TEXT("category"), TEXT("tooltip"), TEXT("keywords"), TEXT("compact_node_title"), TEXT("instance_color")}))
 		{
 			return false;
 		}
@@ -3398,7 +4001,8 @@ public:
 			const FValue Current = OutFlags;
 			FAssetDocumentGraphError Ignored;
 			FReader Have(Current, TEXT("/flags"), Ignored);
-			for (const TCHAR* Key : {TEXT("pure"), TEXT("const"), TEXT("call_in_editor")})
+			for (const TCHAR* Key : {TEXT("pure"), TEXT("const"), TEXT("exec"), TEXT("call_in_editor"), TEXT("thread_safe"),
+				TEXT("unsafe_during_actor_construction"), TEXT("deprecated")})
 			{
 				bool bWanted = false;
 				bool bHave = false;
@@ -3408,7 +4012,8 @@ public:
 						TEXT("Graph %s overrides an inherited function: its %s flag is the overridden function's."), *Graph.GetName(), Key), Key);
 				}
 			}
-			for (const TCHAR* Key : {TEXT("access"), TEXT("category"), TEXT("tooltip"), TEXT("keywords")})
+			for (const TCHAR* Key : {TEXT("access"), TEXT("category"), TEXT("tooltip"), TEXT("keywords"), TEXT("compact_node_title"),
+				TEXT("deprecation_message")})
 			{
 				FString Wanted;
 				FString HaveValue;
@@ -3417,6 +4022,14 @@ public:
 					return Reader.Fail(TEXT("Graph.GraphOperationUnsupported"), FString::Printf(
 						TEXT("Graph %s overrides an inherited function: its %s is the overridden function's."), *Graph.GetName(), Key), Key);
 				}
+			}
+			FLinearColor WantedColor;
+			if (Reader.Has(TEXT("instance_color")) && (!K2ReadColor(Reader, TEXT("instance_color"), WantedColor)
+				|| !WantedColor.Equals(Entry->MetaData.InstanceTitleColor, 1e-6f)))
+			{
+				return Reader.Fail(TEXT("Graph.GraphOperationUnsupported"), FString::Printf(
+					TEXT("Graph %s overrides an inherited function: its instance_color is the overridden function's."), *Graph.GetName()),
+					TEXT("instance_color"));
 			}
 			return true;
 		}
@@ -3442,7 +4055,8 @@ public:
 			const bool bCurrent = (Entry->GetExtraFlags() & Flag) != 0;
 			if (bCurrent != bValue)
 			{
-				// FBlueprintGraphActionDetails::OnIsPureFunctionModified / OnIsConstFunctionModified.
+				// FBlueprintGraphActionDetails::OnIsPureFunctionModified / OnIsConstFunctionModified /
+				// OnIsExecFunctionModified.
 				Entry->SetExtraFlags(Entry->GetExtraFlags() ^ Flag);
 				if (Function != nullptr)
 				{
@@ -3452,18 +4066,49 @@ public:
 			}
 			return true;
 		};
-		if (!SetFlag(TEXT("pure"), FUNC_BlueprintPure) || !SetFlag(TEXT("const"), FUNC_Const))
+		if (!SetFlag(TEXT("pure"), FUNC_BlueprintPure) || !SetFlag(TEXT("const"), FUNC_Const) || !SetFlag(TEXT("exec"), FUNC_Exec))
 		{
 			return false;
 		}
-		if (Reader.Has(TEXT("call_in_editor")))
+		// Check boxes of the function's Details panel that live in its metadata block.
+		auto SetMetaBool = [&](const TCHAR* Key, bool& Field, bool bMakesStructural) -> bool
 		{
 			bool bValue = false;
-			if (!Reader.Bool(TEXT("call_in_editor"), bValue))
+			if (!Reader.Has(Key))
+			{
+				return true;
+			}
+			if (!Reader.Bool(Key, bValue))
 			{
 				return false;
 			}
-			Entry->MetaData.bCallInEditor = bValue;
+			if (Field != bValue)
+			{
+				Field = bValue;
+				bStructural |= bMakesStructural;
+			}
+			return true;
+		};
+		// OnDeprecatedChanged marks the Blueprint structurally modified; the others only modified.
+		if (!SetMetaBool(TEXT("call_in_editor"), Entry->MetaData.bCallInEditor, false)
+			|| !SetMetaBool(TEXT("thread_safe"), Entry->MetaData.bThreadSafe, false)
+			|| !SetMetaBool(TEXT("unsafe_during_actor_construction"), Entry->MetaData.bIsUnsafeDuringActorConstruction, false)
+			|| !SetMetaBool(TEXT("deprecated"), Entry->MetaData.bIsDeprecated, true))
+		{
+			return false;
+		}
+		if (Reader.Has(TEXT("deprecation_message")))
+		{
+			FString Message;
+			if (!Reader.String(TEXT("deprecation_message"), Message))
+			{
+				return false;
+			}
+			if (Entry->MetaData.DeprecationMessage != Message)
+			{
+				Entry->MetaData.DeprecationMessage = Message;
+				bStructural = true;
+			}
 		}
 		if (Reader.Has(TEXT("access")))
 		{
@@ -3493,42 +4138,9 @@ public:
 			}
 			bStructural = true;
 		}
-		if (Reader.Has(TEXT("category")))
+		if (!K2SetSharedGraphMetadata(Reader, Graph, Entry->MetaData, Function))
 		{
-			FString Category;
-			if (!Reader.String(TEXT("category"), Category))
-			{
-				return false;
-			}
-			FBlueprintEditorUtils::SetBlueprintFunctionOrMacroCategory(
-				&Graph, FText::TrimPrecedingAndTrailing(FText::FromString(Category)), /*bDontRecompile=*/true);
-		}
-		if (Reader.Has(TEXT("tooltip")))
-		{
-			FString Tooltip;
-			if (!Reader.String(TEXT("tooltip"), Tooltip))
-			{
-				return false;
-			}
-			Entry->MetaData.ToolTip = FText::FromString(Tooltip);
-			if (Function != nullptr)
-			{
-				Function->SetMetaData(FBlueprintMetadata::MD_Tooltip, *Tooltip);
-			}
-		}
-		if (Reader.Has(TEXT("keywords")))
-		{
-			FString Keywords;
-			if (!Reader.String(TEXT("keywords"), Keywords))
-			{
-				return false;
-			}
-			const FText Trimmed = FText::TrimPrecedingAndTrailing(FText::FromString(Keywords));
-			Entry->MetaData.Keywords = Trimmed;
-			if (Function != nullptr)
-			{
-				Function->SetMetaData(FBlueprintMetadata::MD_FunctionKeywords, *Trimmed.ToString());
-			}
+			return false;
 		}
 		RefreshSignatureNode(*Entry);
 		if (bStructural)
@@ -3544,6 +4156,26 @@ public:
 	}
 
 private:
+	// A macro's Details panel: Description (tooltip), Category, Keywords, Compact Node Title and Instance Color, held on
+	// the macro graph's entry tunnel.
+	static bool SetMacroFlags(UBlueprint& Blueprint, UEdGraph& Graph, UK2Node_Tunnel& Entry, const FValue& Flags,
+		FValue& OutFlags, FAssetDocumentGraphError& OutError)
+	{
+		FReader Reader(Flags, TEXT("/flags"), OutError);
+		if (!Reader.OnlyFields({TEXT("category"), TEXT("tooltip"), TEXT("keywords"), TEXT("compact_node_title"), TEXT("instance_color")}))
+		{
+			return false;
+		}
+		FBlueprintEditorUtils::ModifyFunctionMetaData(&Graph);
+		if (!K2SetSharedGraphMetadata(Reader, Graph, Entry.MetaData, nullptr))
+		{
+			return false;
+		}
+		FBlueprintEditorUtils::MarkBlueprintAsModified(&Blueprint);
+		OutFlags = MakeMacroSignatureFlags(Entry);
+		return true;
+	}
+
 	// FKismetDelegateDragDropAction::MakeEvent (name made unique like the Assign node's companion event).
 	static bool SpawnDispatcherEvent(UBlueprint& Blueprint, const FAssetDocumentGraphSpawnRequest& Request,
 		FAssetDocumentGraphSpawnResult& OutResult, FAssetDocumentGraphError& OutError)
@@ -3781,6 +4413,40 @@ private:
 				{
 					return Cast_;
 				}
+			}
+		}
+		// An async-task node keyed by its factory class alone ("K2:AsyncAction:<Class>", the key form before
+		// async-task keys named the factory function): the factory function of that class the palette lists.
+		if (Parts.Num() == 3)
+		{
+			const FString FactoryPrefix = Key + TEXT(":");
+			TArray<const FK2Candidate*> Factories;
+			for (const FK2Candidate& Candidate : Candidates)
+			{
+				if (Candidate.Key.StartsWith(FactoryPrefix, ESearchCase::CaseSensitive) && !Candidate.Key.Contains(TEXT("#"))
+					&& Candidate.Spawner != nullptr && Candidate.Spawner->IsA<UBlueprintFunctionNodeSpawner>()
+					&& Candidate.Spawner->NodeClass != nullptr && Candidate.Spawner->NodeClass->IsChildOf(UK2Node_BaseAsyncTask::StaticClass()))
+				{
+					Factories.Add(&Candidate);
+				}
+			}
+			if (Factories.Num() == 1)
+			{
+				return Factories[0];
+			}
+			if (Factories.Num() > 1)
+			{
+				TArray<FString> Keys;
+				for (const FK2Candidate* Factory : Factories)
+				{
+					Keys.Add(Factory->Key);
+				}
+				Keys.Sort();
+				OutError.Set(TEXT("Graph.ActionAmbiguous"), FString::Printf(
+					TEXT("Action key %s names a class with %d async factory functions; use one of these keys: %s."),
+					*Key, Keys.Num(), *FString::Join(Keys, TEXT(", "))));
+				OutError.AddContext(TEXT("candidates"), MakeStringArray(Keys));
+				return nullptr;
 			}
 		}
 		// A member of the Blueprint's own class named by a short form ("K2:Get:Combat",

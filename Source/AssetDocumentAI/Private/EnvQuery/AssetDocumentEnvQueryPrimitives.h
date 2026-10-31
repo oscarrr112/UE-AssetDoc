@@ -64,8 +64,8 @@ UEdGraphPin* RootOutput(const UEdGraph& Graph);
 TArray<UAIGraphNode*> GetOptionNodes(const UEdGraph& Graph);
 UEnvQueryOption* GetOption(const UAIGraphNode& OptionNode);
 bool IsConnected(const UAIGraphNode& OptionNode);
-// The document key of an option / test node: its graph node's name once a document key was given to it, otherwise its
-// instance's object name. The editor's Undo / Redo renames instances (UAIGraphNode::PostEditUndo -> ResetNodeOwner ->
+// The document key of an option / test node: its graph node's name once a document key was given to it (or when its
+// class does not load and it has no instance), otherwise its instance's object name. The editor's Undo / Redo renames instances (UAIGraphNode::PostEditUndo -> ResetNodeOwner ->
 // Rename(nullptr)) but restores graph node names, so a given key survives them.
 bool HasKeyName(const UEdGraphNode& Node);
 FString NodeKey(const UAIGraphNode& Node);
@@ -106,7 +106,9 @@ UClass* ResolveClass(const FString& Text, ENodeKind Kind, TArray<FString>& OutCa
 // The object a new palette node of Class gets (NewObject + UpdateNodeVersion), in the transient package.
 UObject* NewDefaultsObject(UClass& Class);
 // {name: value} of the Details values of Object: every admitted field (template semantics), sparse over
-// Reference when given (fields with the same document value left out). Codec failures go to OutUnsupported.
+// Reference when given (fields with the same document value left out). A Details property the document cannot carry
+// (no codec for its type, or its value fails to read) goes to OutUnsupported by name and, when it differs from
+// Reference's, reads as the marker {"Unsupported": reason, "Text": export text}.
 // FEnvTraceData values (ProjectionData, TraceData) carry only what FEnvTraceDataCustomization shows.
 FValue EncodeProperties(UObject& Object, UObject* Reference, TArray<FString>& OutUnsupported);
 // A member of an FEnvTraceData the Details panel does not show (VersionNum, SerializedChannel, bCan*) in Value

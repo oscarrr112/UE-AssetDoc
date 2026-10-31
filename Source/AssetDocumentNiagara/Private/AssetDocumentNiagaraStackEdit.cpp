@@ -7,7 +7,8 @@
 //
 // A stack location is {emitter?, group, event?, stage?}: emitter omitted = the system stack; group SystemSpawn,
 // SystemUpdate, EmitterSpawn, EmitterUpdate, ParticleSpawn, ParticleUpdate, EventHandler (event: handler index)
-// or SimulationStage (stage: SimulationStageName).
+// or SimulationStage (stage: the stage's position among the emitter's stages; names may repeat, the "+ Stage" menu
+// adds stages named None. A string names the first stage of that name).
 //   {op: "add_module", <location>, name, script, version?, after?}
 //        the group's "+" for a module script asset: FNiagaraStackGraphUtilities::AddScriptModuleToStack (exported) with
 //        name as the suggested name and the version, inserted after the module "after" (omitted: first), then the
@@ -44,11 +45,14 @@
 //        the handler's Details (FNiagaraEventScriptProperties; SourceEmitter: the source emitter's name, "" = this
 //        emitter): Modify, write, UNiagaraEmitter::PostEditChangeVersionedProperty.
 //   {op: "add_stage", emitter, name, class, after?}  the "+ Stage" menu's simulation stage class (add utilities,
-//        at its index), then the stage's SimulationStageName Details edit.
+//        at its index: after the stage "after", omitted = first), then the stage's SimulationStageName Details edit.
 //   {op: "delete_stage", emitter, stage}         UNiagaraStackSimulationStageGroup::Delete
 //   {op: "move_stage", emitter, stage, after?}   drag and drop of the stage group above the first / below "after"
+//        ("after" is a position before the move)
 //   {op: "stage", emitter, stage, enabled?, name?, properties?, reset?}
 //        the stage's checkbox (SetIsEnabled) and Details (Modify, PreEditChange, write, PostEditChangeProperty).
+// "stage" and "after" of the stage ops are stage positions (or names, as in a stack location); two stages may
+// have one name, as in the editor.
 
 #include "AssetDocumentNiagaraPrimitives.h"
 
@@ -178,6 +182,74 @@ bool RequireHandle(FReader& Op, FStackEdit& Edit, const TCHAR* Field, TSharedPtr
 	return true;
 }
 
+// The emitter's simulation stage at Position (counting only the stages that exist, as the read lists them).
+UNiagaraSimulationStageBase* StackEditStageAt(const FVersionedNiagaraEmitterData& Data, int64 Position)
+{
+	int64 Seen = 0;
+	for (UNiagaraSimulationStageBase* Stage : Data.GetSimulationStages())
+	{
+		if (Stage == nullptr)
+		{
+			continue;
+		}
+		if (Seen == Position)
+		{
+			return Stage;
+		}
+		++Seen;
+	}
+	return nullptr;
+}
+
+// The simulation stage an op's Field names: its position, or (a string) the first stage of that name.
+bool StackEditRequireStage(FReader& Op, const TCHAR* Field, const FVersionedNiagaraEmitterData* Data, const FString& Where,
+	UNiagaraSimulationStageBase*& OutStage)
+{
+	OutStage = nullptr;
+	const FValue* Value = Op.Find(Field);
+	FString Label;
+	if (Value != nullptr && Value->Kind == EAssetDocumentRuntimeValueKind::String)
+	{
+		Label = FString::Printf(TEXT("'%s'"), *Value->StringValue);
+		if (Data != nullptr)
+		{
+			for (UNiagaraSimulationStageBase* Stage : Data->GetSimulationStages())
+			{
+				if (Stage != nullptr && Stage->SimulationStageName.ToString() == Value->StringValue)
+				{
+					OutStage = Stage;
+					break;
+				}
+			}
+		}
+	}
+	else
+	{
+		int64 Position = 0;
+		if (!Op.Int(Field, Position))
+		{
+			return false;
+		}
+		Label = FString::Printf(TEXT("%lld"), Position);
+		OutStage = Data != nullptr && Position >= 0 ? StackEditStageAt(*Data, Position) : nullptr;
+	}
+	if (OutStage == nullptr || OutStage->Script == nullptr)
+	{
+		int32 Count = 0;
+		if (Data != nullptr)
+		{
+			for (const UNiagaraSimulationStageBase* Stage : Data->GetSimulationStages())
+			{
+				Count += Stage != nullptr ? 1 : 0;
+			}
+		}
+		OutStage = nullptr;
+		return Op.Fail(TEXT("Niagara.StageNotFound"), FString::Printf(TEXT("%s has no simulation stage %s (it has %d)."), *Where, *Label, Count),
+			Field);
+	}
+	return true;
+}
+
 // The stack root of the location's graph (the system stack, or the emitter's stack holding all of its groups),
 // refreshed so that it lists what the graph holds now.
 struct FLocation
@@ -246,23 +318,13 @@ bool ResolveLocation(FReader& Op, FStackEdit& Edit, FLocation& Out)
 	}
 	else if (Out.Group == TEXT("SimulationStage"))
 	{
-		FString StageName;
-		if (!Op.String(TEXT("stage"), StageName))
+		UNiagaraSimulationStageBase* Stage = nullptr;
+		if (!StackEditRequireStage(Op, TEXT("stage"), Data, Out.Where, Stage))
 		{
 			return false;
 		}
-		for (const UNiagaraSimulationStageBase* Stage : Data->GetSimulationStages())
-		{
-			if (Stage != nullptr && Stage->Script != nullptr && Stage->SimulationStageName.ToString() == StageName)
-			{
-				Out.UsageId = Stage->Script->GetUsageId();
-				Out.bHasUsageId = true;
-			}
-		}
-		if (!Out.bHasUsageId)
-		{
-			return Op.Fail(TEXT("Niagara.StageNotFound"), FString::Printf(TEXT("%s has no simulation stage '%s'."), *Out.Where, *StageName), TEXT("stage"));
-		}
+		Out.UsageId = Stage->Script->GetUsageId();
+		Out.bHasUsageId = true;
 	}
 	return true;
 }
@@ -1155,7 +1217,8 @@ struct FInputSetter
 		{
 			return Fail(TEXT("Niagara.InvalidInputValue"), FString::Printf(TEXT("'%s' holds no editable data interface."), *InputName(Input)), Where);
 		}
-		// Properties are complete: listed values are written, the others go back to the class defaults.
+		// Properties are complete: listed values are written, the others go back to the class defaults (except a value
+		// the codec has no form for, which the read lists as a marker: it is kept).
 		const FValue* Properties = Interface.Find(TEXT("Properties"));
 		const UObject* Defaults = Current->GetClass()->GetDefaultObject();
 		UNiagaraStackObject* DataObject = Input.GetChildDataObject();
@@ -1185,7 +1248,8 @@ struct FInputSetter
 			};
 			if (Index == INDEX_NONE)
 			{
-				if (!PropertyMatchesDefault(Property, ValuePtr, DefaultPtr) && !Property.ContainsInstancedObjectProperty())
+				if (!PropertyMatchesDefault(Property, ValuePtr, DefaultPtr) && !Property.ContainsInstancedObjectProperty()
+					&& CanEncodeProperty(Property, ValuePtr))
 				{
 					Write([&]() { Property.CopyCompleteValue(ValuePtr, DefaultPtr); });
 				}
@@ -1690,14 +1754,14 @@ bool EditEventHandler(FReader& Op, FStackEdit& Edit)
 		[Object](FProperty&) { Object->Modify(); }, Changed, Skip);
 }
 
-UNiagaraStackSimulationStageGroup* FindStageGroup(UNiagaraStackEntry& Root, const FString& Name)
+UNiagaraStackSimulationStageGroup* FindStageGroup(UNiagaraStackEntry& Root, const UNiagaraSimulationStageBase* Stage)
 {
 	TArray<UNiagaraStackEntry*> Children;
 	Root.GetUnfilteredChildren(Children);
 	for (UNiagaraStackEntry* Child : Children)
 	{
 		UNiagaraStackSimulationStageGroup* Group = Cast<UNiagaraStackSimulationStageGroup>(Child);
-		if (Group != nullptr && Group->GetSimulationStage() != nullptr && Group->GetSimulationStage()->SimulationStageName.ToString() == Name)
+		if (Group != nullptr && Stage != nullptr && Group->GetSimulationStage() == Stage)
 		{
 			return Group;
 		}
@@ -1705,17 +1769,20 @@ UNiagaraStackSimulationStageGroup* FindStageGroup(UNiagaraStackEntry& Root, cons
 	return nullptr;
 }
 
-bool RequireStage(FReader& Op, UNiagaraStackEntry& Root, const FNiagaraEmitterHandleViewModel& Handle, const TCHAR* Field, UNiagaraStackSimulationStageGroup*& OutGroup)
+// The stack group of the simulation stage the op's Field names (a position, or a name: see StackEditRequireStage).
+bool RequireStage(FReader& Op, UNiagaraStackEntry& Root, FNiagaraEmitterHandleViewModel& Handle, const TCHAR* Field, UNiagaraStackSimulationStageGroup*& OutGroup)
 {
-	FString Name;
-	if (!Op.String(Field, Name))
+	const FString Where = FString::Printf(TEXT("'%s'"), *Handle.GetName().ToString());
+	UNiagaraSimulationStageBase* Stage = nullptr;
+	if (!StackEditRequireStage(Op, Field, Handle.GetEmitterViewModel()->GetEmitter().GetEmitterData(), Where, Stage))
 	{
 		return false;
 	}
-	OutGroup = FindStageGroup(Root, Name);
+	OutGroup = FindStageGroup(Root, Stage);
 	if (OutGroup == nullptr)
 	{
-		return Op.Fail(TEXT("Niagara.StageNotFound"), FString::Printf(TEXT("'%s' has no simulation stage '%s'."), *Handle.GetName().ToString(), *Name), Field);
+		return Op.Fail(TEXT("Niagara.ViewModelUnavailable"), FString::Printf(TEXT("The stack of %s has no group for the simulation stage."), *Where),
+			Field);
 	}
 	return true;
 }
@@ -1757,23 +1824,16 @@ bool AddStage(FReader& Op, FStackEdit& Edit)
 	{
 		return false;
 	}
-	if (FindStageGroup(*Root, Name) != nullptr)
-	{
-		return Op.Fail(TEXT("Niagara.StageExists"), FString::Printf(TEXT("'%s' already has a simulation stage '%s'."), *Handle->GetName().ToString(), *Name),
-			TEXT("name"));
-	}
 	FVersionedNiagaraEmitterData* Data = Handle->GetEmitterViewModel()->GetEmitter().GetEmitterData();
 	int32 Index = 0;
-	const FValue* After = Op.Find(TEXT("after"));
-	if (After != nullptr && After->Kind == EAssetDocumentRuntimeValueKind::String)
+	if (Op.Has(TEXT("after")))
 	{
-		UNiagaraStackSimulationStageGroup* Anchor = FindStageGroup(*Root, After->StringValue);
-		if (Anchor == nullptr)
+		UNiagaraSimulationStageBase* Anchor = nullptr;
+		if (!StackEditRequireStage(Op, TEXT("after"), Data, FString::Printf(TEXT("'%s'"), *Handle->GetName().ToString()), Anchor))
 		{
-			return Op.Fail(TEXT("Niagara.StageNotFound"), FString::Printf(TEXT("'%s' has no simulation stage '%s'."), *Handle->GetName().ToString(),
-				*After->StringValue), TEXT("after"));
+			return false;
 		}
-		Index = Data->GetSimulationStages().IndexOfByKey(Anchor->GetSimulationStage()) + 1;
+		Index = Data->GetSimulationStages().IndexOfByKey(Anchor) + 1;
 	}
 	UNiagaraStackEmitterPropertiesGroup* Group = PropertiesGroup(*Root);
 	INiagaraStackItemGroupAddUtilities* AddUtilities = Group != nullptr ? Group->GetAddUtilities() : nullptr;
@@ -1839,14 +1899,11 @@ bool MoveStage(FReader& Op, FStackEdit& Edit)
 	const int32 At = Stages.IndexOfByKey(Group->GetSimulationStage());
 	UNiagaraStackSimulationStageGroup* Target = nullptr;
 	EItemDropZone Zone = EItemDropZone::AboveItem;
-	const FValue* After = Op.Find(TEXT("after"));
-	if (After != nullptr && After->Kind == EAssetDocumentRuntimeValueKind::String)
+	if (Op.Has(TEXT("after")))
 	{
-		Target = FindStageGroup(*Root, After->StringValue);
-		if (Target == nullptr)
+		if (!RequireStage(Op, *Root, *Handle, TEXT("after"), Target))
 		{
-			return Op.Fail(TEXT("Niagara.StageNotFound"), FString::Printf(TEXT("'%s' has no simulation stage '%s'."), *Handle->GetName().ToString(),
-				*After->StringValue), TEXT("after"));
+			return false;
 		}
 		if (Stages.IndexOfByKey(Target->GetSimulationStage()) + 1 == At)
 		{
@@ -1860,7 +1917,8 @@ bool MoveStage(FReader& Op, FStackEdit& Edit)
 		{
 			return true;
 		}
-		Target = Stages.Num() > 0 ? FindStageGroup(*Root, Stages[0]->SimulationStageName.ToString()) : nullptr;
+		const FVersionedNiagaraEmitterData* Data = Handle->GetEmitterViewModel()->GetEmitter().GetEmitterData();
+		Target = FindStageGroup(*Root, Data != nullptr ? StackEditStageAt(*Data, 0) : nullptr);
 	}
 	if (Target == nullptr || Target == Group)
 	{
@@ -1930,11 +1988,6 @@ bool EditStage(FReader& Op, FStackEdit& Edit)
 		if (!Op.String(TEXT("name"), To))
 		{
 			return false;
-		}
-		if (FindStageGroup(*Root, To) != nullptr && Stage->SimulationStageName.ToString() != To)
-		{
-			return Op.Fail(TEXT("Niagara.StageExists"), FString::Printf(TEXT("'%s' already has a simulation stage '%s'."), *Handle->GetName().ToString(), *To),
-				TEXT("name"));
 		}
 		return RenameStage(Op, Edit, *Stage, To, TEXT("name"));
 	}

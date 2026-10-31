@@ -7,14 +7,22 @@
 //   SourceRoot / TargetRoot / TargetPelvis; the values equal what a new op would fill in, so the sparse read omits
 //   them, and verification must still find them equal (it failed with GenericRuntime.VerificationMismatch). A
 //   setting written at its default value verifies too.
+// UEAssetDoc.IKRig.RetargeterRootMotionPicks: the Root Motion op's SourceRoot / TargetRoot / TargetPelvis picked in
+//   the op Details (bones other than the ones a new op fills in) read in the extract, which re-applies as a no-op;
+//   the same settings written by a document into another retargeter are stored, survive save and reload, and verify.
+// UEAssetDoc.IKRig.RetargeterProfileActive: a retarget profile stored in the asset and made current (an override of the
+//   Root Motion op's settings, Force All IK Off) makes Extract warn IKRetargeter.ProfileActive at /Body; Inspect lists
+//   the profile with its overrides; applying the extract keeps the profile and the current profile.
 // UEAssetDoc.IKRig.ValidateLegacyMeshFirstLoad: the first validate that loads a never-loaded legacy
 //   skeletal mesh (the UE4 tutorial mannequin, a copy under /Game so it is not in memory yet) passes: the mesh's
 //   load-time upgrade (AssetImportData, mesh descriptions, the deferred post-load build) is not a change the preflight
 //   made (it failed with PreflightIsolation.PackageNotRestored).
 
 #include "AssetDocumentIKRigTestSupport.h"
+#include "AssetDocumentTolerantTestSupport.h"
 
 #include "Retargeter/IKRetargetOps.h"
+#include "Retargeter/IKRetargetProfile.h"
 #include "Retargeter/RetargetOps/RootMotionGeneratorOp.h"
 #include "StructUtils/InstancedStruct.h"
 
@@ -58,6 +66,229 @@ const FIKRetargetRootMotionOp* FindRootMotion(const UIKRetargeter& Retargeter)
 	}
 	return nullptr;
 }
+
+int32 FindRootMotionIndex(const UIKRetargeter& Retargeter)
+{
+	const TArray<FInstancedStruct>& Ops = Retargeter.GetRetargetOps();
+	for (int32 Index = 0; Index < Ops.Num(); ++Index)
+	{
+		if (Ops[Index].GetPtr<FIKRetargetRootMotionOp>() != nullptr)
+		{
+			return Index;
+		}
+	}
+	return INDEX_NONE;
+}
+
+// The op Details' bone pickers (UIKRigStructViewer): Modify the retargeter, write the bone, re-initialize the op.
+bool PickRootMotionBones(FAutomationTestBase& Test, UIKRetargeter& Retargeter, FName SourceRoot, FName TargetRoot, FName TargetPelvis)
+{
+	UIKRetargeterController* Controller = UIKRetargeterController::GetController(&Retargeter);
+	const int32 Index = FindRootMotionIndex(Retargeter);
+	if (!Test.TestTrue(TEXT("the retargeter has a Root Motion op"), Controller != nullptr && Index != INDEX_NONE))
+	{
+		return false;
+	}
+	FIKRetargetRootMotionOp* Op = Controller->GetRetargetOpStructAtIndex(Index)->GetMutablePtr<FIKRetargetRootMotionOp>();
+	const TPair<FName, FName> Picks[] = {{TEXT("SourceRoot"), SourceRoot}, {TEXT("TargetRoot"), TargetRoot}, {TEXT("TargetPelvis"), TargetPelvis}};
+	for (const TPair<FName, FName>& Pick : Picks)
+	{
+		FStructProperty* Property = CastField<FStructProperty>(FIKRetargetRootMotionOpSettings::StaticStruct()->FindPropertyByName(Pick.Key));
+		if (!Test.TestNotNull(*FString::Printf(TEXT("settings field %s"), *Pick.Key.ToString()), Property))
+		{
+			return false;
+		}
+		Retargeter.Modify();
+		Property->ContainerPtrToValuePtr<FBoneReference>(&Op->Settings)->BoneName = Pick.Value;
+		const FPropertyChangedEvent Event(Property, EPropertyChangeType::ValueSet);
+		Controller->OnOpPropertyChanged(Op->GetName(), Event);
+	}
+	return true;
+}
+
+// The Root Motion op's stored bones after a reload from disk: "SourceRoot,TargetRoot,TargetPelvis".
+FString StoredRootMotionBones(const FTarget& Target)
+{
+	const UIKRetargeter* Retargeter = Cast<UIKRetargeter>(Reload(Target));
+	const FIKRetargetRootMotionOp* Op = Retargeter != nullptr ? FindRootMotion(*Retargeter) : nullptr;
+	if (Op == nullptr)
+	{
+		return FString();
+	}
+	return FString::Printf(TEXT("%s,%s,%s"), *Op->Settings.SourceRoot.BoneName.ToString(), *Op->Settings.TargetRoot.BoneName.ToString(),
+		*Op->Settings.TargetPelvis.BoneName.ToString());
+}
+
+// The retargeter's stored profiles and current profile (no editor UI writes them in 5.7; reflection stands in).
+TMap<FName, FRetargetProfile>* StoredProfiles(UIKRetargeter& Retargeter)
+{
+	const FMapProperty* Map = CastField<FMapProperty>(UIKRetargeter::StaticClass()->FindPropertyByName(TEXT("Profiles")));
+	return Map != nullptr ? Map->ContainerPtrToValuePtr<TMap<FName, FRetargetProfile>>(&Retargeter) : nullptr;
+}
+
+FName* StoredCurrentProfile(UIKRetargeter& Retargeter)
+{
+	const FNameProperty* Current = CastField<FNameProperty>(UIKRetargeter::StaticClass()->FindPropertyByName(TEXT("CurrentProfile")));
+	return Current != nullptr ? Current->ContainerPtrToValuePtr<FName>(&Retargeter) : nullptr;
+}
+
+AssetDocumentTolerantTestSupport::FTarget View(const FTarget& Target)
+{
+	AssetDocumentTolerantTestSupport::FTarget Out(TEXT("Unused"));
+	Out.AssetName = Target.AssetName;
+	Out.PackageName = Target.PackageName;
+	Out.ObjectPath = Target.ObjectPath;
+	Out.PackageFile = Target.PackageFile;
+	Out.SidecarPath = Target.SidecarPath;
+	return Out;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentIKRetargeterRootMotionPicksTest, "UEAssetDoc.IKRig.RetargeterRootMotionPicks",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAssetDocumentIKRetargeterRootMotionPicksTest::RunTest(const FString& Parameters)
+{
+	using namespace AssetDocumentIKRigRetargeterRegressionTests;
+	FFixtures Fixtures;
+	const FTarget& SourceRig = Fixtures.Add(TEXT("IK_RootPickSource"));
+	const FTarget& TargetRig = Fixtures.Add(TEXT("IK_RootPickTarget"));
+	UIKRigDefinition* Source = MakeRig(*this, SourceRig, TutorialMesh, true);
+	UIKRigDefinition* TargetDefinition = MakeRig(*this, TargetRig, TutorialMesh, true);
+	const FTarget& Picked = Fixtures.Add(TEXT("RTG_RootPicked"));
+	const FTarget& Copied = Fixtures.Add(TEXT("RTG_RootCopied"));
+	UIKRetargeter* PickedAsset = Source != nullptr && TargetDefinition != nullptr ? MakeRetargeter(*this, Picked, Source, TargetDefinition) : nullptr;
+	UIKRetargeter* CopiedAsset = PickedAsset != nullptr ? MakeRetargeter(*this, Copied, Source, TargetDefinition) : nullptr;
+	if (CopiedAsset == nullptr)
+	{
+		return false;
+	}
+	// Bones other than the ones a new op fills in (the root and the target rig's retarget root).
+	const FName Pelvis(TEXT("pelvis"));
+	const FName Spine(TEXT("spine_01"));
+	if (!PickRootMotionBones(*this, *PickedAsset, Pelvis, Pelvis, Spine) || !TestTrue(TEXT("picked retargeter saved"), Save(*PickedAsset)))
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject> Extracted = AssetDocumentTolerantTestSupport::TestTolerantRoundTrip(*this, View(Picked),
+		AssetDocumentTolerantTestSupport::FExpected(), TEXT("Picked bones"));
+	const TSharedPtr<FJsonObject> PickedOp = Extracted.IsValid() ? OpOfType(BodyOf(Extracted), TEXT("RootMotion")) : nullptr;
+	const TSharedPtr<FJsonObject>* PickedSettings = nullptr;
+	if (!TestTrue(TEXT("the extract lists the picked bones"), PickedOp.IsValid() && PickedOp->TryGetObjectField(TEXT("Settings"), PickedSettings)))
+	{
+		return false;
+	}
+	TestEqual(TEXT("SourceRoot read"), Serialize((*PickedSettings)->GetObjectField(TEXT("SourceRoot"))), FString(TEXT(R"({"BoneName":"pelvis"})")));
+	TestEqual(TEXT("TargetRoot read"), Serialize((*PickedSettings)->GetObjectField(TEXT("TargetRoot"))), FString(TEXT(R"({"BoneName":"pelvis"})")));
+	TestEqual(TEXT("TargetPelvis read"), Serialize((*PickedSettings)->GetObjectField(TEXT("TargetPelvis"))), FString(TEXT(R"({"BoneName":"spine_01"})")));
+	TestEqual(TEXT("the picks survive a reload"), StoredRootMotionBones(Picked), FString(TEXT("pelvis,pelvis,spine_01")));
+
+	// The same settings written into the other retargeter by its document.
+	const TSharedPtr<FJsonObject> Other = Extract(*this, Copied.ObjectPath, TEXT("copy target"));
+	const TSharedPtr<FJsonObject> OtherOp = OpOfType(BodyOf(Other), TEXT("RootMotion"));
+	if (!TestTrue(TEXT("the other retargeter has a Root Motion op"), OtherOp.IsValid()))
+	{
+		return false;
+	}
+	OtherOp->SetObjectField(TEXT("Settings"), Parse(Serialize(*PickedSettings)));
+	const TSharedPtr<FJsonObject> Edited = MakeTrialDocument(RetargeterClass, Copied, TEXT("Update"), Serialize(BodyOf(Other)));
+	const FAssetDocumentResult Applied = Apply(Copied, Edited);
+	if (!TestTrue(*FString::Printf(TEXT("the picks apply (%s)"), *DiagnosticsText(Applied)), Applied.IsSuccess()))
+	{
+		return false;
+	}
+	TestTrue(TEXT("and are saved"), Applied.bSavedAsset);
+	FString DiffText;
+	if (!TestEqual(TEXT("no differences from the document"), DiffCount(Edited, DiffText), 0))
+	{
+		AddInfo(DiffText.Left(1500));
+	}
+	const FAssetDocumentResult Again = Apply(Copied, Edited);
+	TestTrue(*FString::Printf(TEXT("re-apply succeeds (%s)"), *DiagnosticsText(Again)), Again.IsSuccess());
+	TestFalse(TEXT("re-apply is a no-op"), Again.bSavedAsset);
+	TestEqual(TEXT("the written bones survive a reload"), StoredRootMotionBones(Copied), FString(TEXT("pelvis,pelvis,spine_01")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentIKRetargeterProfileActiveTest, "UEAssetDoc.IKRig.RetargeterProfileActive",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAssetDocumentIKRetargeterProfileActiveTest::RunTest(const FString& Parameters)
+{
+	using namespace AssetDocumentIKRigRetargeterRegressionTests;
+	FFixtures Fixtures;
+	const FTarget& SourceRig = Fixtures.Add(TEXT("IK_ProfileSource"));
+	const FTarget& TargetRig = Fixtures.Add(TEXT("IK_ProfileTarget"));
+	UIKRigDefinition* Source = MakeRig(*this, SourceRig, TutorialMesh, true);
+	UIKRigDefinition* TargetDefinition = MakeRig(*this, TargetRig, TutorialMesh, true);
+	const FTarget& Profiled = Fixtures.Add(TEXT("RTG_Profiled"));
+	UIKRetargeter* Asset = Source != nullptr && TargetDefinition != nullptr ? MakeRetargeter(*this, Profiled, Source, TargetDefinition) : nullptr;
+	const FIKRetargetRootMotionOp* RootMotion = Asset != nullptr ? FindRootMotion(*Asset) : nullptr;
+	TMap<FName, FRetargetProfile>* Profiles = Asset != nullptr ? StoredProfiles(*Asset) : nullptr;
+	FName* Current = Asset != nullptr ? StoredCurrentProfile(*Asset) : nullptr;
+	if (!TestTrue(TEXT("a retargeter with a Root Motion op and reflected profile storage"), RootMotion != nullptr && Profiles != nullptr && Current != nullptr))
+	{
+		return false;
+	}
+	// A copy of the op's settings with Rotate With Pelvis flipped (made through reflection: the settings type is not exported).
+	const bool bLiveRotate = RootMotion->Settings.bRotateWithPelvis;
+	UScriptStruct* SettingsType = FIKRetargetRootMotionOpSettings::StaticStruct();
+	const FBoolProperty* Rotate = CastField<FBoolProperty>(SettingsType->FindPropertyByName(TEXT("bRotateWithPelvis")));
+	if (!TestNotNull(TEXT("settings field bRotateWithPelvis"), Rotate))
+	{
+		return false;
+	}
+	FRetargetOpProfile OpProfile;
+	OpProfile.OpToApplySettingsTo = RootMotion->GetName();
+	OpProfile.SettingsToApply.InitializeAs(SettingsType, reinterpret_cast<const uint8*>(&RootMotion->Settings));
+	Rotate->SetPropertyValue_InContainer(OpProfile.SettingsToApply.GetMutableMemory(), !bLiveRotate);
+	FRetargetProfile Profile;
+	Profile.RetargetOpProfiles.Add(MoveTemp(OpProfile));
+	Profile.bForceAllIKOff = true;
+	const FName Run(TEXT("Run"));
+	Asset->Modify();
+	Profiles->Add(Run, MoveTemp(Profile));
+	*Current = Run;
+	if (!TestTrue(TEXT("profiled retargeter saved"), Save(*Asset)))
+	{
+		return false;
+	}
+
+	AssetDocumentTolerantTestSupport::FExpected Expected;
+	Expected.Warnings.Add({TEXT("IKRetargeter.ProfileActive"), TEXT("/Body")});
+	AssetDocumentTolerantTestSupport::TestTolerantRoundTrip(*this, View(Profiled), Expected, TEXT("Current profile"));
+
+	const FAssetDocumentResult Inspected = Inspect(Profiled.ObjectPath);
+	const TSharedPtr<FJsonObject>* Listed = nullptr;
+	const TSharedPtr<FJsonObject>* Overrides = nullptr;
+	const TSharedPtr<FJsonObject>* RunOverrides = nullptr;
+	if (!TestTrue(TEXT("Inspect lists the profile's overrides"), Inspected.IsSuccess() && Inspected.Payload.IsValid()
+		&& Inspected.Payload->TryGetObjectField(TEXT("Profiles"), Listed) && (*Listed)->TryGetObjectField(TEXT("Overrides"), Overrides)
+		&& (*Overrides)->TryGetObjectField(TEXT("Run"), RunOverrides)))
+	{
+		AddInfo(DiagnosticsText(Inspected));
+		return false;
+	}
+	AddInfo(FString::Printf(TEXT("Profiles: %s"), *Serialize(*Listed)));
+	TestEqual(TEXT("Inspect names the current profile"), (*Listed)->GetStringField(TEXT("Current")), FString(TEXT("Run")));
+	TestTrue(TEXT("Force All IK Off listed"), (*RunOverrides)->GetBoolField(TEXT("ForceAllIKOff")));
+	const TArray<TSharedPtr<FJsonValue>>* Ops = nullptr;
+	if (TestTrue(TEXT("one op override"), (*RunOverrides)->TryGetArrayField(TEXT("Ops"), Ops) && Ops->Num() == 1))
+	{
+		const TSharedPtr<FJsonObject> Op = (*Ops)[0]->AsObject();
+		TestEqual(TEXT("the override names the Root Motion op"), Op->GetStringField(TEXT("Op")), RootMotion->GetName().ToString());
+		TestEqual(TEXT("and its settings type"), Op->GetStringField(TEXT("SettingsType")), SettingsType->GetName());
+		const TSharedPtr<FJsonObject>* Settings = nullptr;
+		TestTrue(TEXT("only the overridden setting is listed"), Op->TryGetObjectField(TEXT("Settings"), Settings) && (*Settings)->Values.Num() == 1
+			&& (*Settings)->HasField(TEXT("bRotateWithPelvis")) && (*Settings)->GetBoolField(TEXT("bRotateWithPelvis")) == !bLiveRotate);
+	}
+
+	UIKRetargeter* Reloaded = Cast<UIKRetargeter>(Reload(Profiled));
+	TMap<FName, FRetargetProfile>* Kept = Reloaded != nullptr ? StoredProfiles(*Reloaded) : nullptr;
+	FName* KeptCurrent = Reloaded != nullptr ? StoredCurrentProfile(*Reloaded) : nullptr;
+	TestTrue(TEXT("the profile and the current profile are kept"), Kept != nullptr && Kept->Contains(Run) && KeptCurrent != nullptr && *KeptCurrent == Run);
+	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentIKRetargeterRootMotionBonesTest, "UEAssetDoc.IKRig.RetargeterRootMotionBones",

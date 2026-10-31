@@ -12,13 +12,14 @@
 // Args {ops: [...]}, each {op, ...}:
 //   preview_mesh {mesh}                       Class Settings "Preview Skeletal Mesh" (SetPreviewMesh; "" clears)
 //   source_import {property, path}            Class Settings "Source Hierarchy Import" / "Source Curve Import" (a
-//                                             Skeleton or Skeletal Mesh; "" clears). Duplicate-transient, so not a
-//                                             generic Property: the profile owns them.
+//                                             Skeleton or Skeletal Mesh; "" clears). Written before the hierarchy, not
+//                                             by the generic Properties write: the profile owns them.
 //   graph.forwards_solve {}                   RigUnit_BeginExecution on the default model (the editor's first open)
 //   rig.to_module {}  rig.to_standalone {}    "Turn into Rig Module" / "Turn into Standalone Rig"
 //   module.settings {settings}                RigModuleSettings {Name?, Type?, Icon?, Category?, Keywords?, Description?}
 //   variable.add {name, type}  variable.remove {name}  variable.rename {name, to}  variable.type {name, type}
-//   variable.set {name, public?, read_only?, expose?, category?, tooltip?, default?}   (default null resets)
+//   variable.set {name, public?, read_only?, expose?, category?, tooltip?, expose_on_spawn?, private?,
+//                 slider_min?, slider_max?, value_min?, value_max?, default?}   (default null resets; "" range clears)
 //   variable.order {names}
 //   element.add {entry}                       a new element (document entry; its first parent only)
 //   element.set {entry}                       an element's parents, pose, settings, values, spaces, hosts, metadata
@@ -566,7 +567,7 @@ bool AllowedFields(FReader& Entry, const FValue& Value, ERigElementType Type)
 	case ERigElementType::Socket: Allowed.Append({TEXT("Parent"), TEXT("Transform"), TEXT("Color"), TEXT("Description")}); break;
 	case ERigElementType::Control:
 		Allowed.Append({TEXT("Parent"), TEXT("Parents"), TEXT("Settings"), TEXT("Offset"), TEXT("Shape"), TEXT("Value"), TEXT("Minimum"),
-			TEXT("Maximum"), TEXT("Spaces"), TEXT("Hosts")});
+			TEXT("Maximum"), TEXT("Spaces"), TEXT("Hosts"), TEXT("RemovedSpaces")});
 		break;
 	case ERigElementType::Curve: Allowed.Add(TEXT("Value")); break;
 	case ERigElementType::Connector: Allowed.Add(TEXT("Settings")); break;
@@ -976,6 +977,28 @@ bool ReconcileControl(FEdit& Edit, FReader& Entry, const FRigElementKey& Key)
 	if (!DecodeControlSettings(Entry, Entry.Find(TEXT("Settings")), &Control->Settings, Settings))
 	{
 		return false;
+	}
+	// The spaces the space picker hides (Customization.RemovedSpaces, a control setting); left out, they are kept.
+	if (Entry.Has(TEXT("RemovedSpaces")))
+	{
+		TArray<FRigElementKeyWithLabel> Removed;
+		if (!ReadSpaces(Entry, TEXT("RemovedSpaces"), Removed))
+		{
+			return false;
+		}
+		Settings.Customization.RemovedSpaces.Reset();
+		for (const FRigElementKeyWithLabel& Space : Removed)
+		{
+			if (!Space.Label.IsNone())
+			{
+				return Entry.Fail(TEXT("ControlRig.InvalidValue"), TEXT("RemovedSpaces is a list of element keys."), TEXT("RemovedSpaces"));
+			}
+			if (!RequireElement(Edit, Entry, TEXT("RemovedSpaces"), Space.Key))
+			{
+				return false;
+			}
+			Settings.Customization.RemovedSpaces.AddUnique(Space.Key);
+		}
 	}
 	if (!FRigControlSettings::StaticStruct()->CompareScriptStruct(&Settings, &Control->Settings, PPF_None))
 	{
@@ -1387,6 +1410,13 @@ bool OpElementRemove(FEdit& Edit, FReader& Op)
 	{
 		return false;
 	}
+	// The element's components first, as the hierarchy's Remove Component does (removing the element alone leaves them
+	// pointing at no element).
+	const URigHierarchy* Owner = Edit.Controller()->GetHierarchy();
+	for (const FRigComponentKey& ComponentKey : Owner != nullptr ? Owner->GetComponentKeys(Key) : TArray<FRigComponentKey>())
+	{
+		Edit.Controller()->RemoveComponent(ComponentKey, false, false);
+	}
 	const bool bRemoved = Edit.Controller()->RemoveElement(Key, false, false);
 	if (!CheckReported(Edit, Op, *FString::Printf(TEXT("Removing %s"), *KeyText(Key))))
 	{
@@ -1700,6 +1730,46 @@ bool OpVariableSet(FEdit& Edit, FReader& Op)
 			return false;
 		}
 		RigVM.SetVariableTooltip(Name, FText::FromString(Text));
+	}
+	if (Op.Has(TEXT("expose_on_spawn")))
+	{
+		if (!Op.Bool(TEXT("expose_on_spawn"), bFlag))
+		{
+			return false;
+		}
+		RigVM.SetVariableExposeOnSpawn(Name, bFlag);
+	}
+	if (Op.Has(TEXT("private")))
+	{
+		if (!Op.Bool(TEXT("private"), bFlag))
+		{
+			return false;
+		}
+		RigVM.SetVariablePrivate(Name, bFlag);
+	}
+	// Slider Range / Value Range: the variable's UIMin / UIMax / ClampMin / ClampMax metadata, as the Blueprint
+	// variable Details write it; an empty text removes the key.
+	static const TPair<const TCHAR*, const TCHAR*> RangeFields[] = {
+		{TEXT("slider_min"), TEXT("UIMin")}, {TEXT("slider_max"), TEXT("UIMax")},
+		{TEXT("value_min"), TEXT("ClampMin")}, {TEXT("value_max"), TEXT("ClampMax")}};
+	for (const TPair<const TCHAR*, const TCHAR*>& Field : RangeFields)
+	{
+		if (!Op.Has(Field.Key))
+		{
+			continue;
+		}
+		if (!Op.String(Field.Key, Text))
+		{
+			return false;
+		}
+		if (Text.IsEmpty())
+		{
+			FBlueprintEditorUtils::RemoveBlueprintVariableMetaData(&Edit.Blueprint, Name, nullptr, FName(Field.Value));
+		}
+		else
+		{
+			FBlueprintEditorUtils::SetBlueprintVariableMetaData(&Edit.Blueprint, Name, nullptr, FName(Field.Value), Text);
+		}
 	}
 	Edit.bChanged = true;
 	const FValue* Default = Op.Find(TEXT("default"));
@@ -2040,7 +2110,8 @@ bool CheckOpFields(FReader& Op, const FValue& Value, const FString& Kind)
 		{TEXT("rig.to_standalone"), {}}, {TEXT("module.settings"), {TEXT("settings")}},
 		{TEXT("variable.add"), {TEXT("name"), TEXT("type")}}, {TEXT("variable.remove"), {TEXT("name")}},
 		{TEXT("variable.rename"), {TEXT("name"), TEXT("to")}}, {TEXT("variable.type"), {TEXT("name"), TEXT("type")}},
-		{TEXT("variable.set"), {TEXT("name"), TEXT("public"), TEXT("read_only"), TEXT("expose"), TEXT("category"), TEXT("tooltip"), TEXT("default")}},
+		{TEXT("variable.set"), {TEXT("name"), TEXT("public"), TEXT("read_only"), TEXT("expose"), TEXT("category"), TEXT("tooltip"),
+			TEXT("expose_on_spawn"), TEXT("private"), TEXT("slider_min"), TEXT("slider_max"), TEXT("value_min"), TEXT("value_max"), TEXT("default")}},
 		{TEXT("variable.order"), {TEXT("names")}}, {TEXT("element.add"), {TEXT("entry")}}, {TEXT("element.set"), {TEXT("entry")}},
 		{TEXT("element.remove"), {TEXT("key")}}, {TEXT("element.rename"), {TEXT("key"), TEXT("to")}}, {TEXT("element.order"), {TEXT("keys")}}};
 	const TArray<FString>* Allowed = Fields.Find(Kind);

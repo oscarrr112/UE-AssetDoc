@@ -51,6 +51,10 @@ bool RuntimeValueEquals(
 UBlackboardData* FindBlackboard(const FString& Path);
 UBlackboardKeyType* FindOwnedKeyType(UBlackboardData& Blackboard, const FString& Name);
 bool IsEditorPropertyContext(const UObject* Object = nullptr);
+// Refuses a change of the Blackboard's key layout (keys added, removed, reordered or retyped, a Struct default of
+// another type, instance sync, the parent) while a play session runs or while a live component uses this Blackboard
+// or one derived from it: a component lays its values out when it initializes and is not rebuilt afterwards.
+TOptional<FAssetDocumentPrimitiveOutcome> RefuseLiveBlackboardLayoutChange(UBlackboardData& Blackboard);
 ASSETDOCUMENTAI_API bool TryMakeRows(
 	UObject& Object,
 	TSharedPtr<IPropertyRowGenerator>& OutRows,

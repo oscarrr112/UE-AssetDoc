@@ -303,9 +303,25 @@ bool EditParameterValues(FReader& Op, UStateTreeEditorData& EditorData)
 {
 	FGuid StateId;
 	const FValue* Values = nullptr;
-	if (!Op.OnlyFields({TEXT("op"), TEXT("state"), TEXT("values")}) || !Op.Guid(TEXT("state"), StateId) || !Op.Object(TEXT("values"), Values))
+	const FValue* Kept = nullptr;
+	if (!Op.OnlyFields({TEXT("op"), TEXT("state"), TEXT("values"), TEXT("kept")}) || !Op.Guid(TEXT("state"), StateId)
+		|| !Op.Object(TEXT("values"), Values) || !Op.Array(TEXT("kept"), Kept, false))
 	{
 		return false;
+	}
+	// Overridden names whose current value stays (a value the document codec has no form for).
+	TArray<FString> KeptNames = Values->ObjectKeys;
+	const int32 Written = KeptNames.Num();
+	if (Kept != nullptr)
+	{
+		for (const FValue& Name : Kept->Elements)
+		{
+			if (Name.Kind != EAssetDocumentRuntimeValueKind::String)
+			{
+				return Op.Fail(TEXT("Graph.InvalidArgument"), TEXT("kept lists parameter names."), TEXT("kept"));
+			}
+			KeptNames.Add(Name.StringValue);
+		}
 	}
 	UStateTreeState* State = FindState(EditorData, StateId);
 	if (State == nullptr)
@@ -318,7 +334,7 @@ bool EditParameterValues(FReader& Op, UStateTreeEditorData& EditorData)
 	}
 	FReader ValuesReader = Op.Child(TEXT("values"), *Values);
 	TArray<FGuid> Overridden;
-	for (const FString& Name : Values->ObjectKeys)
+	for (const FString& Name : KeptNames)
 	{
 		const FPropertyBagPropertyDesc* Desc = State->Parameters.Parameters.FindPropertyDescByName(FName(*Name));
 		if (Desc == nullptr)
@@ -349,11 +365,17 @@ bool EditParameterValues(FReader& Op, UStateTreeEditorData& EditorData)
 				State->SetParametersPropertyOverridden(Id, false);
 			}
 		}
-		for (int32 Index = 0; Index < Values->ObjectKeys.Num() && bDecoded; ++Index)
+		for (int32 Index = 0; Index < Overridden.Num() && bDecoded; ++Index)
 		{
-			State->SetParametersPropertyOverridden(Overridden[Index], true);
-			bDecoded = DecodeBagValue(ValuesReader, Values->ObjectKeys[Index], State->Parameters.Parameters,
-				FName(*Values->ObjectKeys[Index]), *State);
+			if (!State->IsParametersPropertyOverridden(Overridden[Index]))
+			{
+				State->SetParametersPropertyOverridden(Overridden[Index], true);
+			}
+			if (Index < Written)
+			{
+				bDecoded = DecodeBagValue(ValuesReader, Values->ObjectKeys[Index], State->Parameters.Parameters,
+					FName(*Values->ObjectKeys[Index]), *State);
+			}
 		}
 	});
 	return bDecoded;

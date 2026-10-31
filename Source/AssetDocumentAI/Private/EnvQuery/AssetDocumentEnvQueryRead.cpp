@@ -80,6 +80,30 @@ void AppendTest(TArray<FValue>& Records, const FString& Option, int32 Index, UEn
 	Records.Add(Record.Build());
 }
 
+// The class a node of the graph was made with, when it does not load: its package and name ("/Game/AI/EQT_Sight.EQT_Sight_C").
+FString MissingClassPath(const UAIGraphNode& Node)
+{
+	const FString Package = Node.ClassData.GetPackageName();
+	const FString Name = Node.ClassData.GetClassName();
+	return Package.IsEmpty() || Name.IsEmpty() ? Name : Package + TEXT(".") + Name;
+}
+
+// A test node whose class does not load (no instance): its identity, so the option's tests stay complete by position.
+void AppendMissingTest(TArray<FValue>& Records, const FString& Option, int32 Index, const UAIGraphNode& Node)
+{
+	FObjectBuilder Record;
+	Record.AddString(TEXT("kind"), TEXT("test"));
+	Record.AddString(TEXT("name"), NodeKey(Node));
+	Record.AddString(TEXT("option"), Option);
+	Record.AddInt(TEXT("index"), Index);
+	Record.AddString(TEXT("class"), MissingClassPath(Node));
+	Record.AddBool(TEXT("missing"), true);
+	Record.AddBool(TEXT("enabled"), IsTestEnabled(Node));
+	Record.Add(TEXT("properties"), MakeEmptyObject());
+	AddComment(Record, Node);
+	Records.Add(Record.Build());
+}
+
 void AppendOption(TArray<FValue>& Records, UEnvQueryOption& Option, int32 X, int32 Y, bool bConnected, int32 RuntimeIndex,
 	const UAIGraphNode* Node, FDefaults& Defaults)
 {
@@ -101,7 +125,9 @@ void AppendOption(TArray<FValue>& Records, UEnvQueryOption& Option, int32 X, int
 	}
 	else
 	{
-		Record.AddString(TEXT("class"), Node != nullptr ? FString(Node->ClassData.GetClassName()) : FString());
+		// The generator's class does not load (or a code-made option has none).
+		Record.AddString(TEXT("class"), Node != nullptr ? MissingClassPath(*Node) : FString());
+		Record.AddBool(TEXT("missing"), true);
 		Record.Add(TEXT("properties"), MakeEmptyObject());
 	}
 	if (Node != nullptr)
@@ -114,7 +140,7 @@ void AppendOption(TArray<FValue>& Records, UEnvQueryOption& Option, int32 X, int
 	{
 		for (const UAIGraphNode* Sub : Node->SubNodes)
 		{
-			if (Sub != nullptr && Sub->NodeInstance != nullptr)
+			if (Sub != nullptr)
 			{
 				Tests.Add(NodeKey(*Sub));
 			}
@@ -141,6 +167,10 @@ void AppendOption(TArray<FValue>& Records, UEnvQueryOption& Option, int32 X, int
 			if (UEnvQueryTest* Test = Sub != nullptr ? Cast<UEnvQueryTest>(Sub->NodeInstance) : nullptr)
 			{
 				AppendTest(Records, Key, Index, *Test, IsTestEnabled(*Sub), GetTestWeight(*Sub), Sub, Generator, Defaults);
+			}
+			else if (Sub != nullptr)
+			{
+				AppendMissingTest(Records, Key, Index, *Sub);
 			}
 		}
 	}
@@ -295,7 +325,7 @@ bool HandleRead(FCall& Call, FObjectBuilder& Result)
 		const TArray<UEnvQueryOption*>& Options = Query->GetOptions();
 		for (int32 Index = 0; Index < Options.Num(); ++Index)
 		{
-			if (Options[Index] != nullptr && Options[Index]->Generator != nullptr)
+			if (Options[Index] != nullptr)
 			{
 				AppendOption(Records, *Options[Index], Index * 300, 100, true, Index, nullptr, Defaults);
 			}

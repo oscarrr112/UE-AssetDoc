@@ -107,6 +107,9 @@ bool IsAuthoredProperty(const FProperty& Property, EValueOwner Owner);
 // in OutDefaults, codec-unsupported names in OutUnsupported.
 FValue EncodeValues(const UStruct& Type, const void* Memory, const void* DefaultMemory, EValueOwner Owner,
 	TArray<FString>& OutDefaults, TArray<FString>& OutUnsupported);
+// The authored properties the codec cannot encode whose value differs from the default (a read marks them; their
+// value is kept by every edit). All of them when DefaultMemory is null.
+TArray<FString> MarkedValues(const UStruct& Type, const void* Memory, const void* DefaultMemory, EValueOwner Owner);
 // {name: default value} of the authored, codec-supported properties whose value differs from the default (what
 // an omitted value is reset to).
 FValue EncodeChangedDefaults(const UStruct& Type, const void* Memory, const void* DefaultMemory, EValueOwner Owner);

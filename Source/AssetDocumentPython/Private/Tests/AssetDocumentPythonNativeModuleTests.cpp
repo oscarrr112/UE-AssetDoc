@@ -433,12 +433,12 @@ void TestProxyTypeHardening(FAutomationTestBase& Test, PyObject* Type, PyObject*
 bool HasRequiredContextMembers(const TSet<FString>& Members)
 {
 	return Members.Contains(TEXT("handoff")) && Members.Contains(TEXT("invoke")) && Members.Contains(TEXT("inspect_catalog")) && Members.Contains(TEXT("request_id"))
-		&& Members.Contains(TEXT("runtime_revision")) && Members.Contains(TEXT("phase"));
+		&& Members.Contains(TEXT("runtime_revision")) && Members.Contains(TEXT("phase")) && Members.Contains(TEXT("take_text_displays"));
 }
 
 bool HasExactContextMembers(const TSet<FString>& Members)
 {
-	return Members.Num() == 6 && HasRequiredContextMembers(Members);
+	return Members.Num() == 7 && HasRequiredContextMembers(Members);
 }
 
 PyObject* CallInvoke(
@@ -1142,7 +1142,7 @@ bool FAssetDocumentHandleHandoffOpaqueBoundaryTest::RunTest(
 	PyObject* Source = AssetDocumentPythonCreateOpaqueHandleProxy(
 		Binding->BindingId, SourceHandle);
 
-	TestTrue(TEXT("RequestContext has exact six public members"),
+	TestTrue(TEXT("RequestContext has exactly its seven public members"),
 		HasExactContextMembers(GetPublicMembers(Context)));
 	PyObject* Method = PyObject_GetAttrString(Context, "handoff");
 	TestNotNull(TEXT("request context exposes handoff"), Method);

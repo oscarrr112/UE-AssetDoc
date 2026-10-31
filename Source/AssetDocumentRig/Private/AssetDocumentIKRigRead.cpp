@@ -15,6 +15,8 @@
 // valid, bones[]} and {kind: "solver_facts", index, display_name, warning?, connected_goals[]}.
 // detail "verify" adds to each solver record settings_defaults, goal_defaults and bone_defaults (every field of a
 // new solver's settings, goal settings and bone settings, when the solver has them): what an omitted field means.
+// A settings or goal field the typed value codec cannot represent reads as its marker
+// {"Unsupported": reason, "Text": export text} (MakeUnrepresentedMarker); the read never fails on one field.
 
 #include "AssetDocumentRigPrimitives.h"
 
@@ -53,7 +55,7 @@ const FGoalField GoalFields[] = {
 	{TEXT("bExposeRotation"), TEXT("ExposeRotation")},
 };
 
-bool AddGoal(const UIKRigEffectorGoal& Goal, FCall& Call, TArray<FValue>& Records)
+void AddGoal(const UIKRigEffectorGoal& Goal, TArray<FValue>& Records)
 {
 	const UIKRigEffectorGoal* Defaults = GetDefault<UIKRigEffectorGoal>();
 	FObjectBuilder Entry;
@@ -65,13 +67,7 @@ bool AddGoal(const UIKRigEffectorGoal& Goal, FCall& Call, TArray<FValue>& Record
 		{
 			continue;
 		}
-		FValue Value;
-		FString Error;
-		if (!EncodeField(*Property, &Goal, Value, Error))
-		{
-			return Fail(Call, TEXT("IKRig.ReadFailed"), Error);
-		}
-		Entry.Add(Field.Key, MoveTemp(Value));
+		Entry.Add(Field.Key, EncodeFieldOrMarker(*Property, &Goal));
 	}
 	bool bIdentity = true;
 	FValue Offset = EncodeGoalOffset(Goal.CurrentTransform, Goal.InitialTransform, bIdentity);
@@ -84,7 +80,6 @@ bool AddGoal(const UIKRigEffectorGoal& Goal, FCall& Call, TArray<FValue>& Record
 	Record.Add(TEXT("name"), MakeName(Goal.GoalName));
 	Record.Add(TEXT("entry"), Entry.Build());
 	Records.Add(Record.Build());
-	return true;
 }
 
 // Names of a set in a stable order: Order first (goal array / skeleton order), then the rest by name.
@@ -111,7 +106,7 @@ TArray<FName> Ordered(const TSet<FName>& Names, TConstArrayView<FName> Order)
 	return Result;
 }
 
-bool AddSolver(const UIKRigDefinition& Rig, int32 Index, bool bInspect, bool bVerify, FCall& Call, TArray<FValue>& Records)
+void AddSolver(const UIKRigDefinition& Rig, int32 Index, bool bInspect, bool bVerify, TArray<FValue>& Records)
 {
 	const FInstancedStruct& SolverStruct = Rig.GetSolverStructs()[Index];
 	FObjectBuilder Entry;
@@ -121,11 +116,13 @@ bool AddSolver(const UIKRigDefinition& Rig, int32 Index, bool bInspect, bool bVe
 	const UScriptStruct* Type = SolverStruct.GetScriptStruct();
 	if (!SolverStruct.IsValid() || Type == nullptr)
 	{
-		// A solver whose type no longer exists (the processor warns "null/unknown solver").
-		Entry.AddString(TEXT("Type"), FString());
+		// A solver whose type no longer exists (the processor warns "null/unknown solver"): a marked element, kept
+		// by position on apply.
+		Entry.Add(TEXT("Type"), MakeNull());
+		Entry.AddString(TEXT("Unsupported"), TEXT("The solver's type does not load (its plugin is missing or the type was removed)."));
 		Record.Add(TEXT("entry"), Entry.Build());
 		Records.Add(Record.Build());
-		return true;
+		return;
 	}
 	FIKRigSolverBase& Solver = const_cast<FInstancedStruct&>(SolverStruct).GetMutable<FIKRigSolverBase>();
 	FInstancedStruct DefaultStruct(Type);
@@ -144,28 +141,22 @@ bool AddSolver(const UIKRigDefinition& Rig, int32 Index, bool bInspect, bool bVe
 	{
 		Entry.Add(TEXT("EndBone"), MakeName(Solver.GetEndBone()));
 	}
-	FString Error;
+	// A settings field the codec cannot represent reads as its marker (EncodeSparse); the rest of the solver reads.
 	if (const UScriptStruct* SettingsType = Solver.GetSolverSettingsType())
 	{
 		const FIKRigSolverSettingsBase* Settings = Solver.GetSolverSettings();
 		const FIKRigSolverSettingsBase* Defaults = DefaultSolver.GetSolverSettings();
-		FValue Sparse;
-		if (Settings != nullptr && !EncodeSparse(*SettingsType, Settings, Defaults, Sparse, Error))
+		if (Settings != nullptr)
 		{
-			return Fail(Call, TEXT("IKRig.ReadFailed"), FString::Printf(TEXT("Solver %d settings: %s"), Index, *Error));
+			FValue Sparse = EncodeSparse(*SettingsType, Settings, Defaults);
+			if (CountValueNodes(Sparse) > 1)
+			{
+				Entry.Add(TEXT("Settings"), MoveTemp(Sparse));
+			}
 		}
-		if (Settings != nullptr && CountValueNodes(Sparse) > 1)
-		{
-			Entry.Add(TEXT("Settings"), MoveTemp(Sparse));
-		}
-		FValue AllDefaults;
 		if (bVerify && Defaults != nullptr)
 		{
-			if (!EncodeSparse(*SettingsType, Defaults, nullptr, AllDefaults, Error))
-			{
-				return Fail(Call, TEXT("IKRig.ReadFailed"), FString::Printf(TEXT("Solver %d defaults: %s"), Index, *Error));
-			}
-			Record.Add(TEXT("settings_defaults"), MoveTemp(AllDefaults));
+			Record.Add(TEXT("settings_defaults"), EncodeSparse(*SettingsType, Defaults, nullptr));
 		}
 	}
 	if (bVerify)
@@ -181,12 +172,7 @@ bool AddSolver(const UIKRigDefinition& Rig, int32 Index, bool bInspect, bool bVe
 				continue;
 			}
 			const FStructInstance KindDefaults(Kind.Value);
-			FValue All;
-			if (!EncodeSparse(*Kind.Value, KindDefaults.Get(), nullptr, All, Error))
-			{
-				return Fail(Call, TEXT("IKRig.ReadFailed"), FString::Printf(TEXT("Solver %d %s: %s"), Index, Kind.Key, *Error));
-			}
-			Record.Add(Kind.Key, MoveTemp(All));
+			Record.Add(Kind.Key, EncodeSparse(*Kind.Value, KindDefaults.Get(), nullptr));
 		}
 	}
 
@@ -213,10 +199,7 @@ bool AddSolver(const UIKRigDefinition& Rig, int32 Index, bool bInspect, bool bVe
 			{
 				if (const FIKRigGoalSettingsBase* Settings = Solver.GetGoalSettings(Goal))
 				{
-					if (!EncodeSparse(*GoalType, Settings, GoalDefaults.Get(), Sparse, Error))
-					{
-						return Fail(Call, TEXT("IKRig.ReadFailed"), FString::Printf(TEXT("Solver %d goal %s: %s"), Index, *Goal.ToString(), *Error));
-					}
+					Sparse = EncodeSparse(*GoalType, Settings, GoalDefaults.Get());
 				}
 			}
 			GoalSettings.Add(Goal.ToString(), MoveTemp(Sparse));
@@ -240,9 +223,9 @@ bool AddSolver(const UIKRigDefinition& Rig, int32 Index, bool bInspect, bool bVe
 			{
 				const FIKRigBoneSettingsBase* Settings = Solver.GetBoneSettings(Bones[BoneIndex]);
 				FValue Sparse = MakeEmptyObject();
-				if (Settings != nullptr && BoneType != nullptr && !EncodeSparse(*BoneType, Settings, BoneDefaults.Get(), Sparse, Error))
+				if (Settings != nullptr && BoneType != nullptr)
 				{
-					return Fail(Call, TEXT("IKRig.ReadFailed"), FString::Printf(TEXT("Solver %d bone %s: %s"), Index, *Bones[BoneIndex].ToString(), *Error));
+					Sparse = EncodeSparse(*BoneType, Settings, BoneDefaults.Get());
 				}
 				Chunk.Add(Bones[BoneIndex].ToString(), MoveTemp(Sparse));
 			}
@@ -271,7 +254,6 @@ bool AddSolver(const UIKRigDefinition& Rig, int32 Index, bool bInspect, bool bVe
 		Facts.AddBool(TEXT("uses_bone_settings"), Solver.UsesCustomBoneSettings());
 		Records.Add(Facts.Build());
 	}
-	return true;
 }
 
 void AddChain(const UIKRigDefinition& Rig, const FBoneChain& Chain, bool bInspect, TArray<FValue>& Records)
@@ -375,17 +357,14 @@ bool BuildIKRigRecords(const UIKRigDefinition& Rig, bool bInspect, FCall& Call, 
 	}
 	for (const UIKRigEffectorGoal* Goal : Rig.GetGoalArray())
 	{
-		if (Goal != nullptr && !AddGoal(*Goal, Call, Records))
+		if (Goal != nullptr)
 		{
-			return false;
+			AddGoal(*Goal, Records);
 		}
 	}
 	for (int32 Index = 0; Index < Rig.GetSolverStructs().Num(); ++Index)
 	{
-		if (!AddSolver(Rig, Index, bInspect, bVerify, Call, Records))
-		{
-			return false;
-		}
+		AddSolver(Rig, Index, bInspect, bVerify, Records);
 	}
 	for (const FBoneChain& Chain : Rig.GetRetargetChains())
 	{

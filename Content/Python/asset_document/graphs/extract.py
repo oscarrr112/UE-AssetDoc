@@ -20,12 +20,13 @@ from __future__ import annotations
 from typing import Mapping
 
 from asset_document.diagnostics import AssetDocumentContractError
-from asset_document.graphs.actions import actions_equal
+from asset_document.graphs import node_layout
+from asset_document.graphs.actions import actions_equal, getter_without_source, omits_getter_source
 from asset_document.graphs.live import LiveAsset, LiveGraph, LiveNode
 from asset_document.graphs.model import (
     Endpoint, GraphDoc, LinkDoc, NodeDoc, NodeProperties, PinOverride, Signature, Size, UserPin, thaw_json,
 )
-from asset_document.graphs.reconcile import is_authored_default, is_type_zero, type_zero
+from asset_document.graphs.reconcile import is_authored_default, is_type_zero, live_enabled, type_zero
 from asset_document.graphs.schemas import GENERIC_ADAPTER, SchemaAdapter
 
 
@@ -60,8 +61,8 @@ def _assign_ids(nodes: list[LiveNode], hint: GraphDoc | None, adapter: SchemaAda
                 used.add(node.doc_id)
     # Nodes the adapter ranks first claim their base id before the rest, whatever their place in the graph:
     # a Create may place them earlier than the author did (a called custom event before a comment titled
-    # like it), and ids must not follow that order.
-    for node in sorted(nodes, key=adapter.id_rank):
+    # like it), and ids must not follow that order. The editor's placeholder nodes come after the real ones.
+    for node in sorted(nodes, key=lambda item: (adapter.id_rank(item), adapter.is_ghost_live(item))):
         if node.guid not in ids:
             ids[node.guid] = _unique(adapter.node_base_id(node), used)
     return ids
@@ -113,22 +114,37 @@ def _properties(node: LiveNode, hint: NodeDoc | None, adapter: SchemaAdapter = G
     return NodeProperties(output["node"], output["template"])
 
 
-def _action(node: LiveNode, adapter: SchemaAdapter, self_class: str | None) -> str | None:
+def _action(node: LiveNode, adapter: SchemaAdapter, self_class: str | None,
+            shared_getters: frozenset[str] = frozenset()) -> str | None:
     """The action key as the document applied it (``K2:Min``) while it still names the node's action, else the
-    extract form."""
+    extract form. An animation getter applied by its key without the source keeps that form while it is the graph's
+    only getter of its function (``shared_getters``: the source-free keys of functions read by several getters)."""
     if adapter.keeps_authored_ids and node.doc_action and node.action_key:
         try:
             authored = adapter.normalize_action(node.doc_action, self_class=self_class, path="/Action")
         except AssetDocumentContractError:
             authored = None
-        if actions_equal(authored, node.action_key):
+        if actions_equal(authored, node.action_key) or (
+                omits_getter_source(authored, node.action_key) and authored not in shared_getters):
             return node.doc_action
     return adapter.extract_action(node.action_key, self_class=self_class)
 
 
+def _shared_getters(nodes: list[LiveNode]) -> frozenset[str]:
+    """Source-free keys of the animation getter functions that more than one node of the graph reads."""
+    seen: set[str] = set()
+    shared: set[str] = set()
+    for node in nodes:
+        key = getter_without_source(node.action_key)
+        if key is not None:
+            (shared if key in seen else seen).add(key)
+    return frozenset(shared)
+
+
 def _node(node: LiveNode, node_id: str, ids: Mapping[str, str], hint: NodeDoc | None,
-          adapter: SchemaAdapter, self_class: str | None, include_defaults: bool = False) -> NodeDoc:
-    action = None if node.implicit_role else _action(node, adapter, self_class)
+          adapter: SchemaAdapter, self_class: str | None, include_defaults: bool = False,
+          shared_getters: frozenset[str] = frozenset()) -> NodeDoc:
+    action = None if node.implicit_role else _action(node, adapter, self_class, shared_getters)
     extras = {} if action or node.implicit_role else {"Class": node.class_path}
     if extras and node.extras.get("unresolved"):
         extras["Unresolved"] = node.extras["unresolved"]  # what it names that does not exist
@@ -145,6 +161,10 @@ def _node(node: LiveNode, node_id: str, ids: Mapping[str, str], hint: NodeDoc | 
         # A comment box's size; a node's pinned comment bubble (a comment box shows its text in the box).
         size=Size(*node.box_size) if node.box_size is not None and min(node.box_size) >= 1 else None,
         comment_bubble_visible=True if node.comment_bubble_visible and node.box_size is None else None,
+        # The state the user set (Enable / Disable / Development Only); a node keeping the state it was placed
+        # with (a Development Only function call, a new Blueprint's placeholder events) leaves it out.
+        enabled=live_enabled(node) if adapter.represents_enabled_state and node.enabled_state_user_set else None,
+        ghost=True if adapter.is_ghost_live(node) else None,
     )
 
 
@@ -186,11 +206,12 @@ def _signature(nodes: list[LiveNode], graph_role: str, adapter: SchemaAdapter) -
 def extract_graph(graph: LiveGraph, live: LiveAsset, *, graph_id: str, path: str, hint: GraphDoc | None = None,
                   adapter: SchemaAdapter = GENERIC_ADAPTER, owner: str | None = None,
                   self_class: str | None = None, name: str | None = None, include_defaults: bool = False) -> GraphDoc:
-    nodes = [node for node in graph.nodes if not adapter.is_ignorable_live(node, graph)]
+    nodes = list(graph.nodes)
     ids = _assign_ids(nodes, hint, adapter)
     hint_nodes = {node.guid: node for node in (hint.nodes if hint else ()) if node.guid}
-    docs = tuple(_node(node, ids[node.guid], ids, hint_nodes.get(node.guid), adapter, self_class, include_defaults)
-                 for node in nodes)
+    shared = _shared_getters(nodes)
+    docs = tuple(_node(node, ids[node.guid], ids, hint_nodes.get(node.guid), adapter, self_class, include_defaults,
+                       shared) for node in nodes)
     links = tuple(
         LinkDoc(Endpoint(ids[link.from_.node_guid], link.from_.pin_name), Endpoint(ids[link.to.node_guid], link.to.pin_name))
         for link in graph.links if link.from_.node_guid in ids and link.to.node_guid in ids)
@@ -233,6 +254,7 @@ def extract_graphs(live: LiveAsset, *, sections: Mapping[str, str], hints: tuple
 
     ``self_class`` (the asset's generated class) lets member actions use the ``Self`` owner.
     ``include_defaults`` also reports pin values equal to the pin's default (see ``_overrides``).
+    An Extract that reports node sizes gets those of the extracted graphs (``node_layout.record``).
     """
     counters: dict[str, int] = {}
     output = []
@@ -245,4 +267,5 @@ def extract_graphs(live: LiveAsset, *, sections: Mapping[str, str], hints: tuple
         output.append(extract_graph(graph, live, graph_id=f"{section}/{graph.name}", path=f"/Body/{section}/{index}",
                                     hint=_hint_graph(graph, hints), adapter=adapter, self_class=self_class,
                                     include_defaults=include_defaults))
+    node_layout.record(output, live)
     return tuple(output)

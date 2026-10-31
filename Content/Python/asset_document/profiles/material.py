@@ -47,6 +47,10 @@ Document (docs/architecture/asset-document-material-matrix.md)::
   errors the material did not have before; errors it already had come back as warnings.  Shader compilation
   is not awaited.
 * Material-level settings (Details panel) go through the generic property admission (``Properties``).
+* A node of a class the Material Editor no longer places (deprecated, or replaced by a newer version) reads with
+  every property (there is no new node to compare with) and a ``Material.UnplaceableExpression`` read warning:
+  the engine does not save nodes of such a class.  Re-applying it as read changes nothing; an omitted property
+  keeps the node's value; a new node of such a class is refused (``Material.UnknownExpressionClass``).
 
 Writes are covered by Core's package snapshot (existing target) or the factory rollback (created target);
 preflight therefore returns ``SNAPSHOT_COVERED``.
@@ -56,7 +60,7 @@ from __future__ import annotations
 import dataclasses
 import math
 
-from asset_document.diagnostics import DiagnosticSeverity, RuntimeDiagnostic, with_diagnostics
+from asset_document.diagnostics import DiagnosticSeverity, RuntimeDiagnostic, read_warning, with_diagnostics
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.meta import (
     ComparisonPolicy, DefaultPolicy, DeletePolicy, IdentityPolicy, OmissionPolicy, OrderPolicy, ProfileMeta,
@@ -402,10 +406,21 @@ def read_live(calls):
     for row in rows:
         expressions[row["key"]] = {"Class": row["class"], "Position": list(row["position"]),
                                    "Properties": dict(row.get("properties", {})), "Inputs": dict(row.get("inputs", {})),
-                                   "outputs": list(row.get("outputs", []))}
+                                   "outputs": list(row.get("outputs", [])), "unplaceable": bool(row.get("unplaceable"))}
     return {"host": first.get("host"), "expressions": expressions, "outputs": dict(first.get("outputs", {})),
             "parameter_groups": dict(first.get("parameter_groups", {})),
             "compile_errors": list(first.get("compile_errors", []))}
+
+
+def warn_unplaceable(live):
+    """Read warnings for the nodes of classes the Material Editor no longer places."""
+    for key, row in live["expressions"].items():
+        if row.get("unplaceable"):
+            read_warning(f"/Body/Expressions/{common.escape(key)}", "Material.UnplaceableExpression",
+                         f"{row['Class']} is deprecated or replaced by a newer version: the Material Editor no longer "
+                         "places it and the engine does not save its nodes, so this node is dropped the next time "
+                         "the material is saved. The document lists all its properties; re-applying it as read "
+                         "changes nothing. Replace it with a current expression to keep its effect.")
 
 
 def class_defaults(calls, labels):
@@ -695,6 +710,7 @@ def extract(target, class_path, read, context, include_defaults=True):
     calls = common.DataCalls(context, BY_ID, read, prefix=PREFIX)
     live = read_live(calls)
     class_defaults(calls, {row["Class"] for row in live["expressions"].values()})
+    warn_unplaceable(live)
     return common.document(target, class_path, _properties(class_path).extract(read, context, include_defaults), _body(live, class_path))
 
 

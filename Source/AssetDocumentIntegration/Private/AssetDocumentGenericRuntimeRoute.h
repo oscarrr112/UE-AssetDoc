@@ -51,7 +51,7 @@ public:
 	virtual FAssetDocumentRuntimeResultDto DispatchDiff(
 		const FAssetDocumentDiffRequest& Request) override;
 	virtual FAssetDocumentRuntimeResultDto DispatchSync(
-		const TSharedPtr<FJsonObject>& Options) override;
+		const FAssetDocumentSyncRequest& Request) override;
 	virtual FAssetDocumentRuntimeResultDto DispatchInspectProfile(
 		const FAssetDocumentProfileRequest& Request,
 		const FString& AssetClassPath) override;
@@ -74,6 +74,13 @@ public:
 		TArray<FAssetDocumentRuntimeDiagnostic>& OutDiagnostics);
 
 private:
+	// A Blueprint class without its own registered profile is read by the profile of its nearest Blueprint ancestor
+	// that has one (FindAssetDocumentBlueprintProfileClass): the request keeps its exact class and names that
+	// profile's class in RequestedProfileClassPath. A Blueprint class no profile reads is refused here, so the generic
+	// route never shows it as a near-empty document.
+	TOptional<FAssetDocumentRuntimeResultDto> RouteProfileClass(FAssetDocumentRuntimeRequestDto& Request) const;
+	// The activation of the request's class, or of the profile class it is routed to.
+	const FAssetDocumentRuntimeTargetActivation* FindTargetActivation(const FAssetDocumentRuntimeRequestDto& Request) const;
 	// The request entry points above run these under FAssetDocumentEditorNonInteractiveScope.
 	FAssetDocumentResult DispatchApplyFileImpl(const FAssetDocumentApplyFileRequest& Request);
 	FAssetDocumentResult DispatchValidateImpl(const FAssetDocumentValidateRequest& Request);

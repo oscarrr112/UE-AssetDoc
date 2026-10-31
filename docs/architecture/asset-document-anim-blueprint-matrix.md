@@ -69,6 +69,7 @@ Blend Space Graph 的采样与采样图写在 `Samples[{Name, X, Y?, Graph?}]`�
 | 状态：新增 / 删除、状态姿势图、状态 Details（事件通知、Always Reset On Entry） | `SM:State` + `Graph` + `Properties` | ✅ | ✅ | Supported | |
 | 入口状态 | `Entry` 的连线 | ✅ | ✅ | Supported | |
 | 转换：新增 / 删除、规则图、Details（CrossfadeDuration、PriorityOrder、BlendMode、自动规则等） | `SM:Transition` + `From`/`To` + `Graph` + `Properties` | 部分（规则图不支持自定义节点） | ✅ | Supported | 同一对状态间可有多条转换（编辑器允许）。身份：Extract 写出的 `NodeGuid`；手写文档（无 `NodeGuid`）按 `From`/`To` + 序号与现有转换一一对应（第 n 条对第 n 条，`SchemaAdapter.matches_in_order`），子图名按 `A->B #2` 编号。手写 / Extract 重放为 no-op；改第二条只改它；用 Extract（带 `NodeGuid`）删掉第一条时保留第二条的节点。E2E `StateMachine.DuplicateTransitions` |
+| 规则图 / AnimGraph 中按来源读取的 getter（Time Remaining (ratio)、State Weight…） | 规则图 `Nodes[{Action: "K2:AnimGetter:<类>:<函数>@<来源>"}]` | ➖ | ✅ | Supported | 来源 = 资产播放器的动画资产名、状态 / 别名 / 状态机名、转换 `<from>-><to>`（与 getter 标题一致，`UK2Node_AnimGetter::GenerateTitle`）；含 `:@#` 的名字不写来源。放置时用该来源的菜单 action（`UK2Node_AnimGetter::GetMenuActions` 每个来源一个 spawner），按 `IsActionFilteredOut` 只取本图菜单提供的（规则图：前一状态及其播放器）；仍有两个同名来源 → `Graph.ActionAmbiguous`。旧键（无 `@<来源>`）作为别名：按 `NodeGuid` / 记录的 `Id` 匹配、两侧该函数唯一时匹配、新建时本图只提供一个时放置；Extract 只在按旧键 Apply 过且图中唯一时保留旧键。改播放器的资产会改变其 getter 的键。UE 测试 `UEAssetDoc.Codec.AnimBlueprint.AnimGetterSource` |
 | Conduit（含规则图） | `SM:Conduit` + `Graph` | ➖（`UnsupportedStateMachineNodeClass`） | ✅ | Supported | |
 | State Alias（别名覆盖的状态、Global Alias） | `SM:StateAlias` + `Properties.AliasedStates` / `bGlobalAlias` | ➖ | ✅ | Supported | |
 | 自定义混合图（转换 Details → Blend Logic = Custom） | `SM:Transition` + `BlendGraph {Nodes, Links}` | ➖ | ✅ | Supported | `BlendGraph` 隐含 `LogicType = TLT_Custom`（编辑器 PostEditChangeProperty 建图）；改回 `TLT_StandardBlend` 删除该图；E2E `Graphs.CustomTransitionBlendGraph` |
@@ -83,7 +84,7 @@ Blend Space Graph 的采样与采样图写在 `Samples[{Name, X, Y?, Graph?}]`�
 | 节点位置、注释、NodeGuid | `Position` / `Comment` / `NodeGuid` | ✅ | ✅ | Supported | 与 K2 相同 |
 | 读取（Extract / Inspect / Diff） | 全部上述 key | ✅ | ✅ | Supported | extract → apply → extract 为空操作 |
 
-**统计：** Supported 39 行，Read-only 0 行，Unsupported 5 行
+**统计：** Supported 40 行，Read-only 0 行，Unsupported 5 行
 （改 Template、Sync Group 颜色、组件、Timeline、变量改名）。
 
 ## 3. 省略语义

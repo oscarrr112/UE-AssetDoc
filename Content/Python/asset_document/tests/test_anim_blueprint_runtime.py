@@ -213,6 +213,21 @@ def _guid(index):
     return f"{index:032X}"
 
 
+class EventGraphNodeSettingsTests(unittest.TestCase):
+    def test_a_k2_node_states_only_settings_that_differ_from_a_new_node(self):
+        # A custom event in the event graph reports its Details settings with a new node's values.
+        settings = {"properties": {"CallInEditor": False, "Replication": "NotReplicated"},
+                    "property_defaults": {"CallInEditor": False, "Replication": "NotReplicated"}}
+        default = _live_node(_guid(5), "K2:CustomEvent", extras=settings)
+        self.assertIsNone(ANIM_ADAPTER.extract_properties(default, None).node or None)
+        changed = _live_node(_guid(6), "K2:CustomEvent",
+                             extras={**settings, "properties": {"CallInEditor": True, "Replication": "NotReplicated"}})
+        self.assertEqual(dict(ANIM_ADAPTER.extract_properties(changed, None).node), {"CallInEditor": True})
+        # An animation node's settings are stated as before.
+        anim = _live_node(_guid(7), "Anim:SequencePlayer", extras={"properties": {"PlayRate": 1.0}})
+        self.assertEqual(dict(ANIM_ADAPTER.extract_properties(anim, None).node), {"PlayRate": 1.0})
+
+
 class LiveBlendSpaceTests(unittest.TestCase):
     """Extract / reconcile of a live blend space and of duplicate transitions (no editor)."""
 
@@ -563,6 +578,95 @@ class StateMachineOmittedSettingsTests(unittest.TestCase):
         extracted = decode_anim_graph(self.machine({"Bidirectional": True}))
         self.assertEqual(runtime.omitted_settings(authored, extracted), ["T: Bidirectional"])
         self.assertEqual(runtime.omitted_settings(extracted, extracted), [])
+
+
+class BindingCallSiteTests(unittest.TestCase):
+    """A binding's ContextId (the binding's Call Site menu); one written without it keeps the live call site."""
+
+    BOUND = {"Path": "Speed", "ContextId": "UnBatched_ThreadSafe"}
+
+    def plan(self, bindings):
+        player = _live_node(_guid(3), "Anim:SequencePlayer", extras={"properties": {"Bindings": {"PlayRate": self.BOUND}}})
+        anim = LiveGraph(guid=_guid(1), path="AnimGraph", role="anim_graph", schema_tag="Anim",
+                         nodes=(_live_node(_guid(2), implicit="root"), player), links=(), name="AnimGraph")
+        body = {"Nodes": [{"Id": "Output"}, {"Id": "Play", "Action": "Anim:SequencePlayer", "NodeGuid": _guid(3),
+                                             "Properties": {"Bindings": bindings}}], "Links": []}
+        return [op for op in reconcile((decode_anim_graph(body),), LiveAsset((anim,)),
+                                       managed_roles=frozenset({"anim_graph"}), adapter=ANIM_ADAPTER).briefs()
+                if op[0] == "graph.node.property.set"]
+
+    def test_a_binding_without_context_id_keeps_the_call_site(self):
+        self.assertEqual(self.plan({"PlayRate": {"Path": "Speed"}}), [])
+        self.assertEqual(self.plan({"PlayRate": self.BOUND}), [])
+
+    def test_a_stated_call_site_or_path_is_written(self):
+        for bindings in ({"PlayRate": {"Path": "Speed", "ContextId": ""}}, {"PlayRate": {"Path": "Other"}},
+                         {"PlayRate": {"Path": "Speed"}, "BlendTime": {"Path": "Speed"}}):
+            self.assertEqual([op[2]["value"] for op in self.plan(bindings)], [bindings])
+
+
+class BindingCallSiteDiffTests(unittest.TestCase):
+    """Diff (strict) of a binding: an entry without ContextId keeps the call site, as an apply does."""
+
+    @staticmethod
+    def body(bindings):
+        return {"AnimGraph": {"Nodes": [{"Id": "Output"}, {"Id": "Blend", "Action": "Anim:TwoWayBlend",
+                                                          "Properties": {"Bindings": bindings}}],
+                              "Links": [{"From": "Blend:Pose", "To": "Output:Result"}]}}
+
+    def changed(self, authored, live):
+        return [item.path for item in runtime.diff(document(self.body(authored)), document(self.body(live)),
+                                                   strict=True)]
+
+    def test_an_entry_without_context_id_matches_any_call_site(self):
+        live = {"Alpha": {"Path": "Speed", "ContextId": "UnBatched_ThreadSafe"}}
+        self.assertEqual(self.changed({"Alpha": {"Path": "Speed"}}, live), [])
+        self.assertEqual(self.changed(live, live), [])
+        self.assertEqual(self.changed({"Alpha": {"Path": "Speed", "ContextId": ""}}, {"Alpha": {"Path": "Speed"}}), [])
+        self.assertEqual(self.changed({"Alpha": {"Path": "Speed", "OnlyUpdateWhenActive": False}},
+                                      {"Alpha": {"Path": "Speed"}}), [])
+
+    def test_a_stated_difference_is_reported(self):
+        live = {"Alpha": {"Path": "Speed", "ContextId": "UnBatched_ThreadSafe"}}
+        for authored in ({"Alpha": {"Path": "Speed", "ContextId": ""}}, {"Alpha": {"Path": "Other"}}, {},
+                         {"Alpha": {"Path": "Speed"}, "Beta": {"Path": "Speed"}}):
+            self.assertEqual(self.changed(authored, live), ["/Body/AnimGraph"], authored)
+
+
+class SharedTransitionRuleTests(unittest.TestCase):
+    """Transitions sharing a rule or blend settings (the transition Details' sharing buttons)."""
+
+    @staticmethod
+    def machine(name, transition):
+        row = {"Id": "T", "Action": "SM:Transition", "From": "A", "To": "B", **transition}
+        return {"Id": name, "Action": "Anim:StateMachine", "Graph": {"Nodes": [
+            {"Id": "A", "Action": "SM:State"}, {"Id": "B", "Action": "SM:State"}, row], "Links": []}}
+
+    def body(self, first, second):
+        return {"ParentClass": "/Script/Engine.AnimInstance", "TargetSkeleton": SKELETON, "AnimGraph": {
+            "Nodes": [{"Id": "Output"}, self.machine("M1", first), self.machine("M2", second)], "Links": []}}
+
+    def test_sharing_is_set_before_the_blend_settings(self):
+        machine = decode_anim_graph({"Nodes": [{"Id": "Output"}, self.machine("M", {"Properties": {
+            "BlendMode": "Cubic", "CrossfadeDuration": 0.5, "SharedCrossfade": "X", "SharedRules": "A"}})],
+            "Links": []}).subgraphs[0]
+        transition = machine.node("T")
+        keys = [key for _, key, _ in ANIM_ADAPTER.property_items(transition.action, transition.properties)]
+        self.assertEqual(keys, ["SharedRules", "SharedCrossfade", "BlendMode", "CrossfadeDuration"])
+        state = machine.node("A")
+        self.assertEqual(ANIM_ADAPTER.property_items(state.action, state.properties),
+                         tuple(state.properties.items()))
+
+    def test_a_shared_rule_holds_its_graph_in_one_state_machine(self):
+        rule = {"Nodes": [], "Links": []}
+        held = {"Properties": {"SharedRules": "Moving"}, "Graph": rule}
+        code, path, _ = code_of(lambda: canonicalize(document(self.body(held, held))))
+        self.assertEqual((code, path), ("Graph.SharedRuleAcrossStateMachines",
+                                        "/Body/AnimGraph/Nodes/2/Graph/Nodes/2/Graph"))
+        # A transition of another state machine naming the group without its Graph is left to the editor's state
+        # (an existing group spanning state machines round-trips; joining one is refused when applied).
+        canonicalize(document(self.body(held, {"Properties": {"SharedRules": "Moving"}})))
+        canonicalize(document(self.body(held, {"Properties": {"SharedRules": "Other"}, "Graph": rule})))
 
 
 class LayerInterfaceTests(unittest.TestCase):

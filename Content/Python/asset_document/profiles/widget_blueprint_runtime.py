@@ -16,15 +16,16 @@ Composition:
 
 Writes are covered by Core's package snapshot (existing target) or the factory rollback (created
 target); preflight therefore returns ``SNAPSHOT_COVERED``.  Apply order: header and members ->
-widget tree -> graphs -> ClassDefaults -> focus / palette / design size / bindings -> animations;
-repair compiles once.
+widget tree -> new animations (their headers, so graphs can get them) -> graphs -> ClassDefaults -> focus /
+palette / design size / bindings -> animations; repair compiles once.
 See docs/architecture/asset-document-widget-blueprint-matrix.md for the support matrix.
 """
 from __future__ import annotations
 
 from asset_document.canonical.document_codec import DocumentCodec
+from asset_document import class_routing
 from asset_document.diagnostics import (AssetDocumentContractError, DiagnosticSeverity, RuntimeDiagnostic, contract_error,
-                                        contract_errors, primitive_error, with_diagnostics)
+                                        contract_errors, primitive_error, read_warning, with_diagnostics)
 from asset_document.diff.model import Difference, DiffKind
 from asset_document.dto import PrimitiveRequirement
 from asset_document.graphs.executor import LINK_CHECK, graph_requirements
@@ -35,6 +36,7 @@ from asset_document.meta import (
     ProfileMeta, RegionMeta, RegionOwnership,
 )
 from asset_document.mutation_intent_projection import SNAPSHOT_COVERED
+from asset_document.tolerance import authored_rule
 from asset_document.profile_runtime import RuntimeProfileRegistration, RuntimeTargetLifecycleSpec, RuntimeTargetPolicy
 from asset_document.profiles import blueprint_dispatchers as dispatchers
 from asset_document.profiles import blueprint_renames as renames
@@ -45,7 +47,7 @@ from asset_document.profiles.ublueprint_graph_compare import section_mismatches
 from asset_document.profiles.ublueprint_runtime import (
     CLASS_RESOLVE, LIFECYCLE, MEMBER_PRIMITIVES, PENDING_RELAYOUT, RESOLVE, ROUTE, _graph_executor, _require_target,
     _snapshot, authored_k2_graphs, query_member_pages, read_live_with_relayout, relayout_differences,
-    check_picks, pick_check_items, trial_parent_context, validate_links,
+    check_picks, layout_warnings, pick_check_items, trial_parent_context, validate_links,
     repair as _repair_blueprint, self_class,
 )
 from asset_document.regions.primitive_catalog import (
@@ -288,8 +290,8 @@ def _validate_header(document) -> None:
     if type(document.get("SchemaVersion")) is not int or document["SchemaVersion"] != 1:
         raise _error("/SchemaVersion", "SchemaVersion must be 1.", "Meta.InvalidSchemaVersion")
     _require_target(document.get("Target"))
-    if document.get("Class") != WIDGET_BLUEPRINT_CLASS:
-        raise _error("/Class", f"Class must be {WIDGET_BLUEPRINT_CLASS}.", "Widget.ClassMismatch")
+    if not class_routing.accepts(WIDGET_BLUEPRINT_CLASS, document.get("Class")):
+        raise _error("/Class", f"Class must be {class_routing.document_class(WIDGET_BLUEPRINT_CLASS)}.", "Widget.ClassMismatch")
     if document.get("Action") not in {item.value for item in DocumentAction}:
         raise _error("/Action", "Action is Create, Update or CreateOrUpdate.", "Widget.InvalidAction")
     for key in ("Definitions", "Properties"):
@@ -422,9 +424,22 @@ def _apply_tree(body, umg: _Calls) -> list:
         rows, _ = query_tree(umg)
     desired = tree.effective_tree(body["WidgetTree"], tree.tree_from_rows(rows))
     umg.run(tree.plan_structure(desired, rows, paths))
-    rows, _ = query_tree(umg)
+    rows, first = query_tree(umg)
+    leftovers = tree.plan_detached_removes(first.get("detached", []), paths)
+    if leftovers:
+        umg.run(leftovers)
+        rows, _ = query_tree(umg)
     umg.run(tree.plan_values(desired, rows, paths))
     return diagnostics
+
+
+def _create_animations(body, umg: _Calls) -> None:
+    """The document's new animations, header only, before its graphs: an animation is a member of the Widget
+    Blueprint (its variable), so a graph node may get it (K2:Get:<Animation>) in the same document. Their tracks
+    are written with the other animations after the graphs."""
+    listed = {row["name"] for row in umg.query("umg.anim.query.v1").get("animations", [])}
+    umg.run([("umg.anim.set.v1", animation.header_values(desired, None), f"/Body/Animations/{index}")
+             for index, desired in enumerate(body["Animations"]) if desired["Name"] not in listed])
 
 
 def _apply_animations(body, umg: _Calls) -> None:
@@ -446,14 +461,17 @@ def apply(document, read, mutable, context) -> tuple:
     body = document["Body"]
     target = document["Target"]
     blueprint = _Calls(context, "blueprint", read, mutable)
-    blueprint.run(members.plan_header(document.get("Properties", {}), body,
-                                      blueprint.members()))
+    first = blueprint.members()
+    members.refuse_unrepresented_graphs(first)
+    blueprint.run(members.plan_header(document.get("Properties", {}), body, first))
     query = blueprint.members()
     blueprint.run(renames.plan_renames(body, query) + dispatchers.plan_removes(body, query) + members.plan_interfaces(body, query)
                   + members.plan_variables(body, query) + dispatchers.plan_sets(body, query))
     umg = _Calls(context, "umg", read, mutable)
     diagnostics = _apply_tree(body, umg) if "WidgetTree" in body else []
     graphs, roles = decode_body(body, self_class=self_class(target))
+    if roles and "Animations" in body:
+        _create_animations(body, umg)
     changed = list(blueprint.changed) + list(umg.changed)
     if roles:
         executor = _graph_executor(context, read, mutable, target)
@@ -520,9 +538,27 @@ def _extract(target, read, context, include_defaults: bool = False, authored_bod
                             adapter=K2_ADAPTER, self_class=self_class(target), include_defaults=include_defaults)
     for section in GRAPH_SECTIONS:
         body[section] = [encode_graph(graph) for graph in graphs if graph.id.startswith(section + "/")]
-    return {"SchemaVersion": 1, "Target": target, "Class": WIDGET_BLUEPRINT_CLASS,
+    members.warn_markers(body, query.get("properties", {}))
+    members.warn_unrepresented(query)
+    warn_extensions(first.get("extensions"))
+    return {"SchemaVersion": 1, "Target": target, "Class": class_routing.document_class(WIDGET_BLUEPRINT_CLASS),
             "Action": DocumentAction.CREATE_OR_UPDATE.value, "Definitions": {},
             "Properties": dict(query.get("properties", {})), "Body": body}, pending
+
+
+def warn_extensions(extensions) -> None:
+    """Read warnings for the editor extensions saved on the Widget Blueprint (View Model bindings, UI Components):
+    the document has no form for them; an apply keeps them as they are."""
+    for row in extensions or ():
+        if type(row) is not dict or type(row.get("class")) is not str:
+            continue
+        name = row["class"].rsplit(".", 1)[-1]
+        lists = row.get("lists") if type(row.get("lists")) is dict else {}
+        held = f" ({', '.join(f'{path}: {count}' for path, count in sorted(lists.items()))})" if lists else ""
+        read_warning("/Body", f"{members.MARKER_PREFIX}.Unrepresented",
+                     f"The editor extension {name}{held} is saved with this Widget Blueprint but has no place in this "
+                     "document. An apply keeps it as it is; after renaming or removing a widget it uses, check it in "
+                     "the editor.")
 
 
 def _canonical_design_size(value) -> dict:
@@ -541,8 +577,11 @@ def _canonical_design_size(value) -> dict:
         size = value.get(key, DEFAULT_DESIGN_SIZE[key])
         if type(size) is float and size.is_integer():
             size = int(size)
-        if type(size) is not int or not 1 <= size <= 100000:
+        if type(size) is not int:
             raise _error(f"/Body/DesignSize/{key}", f"{key} is a whole number of pixels (1..100000).", "Widget.InvalidValue")
+        if not 1 <= size <= 100000:
+            authored_rule(f"/Body/DesignSize/{key}", "Widget.InvalidValue", f"{key} is a whole number of pixels "
+                          f"(1..100000), not {size}.")
         out[key] = size
     return out
 
@@ -596,7 +635,7 @@ class WidgetBlueprintRuntimeProfile:
         return {"Class": WIDGET_BLUEPRINT_CLASS, "BodySections": list(BODY_KEYS)}
 
     def create_template(self, target: str) -> dict:
-        return {"SchemaVersion": 1, "Target": _require_target(target), "Class": WIDGET_BLUEPRINT_CLASS,
+        return {"SchemaVersion": 1, "Target": _require_target(target), "Class": class_routing.document_class(WIDGET_BLUEPRINT_CLASS),
                 "Action": DocumentAction.CREATE_OR_UPDATE.value, "Definitions": {}, "Properties": {},
                 "Body": {"ParentClass": USER_WIDGET_CLASS, "ImplementedInterfaces": [], "Variables": [],
                          "ClassDefaults": {},
@@ -615,6 +654,11 @@ class WidgetBlueprintRuntimeProfile:
 
     def create_target_context(self, document, context):
         document = canonicalize(document)
+        routed = class_routing.routed_class(WIDGET_BLUEPRINT_CLASS)
+        if routed is not None:
+            raise _error("/Class", f"AssetDoc reads and edits existing {routed} assets with this profile but does not "
+                         "create them: make the asset in the editor, then extract it and apply with Action Update.",
+                         "Widget.SubclassCreateUnsupported")
         parent = document["Body"].get("ParentClass")
         if parent is None:
             raise _parent_required("/Body/ParentClass")
@@ -633,18 +677,22 @@ class WidgetBlueprintRuntimeProfile:
     def validate_checks(self, document, read_asset_handle, context):
         """Validate's graph check of the K2 graphs (the UBlueprint Profile's, ublueprint_link_check): node keys, pin
         names and links, read on the existing target, or on a transient Widget Blueprint of the parent class for a
-        new one (validate_trial_context). Widgets' bound events are left to Apply."""
+        new one (validate_trial_context). Widgets' bound events are left to Apply. Then the graphs' layout
+        warnings."""
         document = canonicalize(document)
-        found = []
+        found, warnings = [], []
         for check in (lambda: validate_links(document, read_asset_handle, context, skip=_bound_event, requirements=BY_ID),
                       lambda: check_picks(document, read_asset_handle, context, requirements=BY_ID),
                       lambda: check_bindings(document, read_asset_handle, context)):
             try:
-                check()
+                warnings.extend(check() or ())
             except AssetDocumentContractError as failure:
                 found.extend((failure.diagnostic,) + failure.additional)
         if found:
             raise contract_errors(found)
+        executor = _graph_executor(context, read_asset_handle, None, document["Target"])
+        return with_diagnostics((), tuple(warnings) + tuple(layout_warnings(document, read_asset_handle, context, executor,
+                                                                            requirements=BY_ID)))
 
     def validate_trial_context(self, document, context):
         document = canonicalize(document)
@@ -658,7 +706,7 @@ class WidgetBlueprintRuntimeProfile:
         return extract(_require_target(target), asset_handle, context, include_defaults)
 
     def inspect(self, *, mode, exact_class_path, exact_asset_object_path, editor_asset_handle, context):
-        if mode != "live_asset" or exact_class_path != WIDGET_BLUEPRINT_CLASS or editor_asset_handle is None:
+        if mode != "live_asset" or not class_routing.accepts(WIDGET_BLUEPRINT_CLASS, exact_class_path) or editor_asset_handle is None:
             raise _error("/Inspect", "Widget Blueprint inspection reads a live asset.", "Widget.InspectNotAdmitted")
         return self.canonicalize(self.extract(target=exact_asset_object_path.rsplit(".", 1)[0],
                                               asset_handle=editor_asset_handle, context=context))

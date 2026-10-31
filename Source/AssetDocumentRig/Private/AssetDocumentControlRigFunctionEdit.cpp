@@ -12,11 +12,15 @@
 // ["Nodes", <collapse node>, "Collapse"] (FGraphTarget). Ops:
 //   function.add {name, mutable}      AddFunctionToLibrary (mutable: the editor's "New Function", with an execute pin)
 //   function.remove {name}  function.rename {name, to}
-//   function.set {graph, public?, color?, category?, keywords?, description?}   public / color: functions only
+//   function.set {graph, public?, color?, category?, keywords?, description?, tags?}   public / color / tags (the
+//       Variant tags, in order, by name; a new one from the project's tag list): functions only
 //   function.pin.add {graph, name, direction, type, default?}   direction Input / Output / IO
 //   function.pin.remove {graph, name}  function.pin.rename {graph, name, to}  function.pin.type {graph, name, type}
 //   function.pin.index {graph, name, index}   index among all exposed pins
 //   function.pin.default {graph, name, value} a function's argument default (null resets)
+//   function.layout {graph, categories?: [{name, pins?, expanded?}], display_names?: {pin: label}}   the Details panel's
+//       pin layout: categories in order (unlisted ones removed), each category's pins in order, pin labels ("" clears);
+//       written while node layouts are off too (RigVM.EnableNodeLayouts is turned on for the op and restored)
 //   local.add {graph, name, type, default?}  local.remove {graph, name}  local.rename {graph, name, to}
 //   local.type {graph, name, type}  local.default {graph, name, value}
 //   function.dependents {functions: [{name, change}]}   notes ControlRig.DependentsAffected for each public function
@@ -26,9 +30,12 @@
 #include "AssetDocumentNameSuggestions.h"
 
 #include "ControlRigBlueprintLegacy.h"
+#include "HAL/IConsoleManager.h"
 #include "Misc/EngineVersionComparison.h"
 #include "RigVMCore/RigVMExecuteContext.h"
+#include "RigVMCore/RigVMNodeLayout.h"
 #include "RigVMCore/RigVMStruct.h"
+#include "RigVMCore/RigVMVariant.h"
 #include "RigVMModel/Nodes/RigVMCollapseNode.h"
 #include "RigVMModel/Nodes/RigVMFunctionReferenceNode.h"
 #include "RigVMModel/Nodes/RigVMLibraryNode.h"
@@ -36,6 +43,8 @@
 #include "RigVMModel/RigVMFunctionLibrary.h"
 #include "RigVMModel/RigVMGraph.h"
 #include "RigVMModel/RigVMPin.h"
+#include "RigVMModel/RigVMSchema.h"
+#include "RigVMSettings.h"
 
 namespace UE::AssetDocument::Graph::Rig::ControlRig
 {
@@ -299,10 +308,101 @@ bool OpFunctionRename(FGraphEditState& State, FReader& Op)
 	return true;
 }
 
+// The function's Variant tags as the Details panel's Variant row edits them (the library controller's
+// AddDefaultTagToFunctionVariant / RemoveTagFromFunctionVariant on the function's name): tags left out are removed, a
+// new tag comes from the project's tag list (Project Settings > RigVM), and an order the appends cannot reach re-adds
+// the tags in order (each keeps its own data).
+bool SetVariantTags(FGraphEditState& State, FReader& Op, const FInterfaceTarget& Target)
+{
+	const FValue* Value = nullptr;
+	if (!Op.Array(TEXT("tags"), Value))
+	{
+		return false;
+	}
+	if (!Target.bFunction)
+	{
+		return Op.Fail(TEXT("ControlRig.InvalidValue"), TEXT("Variant tags belong to functions."), TEXT("tags"));
+	}
+	TArray<FName> Wanted;
+	for (int32 Index = 0; Index < Value->Elements.Num(); ++Index)
+	{
+		const FValue& Item = Value->Elements[Index];
+		if (Item.Kind != EAssetDocumentRuntimeValueKind::String || Item.StringValue.IsEmpty())
+		{
+			return Op.Fail(TEXT("Graph.InvalidArgument"), TEXT("tags lists tag names."), *FString::Printf(TEXT("tags/%d"), Index));
+		}
+		Wanted.AddUnique(FName(*Item.StringValue));
+	}
+	URigVMController& Controller = *Target.OuterController;
+	const FName Function(*Target.Owner->GetFunctionHeader().LibraryPointer.GetFunctionName());
+	const TArray<FRigVMTag> Current = Target.Owner->GetFunctionVariant().Tags;
+	const URigVMProjectSettings* Settings = GetDefault<URigVMProjectSettings>();
+	TArray<FString> Known;
+	for (const FRigVMTag& Tag : Settings->VariantTags)
+	{
+		Known.Add(Tag.Name.ToString());
+	}
+	for (int32 Index = 0; Index < Wanted.Num(); ++Index)
+	{
+		const FName Name = Wanted[Index];
+		if (!Current.ContainsByPredicate([Name](const FRigVMTag& Tag) { return Tag.Name == Name; }) && Settings->FindTag(Name) == nullptr)
+		{
+			return Op.Fail(TEXT("ControlRig.InvalidValue"), FString::Printf(TEXT("'%s' is not a variant tag of this project (Project Settings > "
+				"RigVM > Variant Tags).%s"), *Name.ToString(), *UE::AssetDocument::DescribeNameCandidates(Name.ToString(), Known, TEXT("Tags"))),
+				*FString::Printf(TEXT("tags/%d"), Index));
+		}
+	}
+	TArray<FName> Remaining;
+	for (const FRigVMTag& Tag : Current)
+	{
+		if (!Wanted.Contains(Tag.Name))
+		{
+			Controller.RemoveTagFromFunctionVariant(Function, Tag.Name, false, false);
+		}
+		else
+		{
+			Remaining.Add(Tag.Name);
+		}
+	}
+	TArray<FName> Appended = Remaining;
+	for (const FName& Name : Wanted)
+	{
+		if (!Remaining.Contains(Name))
+		{
+			Appended.Add(Name);
+		}
+	}
+	if (Appended != Wanted)
+	{
+		for (const FName& Name : Remaining)
+		{
+			Controller.RemoveTagFromFunctionVariant(Function, Name, false, false);
+		}
+		Remaining.Reset();
+	}
+	for (const FName& Name : Wanted)
+	{
+		if (Remaining.Contains(Name))
+		{
+			continue;
+		}
+		if (const FRigVMTag* Own = Current.FindByPredicate([Name](const FRigVMTag& Tag) { return Tag.Name == Name; }))
+		{
+			Controller.AddTagToFunctionVariant(Function, *Own, false, false);
+		}
+		else
+		{
+			Controller.AddDefaultTagToFunctionVariant(Function, Name, false, false);
+		}
+	}
+	return CheckReported(State, Op, TEXT("The variant tags"), TEXT("ControlRig.InvalidValue"), TEXT("tags"));
+}
+
 bool OpFunctionSet(FGraphEditState& State, FReader& Op)
 {
 	FInterfaceTarget Target;
-	if (!Op.OnlyFields({TEXT("op"), TEXT("graph"), TEXT("public"), TEXT("color"), TEXT("category"), TEXT("keywords"), TEXT("description")})
+	if (!Op.OnlyFields({TEXT("op"), TEXT("graph"), TEXT("public"), TEXT("color"), TEXT("category"), TEXT("keywords"), TEXT("description"),
+			TEXT("tags")})
 		|| !ReadInterfaceTarget(State, Op, Target))
 	{
 		return false;
@@ -385,6 +485,10 @@ bool OpFunctionSet(FGraphEditState& State, FReader& Op)
 		{
 			return false;
 		}
+	}
+	if (Op.Has(TEXT("tags")) && !SetVariantTags(State, Op, Target))
+	{
+		return false;
 	}
 	State.bChanged = true;
 	return true;
@@ -652,6 +756,272 @@ bool OpExposedPinIndex(FGraphEditState& State, FReader& Op)
 	if (!bMoved)
 	{
 		return Op.Fail(TEXT("ControlRig.InvalidValue"), FString::Printf(TEXT("Pin '%s' could not be moved to %lld."), *Name, Index), TEXT("index"));
+	}
+	State.bChanged = true;
+	return true;
+}
+
+// ---- pin layout ------------------------------------------------------------------------------------------------
+
+struct FLayoutCategory
+{
+	FString Name;
+	TArray<FString> Pins;
+	bool bExpanded = false;
+};
+
+bool ReadLayoutCategories(FReader& Op, const FInterfaceTarget& Target, TArray<FLayoutCategory>& Out)
+{
+	const FValue* Categories = nullptr;
+	if (!Op.Array(TEXT("categories"), Categories))
+	{
+		return false;
+	}
+	for (int32 Index = 0; Index < Categories->Elements.Num(); ++Index)
+	{
+		const FValue& Item = Categories->Elements[Index];
+		const FString Field = FString::Printf(TEXT("categories/%d"), Index);
+		const FValue* Name = Item.Kind == EAssetDocumentRuntimeValueKind::Object ? FindField(Item, TEXT("name")) : nullptr;
+		if (Name == nullptr || Name->Kind != EAssetDocumentRuntimeValueKind::String || Name->StringValue.IsEmpty())
+		{
+			return Op.Fail(TEXT("Graph.InvalidArgument"), TEXT("categories lists {name, pins?, expanded?}."), *Field);
+		}
+		FLayoutCategory& Category = Out.AddDefaulted_GetRef();
+		Category.Name = Name->StringValue;
+		if (const FValue* Expanded = FindField(Item, TEXT("expanded")))
+		{
+			Category.bExpanded = Expanded->Kind == EAssetDocumentRuntimeValueKind::Boolean && Expanded->BooleanValue;
+		}
+		const FValue* Pins = FindField(Item, TEXT("pins"));
+		if (Pins == nullptr)
+		{
+			continue;
+		}
+		if (Pins->Kind != EAssetDocumentRuntimeValueKind::Array)
+		{
+			return Op.Fail(TEXT("Graph.InvalidArgument"), TEXT("pins lists pin paths."), *(Field + TEXT("/pins")));
+		}
+		for (int32 PinIndex = 0; PinIndex < Pins->Elements.Num(); ++PinIndex)
+		{
+			const FValue& Pin = Pins->Elements[PinIndex];
+			const FString PinField = FString::Printf(TEXT("%s/pins/%d"), *Field, PinIndex);
+			if (Pin.Kind != EAssetDocumentRuntimeValueKind::String)
+			{
+				return Op.Fail(TEXT("Graph.InvalidArgument"), TEXT("pins lists pin paths."), *PinField);
+			}
+			if (RequireExposedPin(Op, Target, Pin.StringValue, *PinField) == nullptr)
+			{
+				return false;
+			}
+			Category.Pins.Add(Pin.StringValue);
+		}
+	}
+	return true;
+}
+
+// The category each pin path is in, from the node's layout.
+TMap<FString, FString> LayoutPinCategories(const URigVMNode& Node)
+{
+	TMap<FString, FString> Out;
+	const FRigVMNodeLayout Layout = Node.GetNodeLayout(true);
+	for (const FRigVMPinCategory& Category : Layout.Categories)
+	{
+		for (const FString& Element : Category.Elements)
+		{
+			Out.Add(Element, Category.Path);
+		}
+	}
+	return Out;
+}
+
+// Pin categories as the Details panel's pin layout edits them: unlisted categories removed, missing ones added, pins
+// moved into their category (out of the one they leave first), the pins of each category and the categories put in
+// order, the expansion set.
+bool ApplyLayoutCategories(FGraphEditState& State, FReader& Op, const FInterfaceTarget& Target, const TArray<FLayoutCategory>& Wanted)
+{
+	URigVMController& Controller = *Target.OuterController;
+	URigVMCollapseNode* Node = Target.Owner;
+	const FName NodeName = Node->GetFName();
+	TMap<FString, FString> WantedCategoryOf;
+	TArray<FString> WantedNames;
+	for (const FLayoutCategory& Category : Wanted)
+	{
+		WantedNames.Add(Category.Name);
+		for (const FString& Pin : Category.Pins)
+		{
+			WantedCategoryOf.Add(Pin, Category.Name);
+		}
+	}
+	for (const FString& Existing : Node->GetPinCategories())
+	{
+		if (!WantedNames.Contains(Existing) && Node->GetPinCategories().Contains(Existing))
+		{
+			Controller.RemovePinCategory(NodeName, Existing, false, false);
+		}
+	}
+	for (const FString& Name : WantedNames)
+	{
+		if (!Node->GetPinCategories().Contains(Name))
+		{
+			Controller.AddEmptyPinCategory(NodeName, Name, false, false);
+		}
+	}
+	if (!CheckReported(State, Op, TEXT("The pin categories"), TEXT("ControlRig.InvalidValue"), TEXT("categories")))
+	{
+		return false;
+	}
+	for (const TPair<FString, FString>& Current : LayoutPinCategories(*Node))
+	{
+		const FString* Category = WantedCategoryOf.Find(Current.Key);
+		const URigVMPin* Pin = Node->FindPin(Current.Key);
+		if (Pin != nullptr && (Category == nullptr || *Category != Current.Value))
+		{
+			Controller.ClearPinCategory(Pin->GetPinPath(), false, false);
+		}
+	}
+	for (int32 Index = 0; Index < Wanted.Num(); ++Index)
+	{
+		for (const FString& PinPath : Wanted[Index].Pins)
+		{
+			const URigVMPin* Pin = Node->FindPin(PinPath);
+			if (Pin != nullptr && LayoutPinCategories(*Node).FindRef(PinPath) != Wanted[Index].Name)
+			{
+				Controller.SetPinCategory(Pin->GetPinPath(), Wanted[Index].Name, false, false);
+				if (!CheckReported(State, Op, FString::Printf(TEXT("Putting pin '%s' in category '%s'"), *PinPath, *Wanted[Index].Name),
+					TEXT("ControlRig.InvalidValue"), *FString::Printf(TEXT("categories/%d/pins"), Index)))
+				{
+					return false;
+				}
+			}
+		}
+	}
+	for (const FLayoutCategory& Category : Wanted)
+	{
+		const FRigVMNodeLayout Layout = Node->GetNodeLayout(true);
+		const FRigVMPinCategory* Current = Layout.Categories.FindByPredicate(
+			[&Category](const FRigVMPinCategory& Each) { return Each.Path == Category.Name; });
+		if (Current != nullptr && Current->Elements != Category.Pins)
+		{
+			for (int32 Index = 0; Index < Category.Pins.Num(); ++Index)
+			{
+				if (const URigVMPin* Pin = Node->FindPin(Category.Pins[Index]))
+				{
+					Controller.SetPinIndexInCategory(Pin->GetPinPath(), Index, false, false);
+				}
+			}
+		}
+	}
+	if (Node->GetPinCategories() != WantedNames)
+	{
+		for (int32 Index = 0; Index < WantedNames.Num(); ++Index)
+		{
+			Controller.SetPinCategoryIndex(NodeName, WantedNames[Index], Index, false, false);
+		}
+	}
+	for (const FLayoutCategory& Category : Wanted)
+	{
+		if (!Category.Name.Equals(FRigVMPinCategory::GetDefaultCategoryName(), ESearchCase::IgnoreCase)
+			&& Node->IsPinCategoryExpanded(Category.Name) != Category.bExpanded)
+		{
+			Controller.SetPinCategoryExpansion(NodeName, Category.Name, Category.bExpanded, false, false);
+		}
+	}
+	return CheckReported(State, Op, TEXT("The pin category order"), TEXT("ControlRig.InvalidValue"), TEXT("categories"));
+}
+
+// RigVM.EnableNodeLayouts on for a scope (the controller writes pin layouts only while it is on). Afterwards the variable
+// has its old value and its old SetBy priority again, so ini, device profile and console settings keep working.
+// A value set from the console outranks code and stays as it is.
+struct FFunctionEditNodeLayoutsScope
+{
+	IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(TEXT("RigVM.EnableNodeLayouts"));
+	EConsoleVariableFlags OriginalFlags = ECVF_Default;
+	bool bTurnedOn = false;
+
+	FFunctionEditNodeLayoutsScope()
+	{
+		if (Variable != nullptr && !Variable->GetBool())
+		{
+			OriginalFlags = Variable->GetFlags();
+			Variable->Set(true, ECVF_SetByCode);
+			bTurnedOn = Variable->GetBool();
+		}
+	}
+	~FFunctionEditNodeLayoutsScope()
+	{
+		if (!bTurnedOn)
+		{
+			return;
+		}
+		// With priority history the variable drops back to the value of the priority below; without it Unset does nothing.
+		Variable->Unset(ECVF_SetByCode);
+		const EConsoleVariableFlags SetBy = static_cast<EConsoleVariableFlags>(Variable->GetFlags() & ECVF_SetByMask);
+		if (SetBy == ECVF_SetByCode && (Variable->GetBool() || (OriginalFlags & ECVF_SetByMask) != ECVF_SetByCode))
+		{
+			Variable->Set(false, ECVF_SetByCode);
+			Variable->SetFlags(OriginalFlags);
+		}
+	}
+	FFunctionEditNodeLayoutsScope(const FFunctionEditNodeLayoutsScope&) = delete;
+	FFunctionEditNodeLayoutsScope& operator=(const FFunctionEditNodeLayoutsScope&) = delete;
+};
+
+bool OpFunctionLayout(FGraphEditState& State, FReader& Op)
+{
+	FInterfaceTarget Target;
+	if (!Op.OnlyFields({TEXT("op"), TEXT("graph"), TEXT("categories"), TEXT("display_names")}) || !ReadInterfaceTarget(State, Op, Target))
+	{
+		return false;
+	}
+	TArray<FLayoutCategory> Wanted;
+	if (Op.Has(TEXT("categories")) && !ReadLayoutCategories(Op, Target, Wanted))
+	{
+		return false;
+	}
+	const FValue* Labels = nullptr;
+	if (Op.Has(TEXT("display_names")) && !Op.Object(TEXT("display_names"), Labels))
+	{
+		return false;
+	}
+	// The Details panel edits the pin layout while node layouts are on (RigVM.EnableNodeLayouts); a rig holds its layout
+	// either way, so the op turns them on for itself. Refused only when they stay off (set to 0 from the console).
+	const FFunctionEditNodeLayoutsScope NodeLayouts;
+	const URigVMSchema* Schema = Target.Owner->GetGraph()->GetSchema();
+	if (Schema == nullptr || !Schema->SupportsNodeLayouts(Target.Owner->GetGraph()))
+	{
+		return Op.Fail(TEXT("ControlRig.EditRefused"), FString::Printf(TEXT("The pin layout of '%s' (PinCategories, pin DisplayName) is "
+			"written only while node layouts are on, and the console variable RigVM.EnableNodeLayouts is held at 0: set it to 1, or leave "
+			"PinCategories and DisplayName as the rig has them."), *Target.Owner->GetName()), Op.Has(TEXT("categories")) ? TEXT("categories")
+			: TEXT("display_names"));
+	}
+	URigVMController& Controller = *Target.OuterController;
+	const FReportingScope Reporting(Controller);
+	if (Op.Has(TEXT("categories")) && !ApplyLayoutCategories(State, Op, Target, Wanted))
+	{
+		return false;
+	}
+	if (Labels != nullptr)
+	{
+		for (int32 Index = 0; Index < Labels->ObjectKeys.Num() && Index < Labels->Elements.Num(); ++Index)
+		{
+			const FString& PinPath = Labels->ObjectKeys[Index];
+			const FValue& Label = Labels->Elements[Index];
+			const FString Field = FString::Printf(TEXT("display_names/%s"), *PinPath);
+			if (Label.Kind != EAssetDocumentRuntimeValueKind::String)
+			{
+				return Op.Fail(TEXT("Graph.InvalidArgument"), TEXT("A pin label is a string (\"\" clears it)."), *Field);
+			}
+			const URigVMPin* Pin = RequireExposedPin(Op, Target, PinPath, *Field);
+			if (Pin == nullptr)
+			{
+				return false;
+			}
+			Controller.SetPinDisplayName(Pin->GetPinPath(), Label.StringValue, false, false);
+			if (!CheckReported(State, Op, FString::Printf(TEXT("The label of pin '%s'"), *PinPath), TEXT("ControlRig.InvalidValue"), *Field))
+			{
+				return false;
+			}
+		}
 	}
 	State.bChanged = true;
 	return true;
@@ -973,6 +1343,7 @@ bool RunFunctionOp(FGraphEditState& State, FReader& Op, const FString& Kind, int
 	if (Kind == TEXT("function.pin.type")) { return OpExposedPinType(State, Op); }
 	if (Kind == TEXT("function.pin.index")) { return OpExposedPinIndex(State, Op); }
 	if (Kind == TEXT("function.pin.default")) { return OpExposedPinDefault(State, Op); }
+	if (Kind == TEXT("function.layout")) { return OpFunctionLayout(State, Op); }
 	if (Kind == TEXT("function.dependents")) { return OpFunctionDependents(State, Op, OpIndex); }
 	if (Kind == TEXT("local.add")) { return OpLocalAdd(State, Op); }
 	if (Kind == TEXT("local.remove")) { return OpLocalRemove(State, Op); }

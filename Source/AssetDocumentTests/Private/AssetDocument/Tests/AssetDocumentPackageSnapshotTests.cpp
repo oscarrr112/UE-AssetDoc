@@ -12,6 +12,7 @@
 #include "Misc/PackageName.h"
 #include "Misc/ScopeExit.h"
 #include "Serialization/ObjectWriter.h"
+#include "UObject/MetaData.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
 #include "UObject/UObjectHash.h"
@@ -653,6 +654,48 @@ bool FAssetDocumentPackageSnapshotInPlaceRebuildTest::RunTest(const FString&)
 	// After the restore the snapshot no longer pins anything.
 	Snapshot.Reset();
 	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+	return true;
+}
+
+// The package metadata about its objects (a graph node's document Id lives there) is not part of any object: a
+// restore puts it back as captured, values changed, added and removed alike.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAssetDocumentPackageSnapshotRestoresMetaDataTest,
+	"UEAssetDoc.PackageSnapshot.RestoresPackageMetaData",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAssetDocumentPackageSnapshotRestoresMetaDataTest::RunTest(const FString&)
+{
+#if WITH_METADATA
+	using namespace AssetDocumentPackageSnapshotTests;
+	FFixture Fixture;
+	MakeFixture(Fixture, TEXT("MetaData"));
+	const FName IdKey(TEXT("AssetDocument.NodeId"));
+	FMetaData& MetaData = Fixture.Package->GetMetaData();
+	MetaData.SetValue(Fixture.First, IdKey, TEXT("Start"));
+	MetaData.SetValue(Fixture.Second, IdKey, TEXT("Say"));
+	TArray<FAssetDocumentRuntimeDiagnostic> Diagnostics;
+	TUniquePtr<FAssetDocumentPackageSnapshot> Snapshot = FAssetDocumentPackageSnapshot::Capture(*Fixture.Package, Diagnostics);
+	if (!TestNotNull(TEXT("snapshot captures"), Snapshot.Get()))
+	{
+		return false;
+	}
+	MetaData.SetValue(Fixture.First, IdKey, TEXT("Update"));
+	MetaData.RemoveValue(Fixture.Second, IdKey);
+	MetaData.SetValue(Fixture.Nested, IdKey, TEXT("Loop"));
+	Fixture.Package->SetDirtyFlag(true);
+	const FAssetDocumentContractValidationResult Restored = Snapshot->Restore();
+	TestTrue(TEXT("restore succeeds"), Restored.bValid);
+	const auto Value = [&](const UObject* Object)
+	{
+		const FString* Found = Fixture.Package->GetMetaData().FindValue(Object, IdKey);
+		return Found != nullptr ? *Found : FString(TEXT("<none>"));
+	};
+	TestEqual(TEXT("a changed value is restored"), Value(Fixture.First), FString(TEXT("Start")));
+	TestEqual(TEXT("a removed value is restored"), Value(Fixture.Second), FString(TEXT("Say")));
+	TestEqual(TEXT("an added value is removed"), Value(Fixture.Nested), FString(TEXT("<none>")));
+	TestFalse(TEXT("clean dirty flag is restored"), Fixture.Package->IsDirty());
+#endif
 	return true;
 }
 

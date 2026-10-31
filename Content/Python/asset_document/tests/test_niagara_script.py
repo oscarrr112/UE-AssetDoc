@@ -301,6 +301,27 @@ class GraphCodecTests(unittest.TestCase):
         self.assertTrue(has_version_setting("Niagara:Function:/Game/S.S"))
         self.assertFalse(has_version_setting("Niagara:Function:ScratchPad:Pad"))
 
+    def test_comment_box_size(self) -> None:
+        rows = SCRIPT_ROWS + [{"kind": "node", "scope": "", "id": "Note", "action": "Niagara:Comment", "x": -40,
+                               "y": -40, "comment": "Forces", "size": {"width": 640, "height": 320}}]
+        node = next(item for item in _body(rows)["Graph"]["Nodes"] if item["Id"] == "Note")
+        self.assertEqual(node["Size"], {"Width": 640, "Height": 320})
+        graph = {"Nodes": [node]}
+        doc = decode_graph(graph, "/Body/Graph", graph_id="Graph", name="NiagaraGraph", guid=None)
+        self.assertEqual((doc.nodes[0].size.width, doc.nodes[0].size.height), (640, 320))
+        # Listed: compared; omitted: kept.
+        resized = copy.deepcopy(graph)
+        resized["Nodes"][0]["Size"] = {"Width": 800, "Height": 320}
+        self.assertEqual([item.path for item in scripts.graph_differences(resized, graph, "/Body/Graph")],
+                         ["/Body/Graph/Nodes/0/Size"])
+        omitted = copy.deepcopy(graph)
+        del omitted["Nodes"][0]["Size"]
+        self.assertEqual(scripts.graph_differences(omitted, graph, "/Body/Graph"), [])
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            decode_graph({"Nodes": [{"Id": "Get", "Action": "Niagara:MapGet", "Size": {"Width": 1, "Height": 1}}]},
+                         "/Body/Graph", graph_id="Graph", name="NiagaraGraph", guid=None)
+        self.assertEqual(raised.exception.diagnostic.path, "/Body/Graph/Nodes/0/Size")
+
     def test_pins_hold(self) -> None:
         live = {"Inputs": [], "Outputs": [{"Name": "A", "Type": "float"}]}
         self.assertTrue(pins_hold(live, {"Outputs": ["A"]}))

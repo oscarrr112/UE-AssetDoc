@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "Provider/Blackboard/AuthorityException/AssetDocumentAIBlackboardLoadedConsumerCompletion.h"
+#include "Provider/BehaviorTree/AssetDocumentAIBehaviorTreeAuthoredGraphValidation.h"
 
 #include "AIGraphNode.h"
 #include "AssetRegistry/AssetData.h"
@@ -298,8 +299,10 @@ bool InventoryGraph(UBehaviorTree& Tree, UEdGraph& Graph, const UObject& Expecte
 			{
 				UBehaviorTreeGraphNode_CompositeDecorator* Composite =
 					Cast<UBehaviorTreeGraphNode_CompositeDecorator>(Node);
+				// A node whose class is missing holds no values to scan.
 				if (!Node->IsA<UBehaviorTreeGraphNode_Root>()
-					&& (Composite == nullptr || Composite->GetBoundGraph() == nullptr)) return false;
+					&& (Composite == nullptr || Composite->GetBoundGraph() == nullptr)
+					&& !UE::AssetDocumentAI::BehaviorTreeAuthoredReadback::IsMissingClassNode(*AINode)) return false;
 			}
 		}
 		else if (Graph.IsA<UBehaviorTreeDecoratorGraph>()

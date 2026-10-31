@@ -83,6 +83,10 @@ TOptional<FAssetDocumentPrimitiveOutcome> PreflightEntryReplaceClass(
 		return Failure(TEXT("AIProvider.InvalidContext"),
 			TEXT("Blackboard entry class replacement requires the Editor game thread."));
 	}
+	if (TOptional<FAssetDocumentPrimitiveOutcome> InUse = RefuseLiveBlackboardLayoutChange(*Out.Blackboard))
+	{
+		return InUse;
+	}
 	const FName RequestedName(Request.KeyName);
 	if (Request.KeyName.IsEmpty() || RequestedName.IsNone()
 		|| RequestedName == FBlackboard::KeySelf)

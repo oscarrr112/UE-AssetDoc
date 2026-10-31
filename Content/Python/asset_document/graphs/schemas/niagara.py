@@ -6,13 +6,14 @@ executor that edits one script graph (a module / function / dynamic input asset,
 
 Body ``Graph`` (design §3.5; fx.niagara.read.v1 rows shape it, ``niagara_shape``)::
 
-    {"Nodes": [{"Id", "Action", "Position": [x, y], "Version"?, "Comment"?, "Properties"?, "Pins"?}],
+    {"Nodes": [{"Id", "Action", "Position": [x, y], "Version"?, "Comment"?, "Size"?, "Properties"?, "Pins"?}],
      "Links": [{"From": "Id:Pin", "To": "Id:Pin"}],
      "PinDefaults": {"Id:Pin": "<value>"}}
 
 Node ids are the node objects' names (the AssetDocumentNiagara graph adapters rename a new node to its id).  The
 document is complete: nodes, links and pin defaults it leaves out are removed / reset.  ``Properties`` are sparse
-(a listed value is written, an omitted one is kept).  ``Pins`` lists the pins the user added on a node with an Add pin
+(a listed value is written, an omitted one is kept).  ``Size`` ``{"Width", "Height"}`` is a comment box's size
+(omitted: kept).  ``Pins`` lists the pins the user added on a node with an Add pin
 (Map Get / Set, custom HLSL, ...) per direction it states: ``{"Inputs"?: [..], "Outputs"?: [..]}`` with a pin as
 ``"Name"`` or ``{"Name", "Type"?}`` (a new pin needs a type unless the graph already has a parameter of that name).
 
@@ -29,14 +30,15 @@ from asset_document.diagnostics import contract_error
 from asset_document.graphs.executor import GraphExecutor, ExecutionReport
 from asset_document.graphs.live import LiveAsset, LiveGraph, LiveNode, list_graphs, query_graphs
 from asset_document.graphs.model import (
-    Endpoint, GraphDoc, LinkDoc, NodeDoc, NodeProperties, PinOverride, Position, thaw_json,
+    Endpoint, GraphDoc, LinkDoc, NodeDoc, NodeProperties, PinOverride, Position, Size, thaw_json,
 )
 from asset_document.graphs.reconcile import Plan, reconcile
 from asset_document.graphs.schemas import SchemaAdapter
 
 TAG = "Niagara"
 ROLE = "other"
-NODE_KEYS = frozenset({"Id", "Action", "Position", "Version", "Comment", "Properties", "Pins"})
+NODE_KEYS = frozenset({"Id", "Action", "Position", "Version", "Comment", "Size", "Properties", "Pins"})
+COMMENT_ACTION = "Niagara:Comment"
 GRAPH_KEYS = frozenset({"Nodes", "Links", "PinDefaults"})
 # Function calls of a script (asset path or scratch pad): they have a version setting.
 _VERSIONED_PREFIX = "Niagara:Function:"
@@ -130,6 +132,23 @@ def _position(value: object, path: str) -> Position:
     return Position(value[0], value[1])
 
 
+def _size(value: object, action: str, path: str) -> Size:
+    row = _object(value, path)
+    _known(row, frozenset({"Width", "Height"}), path)
+    if action != COMMENT_ACTION:
+        raise contract_error(path, "Graph.NodeNotResizable",
+                             f"Only a comment box (Action \"{COMMENT_ACTION}\") has a Size; other nodes size to their pins.")
+
+    def whole(number):
+        return int(number) if type(number) is float and number.is_integer() else number
+    try:
+        return Size(whole(row.get("Width")), whole(row.get("Height")))
+    except Exception as error:
+        if hasattr(error, "diagnostic"):
+            raise _rebase(error, path) from None
+        raise
+
+
 def _endpoint(value: object, path: str) -> Endpoint:
     if type(value) is not str:
         raise contract_error(path, "Graph.InvalidLink", "An endpoint is \"NodeId:PinName\".")
@@ -172,7 +191,8 @@ def _node(value: object, path: str, overrides: list[PinOverride]) -> NodeDoc:
     try:
         return NodeDoc(id=row["Id"], action=action,
                        position=_position(row["Position"], f"{path}/Position") if "Position" in row else None,
-                       pin_overrides=tuple(overrides), properties=NodeProperties(node=settings), comment=comment)
+                       pin_overrides=tuple(overrides), properties=NodeProperties(node=settings), comment=comment,
+                       size=_size(row["Size"], action, f"{path}/Size") if "Size" in row else None)
     except Exception as error:
         if hasattr(error, "diagnostic"):
             raise _rebase(error, path) from None

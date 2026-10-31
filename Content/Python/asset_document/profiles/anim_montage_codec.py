@@ -15,8 +15,9 @@ import math
 import struct
 
 from asset_document.canonical.document_codec import DocumentCodec
-from asset_document.diagnostics import contract_error
+from asset_document.diagnostics import contract_error, read_warning
 from asset_document.profiles.anim_montage_settings import settings_snapshot_to_body
+from asset_document.tolerance import authored_rule
 
 
 def _fail(path, message, code="AnimMontage.InvalidCanonicalShape"):
@@ -48,10 +49,15 @@ def _reference(value, path):
     return value if "." in leaf else value + "." + leaf
 
 
-def _required_reference(value, path):
-    if value is None:
-        _fail(path, "An explicit reference is required")
+def _segment_reference(value, path):
+    """A segment's animation: an object path, or null when the animation it played is gone (judged by
+    ``judge_authored``, not here)."""
     return _reference(value, path)
+
+
+def _slot_name(value, path):
+    """A slot track's name: any string here (a track named None is judged by ``judge_authored``)."""
+    return _text(value, path)
 
 
 def _class_reference(value, path):
@@ -142,14 +148,14 @@ _CURVE = (
     ("Keys", "keys", [_KEY]),
 )
 _SEGMENT = (
-    ("AnimReference", "animation", _required_reference),
+    ("AnimReference", "animation", _segment_reference),
     ("StartPos", "start", _nonnegative),
     ("AnimStartTime", "source_start", _nonnegative),
     ("AnimEndTime", "source_end", _nonnegative),
     ("AnimPlayRate", "rate", _rate),
     ("LoopingCount", "loops", _integer(1, 0x7fffffff)),
 )
-_SLOT = (("SlotName", "name", _name), ("Segments", "segments", [_SEGMENT]))
+_SLOT = (("SlotName", "name", _slot_name), ("Segments", "segments", [_SEGMENT]))
 _SECTION = (
     ("Name", "name", _name), ("NextSectionName", "next", "optional_name"),
     ("LinkableTime", "time", _nonnegative),
@@ -158,17 +164,129 @@ _SECTION = (
 )
 _OBJECT = (("Class", "class", _class_reference),
            ("Properties", "properties", _properties))
-_NOTIFY = (("Time", "time", _nonnegative),
-           ("TrackIndex", "track_index", _integer(0, 0x7fffffff)),
-           ("Object", "object", _OBJECT))
-_STATE = (_NOTIFY[0], ("Duration", "duration", _positive), *_NOTIFY[1:])
+# The notify panel's per-notify settings, with the AnimSequence profile's names and defaults: an omitted one is not
+# compared, a new notify takes the UE default, and Extract writes only the values that differ from it.
+TRIGGER_DEFAULTS = {
+    "TriggerWeightThreshold": struct.unpack("!f", struct.pack("!f", 0.00001))[0],
+    "NotifyTriggerChance": 1.0,
+    "NotifyFilterType": "NoFiltering",
+    "NotifyFilterLOD": 0,
+    "bCanBeFilteredViaRequest": True,
+    "bTriggerOnDedicatedServer": True,
+    "bTriggerOnFollower": False,
+    "MontageTickType": "Queued",
+}
+_TRIGGER_ENUMS = {"NotifyFilterType": ("NoFiltering", "LOD"), "MontageTickType": ("Queued", "BranchingPoint")}
+# A notify's link to the Montage timeline, as the Montage panel sets it (Absolute 0, Relative 1, Proportional 2) on a
+# slot track; a notify state's end link follows its start link unless it says otherwise.
+_LINK_FIELDS = (("LinkMethod", "method"), ("SlotName", "slot_name"), ("EndLinkMethod", "end_method"), ("EndSlotName", "end_slot_name"))
+
+
+def _trigger_value(name, value, path):
+    default = TRIGGER_DEFAULTS[name]
+    if type(default) is bool:
+        return _boolean(value, path)
+    if type(default) is int:
+        return _integer(0, 0x7fffffff)(value, path)
+    if type(default) is float:
+        result = _float(value, path)
+        if name == "NotifyTriggerChance" and not 0 <= result <= 1:
+            _fail(path, "NotifyTriggerChance must be in [0, 1]")
+        return result
+    if value not in _TRIGGER_ENUMS[name]:
+        _fail(path, f"{name} must be one of {', '.join(_TRIGGER_ENUMS[name])}")
+    return value
+
+
+class _NotifyRows:
+    """One Notifies / NotifyStates row: {Time, [Duration], TrackIndex, Object {Class, Properties} | Name, links,
+    trigger settings}. Native rows are {time, [duration], track_index, object | null, [name], trigger, link}."""
+
+    def __init__(self, states):
+        self.states = states
+        links = _LINK_FIELDS if states else _LINK_FIELDS[:2]
+        self.fields = ("Time", *(("Duration",) if states else ()), "TrackIndex", "Object", "Name",
+                       *(name for name, _ in links), *TRIGGER_DEFAULTS)
+
+    def forward(self, row, path):
+        if type(row) is not dict:
+            _fail(path, "Expected an object")
+        unknown = sorted(set(row) - set(self.fields))
+        missing = sorted(key for key in ("Time", *(("Duration",) if self.states else ())) if key not in row)
+        if unknown or missing:
+            _fail(path, f"Notify row fields: missing={missing}, unknown={unknown}")
+        native = {"time": _nonnegative(row["Time"], path + "/Time")}
+        if self.states:
+            native["duration"] = _positive(row["Duration"], path + "/Duration")
+        native["track_index"] = _integer(0, 0x7fffffff)(row.get("TrackIndex", 0), path + "/TrackIndex")
+        if ("Object" in row) == ("Name" in row):
+            _fail(path, "A notify has an Object {Class, Properties}, or a Name for a skeleton notify without one")
+        if "Object" in row:
+            native["object"] = _translate(row["Object"], _OBJECT, False, path + "/Object")
+        elif self.states:
+            _fail(path + "/Name", "A notify state requires its Object {Class, Properties}")
+        else:
+            native["object"] = None
+            native["name"] = _name(row["Name"], path + "/Name")
+        native["trigger"] = {name: _trigger_value(name, row[name], f"{path}/{name}") for name in TRIGGER_DEFAULTS if name in row}
+        method = _integer(0, 2)(row.get("LinkMethod", 0), path + "/LinkMethod")
+        slot = None if row.get("SlotName") is None else _name(row["SlotName"], path + "/SlotName")
+        native["link"] = {"method": method, "slot_name": slot}
+        if self.states:
+            native["link"]["end_method"] = _integer(0, 2)(row.get("EndLinkMethod", method), path + "/EndLinkMethod")
+            native["link"]["end_slot_name"] = slot if row.get("EndSlotName") is None else _name(row["EndSlotName"], path + "/EndSlotName")
+        return native
+
+    def reverse(self, native, path):
+        if type(native) is not dict or type(native.get("link")) is not dict or type(native.get("trigger")) is not dict:
+            _fail(path, "Expected a native notify row with link and trigger objects")
+        expected = {"time", "track_index", "object", "trigger", "link", *(("duration",) if self.states else ()),
+                    *(("name",) if native.get("object") is None else ())}
+        if set(native) != expected:
+            _fail(path, f"Native notify row fields: expected {sorted(expected)}, got {sorted(native)}")
+        row = {"Time": _nonnegative(native["time"], path + "/time")}
+        if self.states:
+            row["Duration"] = _positive(native["duration"], path + "/duration")
+        row["TrackIndex"] = _integer(0, 0x7fffffff)(native["track_index"], path + "/track_index")
+        if native["object"] is None:
+            if self.states:
+                _fail(path + "/object", "A notify state requires its object")
+            row["Name"] = _name(native["name"], path + "/name")
+        else:
+            row["Object"] = _translate(native["object"], _OBJECT, True, path + "/object")
+        link = native["link"]
+        method = _integer(0, 2)(link.get("method", 0), path + "/link/method")
+        slot = link.get("slot_name")
+        slot = None if slot is None else _name(slot, path + "/link/slot")
+        if method:
+            row["LinkMethod"] = method
+        if slot is not None:
+            row["SlotName"] = slot
+        if self.states:
+            end_method = _integer(0, 2)(link.get("end_method", method), path + "/link/end_method")
+            end_slot = link.get("end_slot_name", slot)
+            end_slot = None if end_slot is None else _name(end_slot, path + "/link/end_slot")
+            if end_method != method:
+                row["EndLinkMethod"] = end_method
+            if end_slot != slot:
+                if end_slot is None:
+                    # snapshot_to_document_parts names the first slot track for an end link that is on it.
+                    _fail(path + "/link/end_slot", "An end link on the first slot track needs that track's name")
+                row["EndSlotName"] = end_slot
+        for name, default in TRIGGER_DEFAULTS.items():
+            if name not in native["trigger"]:
+                continue
+            value = _trigger_value(name, native["trigger"][name], f"{path}/trigger/{name}")
+            if value != default:
+                row[name] = value
+        return row
 # A notify track is a label (the editor's Rename Notify Track takes any text); TrackIndex is its position.
 _TRACK = (("Name", "name", _text),)
 _BODY = (
     ("Skeleton", "skeleton", _reference), ("PreviewMesh", "preview_mesh", _reference),
     ("Curves", "curves", [_CURVE]), ("SlotAnimTracks", "slots", [_SLOT]),
     ("CompositeSections", "sections", [_SECTION]),
-    ("Notifies", "notifies", [_NOTIFY]), ("NotifyStates", "notify_states", [_STATE]),
+    ("Notifies", "notifies", [_NotifyRows(False)]), ("NotifyStates", "notify_states", [_NotifyRows(True)]),
     ("NotifyTracks", "notify_tracks", [_TRACK]),
 )
 SUPPORTED_BODY_KEYS = tuple(row[0] for row in _BODY)
@@ -179,6 +297,8 @@ def _translate(value, schema, reverse, path, *, sparse=False):
         if reverse:
             return None if value == "None" else _name(value, path)
         return "None" if value is None else _name(value, path)
+    if isinstance(schema, _NotifyRows):
+        return schema.reverse(value, path) if reverse else schema.forward(value, path)
     if callable(schema):
         return schema(value, path)
     if type(schema) is list:
@@ -204,7 +324,8 @@ def _translate(value, schema, reverse, path, *, sparse=False):
 
 
 def _validate_native_semantics(native):
-    for key in ("curves", "slots", "sections"):
+    # Two slot tracks on one slot (Persona's Duplicate Slot) are judged by ``judge_authored``.
+    for key in ("curves", "sections"):
         seen = set()
         for i, row in enumerate(native.get(key, [])):
             identity = row["name"].casefold()
@@ -236,6 +357,77 @@ def _validate_native_semantics(native):
         for i, row in enumerate(native["sections"]):
             if row["next"] != "None" and row["next"].casefold() not in names:
                 _fail(f"/Body/CompositeSections/{i}/NextSectionName", "Next section is absent")
+
+
+MISSING_ANIMATION = ("The segment's animation is missing (deleted or not migrated); Persona shows an empty segment. A "
+                     "segment listed as extracted is kept; a new or changed segment needs an existing animation.")
+DUPLICATE_SLOT_NAME = ("Two slot tracks play the same slot (Persona's Duplicate Slot); at runtime the first plays. "
+                       "Tracks listed as extracted are kept; a new or renamed track needs a slot no other track uses.")
+NONE_SLOT_NAME = ("The slot track has no slot name (None). A track listed as extracted is kept; a new or renamed track "
+                  "needs a slot of the Skeleton.")
+
+
+def judge_authored(body: object) -> None:
+    """The rules for new input that the engine can still hold (``tolerance.authored_rule``): a segment without an
+    animation, a slot track named None, two slot tracks on one slot. Read as they are (with a warning); kept by a
+    document that lists them unchanged; refused when new."""
+    tracks = body.get("SlotAnimTracks") if type(body) is dict else None
+    if type(tracks) is not list:
+        return
+    seen = {}
+    for i, track in enumerate(tracks):
+        if type(track) is not dict:
+            continue
+        name = track.get("SlotName")
+        if type(name) is str and (not name or name.casefold() == "none"):
+            authored_rule(f"/Body/SlotAnimTracks/{i}/SlotName", "AnimMontage.InvalidSlotName", NONE_SLOT_NAME)
+        elif type(name) is str and name.casefold() in seen:
+            authored_rule(f"/Body/SlotAnimTracks/{i}/SlotName", "AnimMontage.DuplicateSlot", DUPLICATE_SLOT_NAME,
+                          judged=(f"/Body/SlotAnimTracks/{seen[name.casefold()]}/SlotName",
+                                  f"/Body/SlotAnimTracks/{i}/SlotName"))
+        elif type(name) is str:
+            seen[name.casefold()] = i
+        segments = track.get("Segments")
+        for j, segment in enumerate(segments if type(segments) is list else ()):
+            if type(segment) is dict and "AnimReference" in segment and segment["AnimReference"] is None:
+                authored_rule(f"/Body/SlotAnimTracks/{i}/Segments/{j}/AnimReference", "AnimMontage.MissingReference",
+                              MISSING_ANIMATION)
+
+
+def unwritable_slot(native_slots) -> tuple[str, str, str] | None:
+    """(document path, code, reason) of the first slot-track value a slot write cannot carry (a segment without an
+    animation, a track named None, a second track on one slot), or None. Such tracks are kept only by leaving
+    SlotAnimTracks as the Montage has them."""
+    seen = set()
+    for i, slot in enumerate(native_slots or ()):
+        if not slot["name"] or slot["name"].casefold() == "none":
+            return f"/Body/SlotAnimTracks/{i}/SlotName", "AnimMontage.InvalidSlotName", NONE_SLOT_NAME
+        if slot["name"].casefold() in seen:
+            return f"/Body/SlotAnimTracks/{i}/SlotName", "AnimMontage.DuplicateSlot", DUPLICATE_SLOT_NAME
+        seen.add(slot["name"].casefold())
+        for j, segment in enumerate(slot["segments"]):
+            if segment["animation"] is None:
+                return (f"/Body/SlotAnimTracks/{i}/Segments/{j}/AnimReference", "AnimMontage.MissingReference",
+                        MISSING_ANIMATION)
+    return None
+
+
+def _warn_read_facts(facts, slots) -> None:
+    """Read warnings for what the snapshot read as it is: a preview mesh that does not load or fit, a section linked
+    to a slot track the Montage does not have."""
+    for fact in facts if type(facts) is list else ():
+        kind = fact.get("fact") if type(fact) is dict else None
+        if kind == "preview_mesh_unresolved":
+            read_warning("/Body/PreviewMesh", "AnimMontage.MissingReference",
+                         "PreviewMesh names a mesh that does not load or does not fit the Skeleton (deleted, not "
+                         "migrated, or made for another skeleton); Persona shows no preview mesh. It is kept while the "
+                         "document lists it unchanged; set an existing SkeletalMesh to replace it in Persona.")
+        elif kind == "section_slot_missing" and type(fact.get("section")) is int:
+            first = slots[0]["name"] if slots else None
+            read_warning(f"/Body/CompositeSections/{fact['section']}/SlotName", "AnimMontage.UnknownSectionSlot",
+                         f"The section is linked to slot track {fact.get('slot')}, which the Montage does not have; it "
+                         f"reads as on the first track ({first or 'none'}), where the engine links it when the Montage "
+                         "loads. An edit of CompositeSections links it there.")
 
 
 def validate_notify_times(body: dict) -> None:
@@ -326,7 +518,8 @@ def _shortest(value):
 # Body fields stored as float32 (the core rule: Extract writes the shortest decimal of the stored float).
 _FLOAT32_ROWS = (("SlotAnimTracks", "Segments", ("StartPos", "AnimStartTime", "AnimEndTime", "AnimPlayRate")),
                  ("CompositeSections", None, ("LinkableTime",)),
-                 ("Notifies", None, ("Time",)), ("NotifyStates", None, ("Time", "Duration")))
+                 ("Notifies", None, ("Time", "TriggerWeightThreshold", "NotifyTriggerChance")),
+                 ("NotifyStates", None, ("Time", "Duration", "TriggerWeightThreshold", "NotifyTriggerChance")))
 _FLOAT32_REGIONS = (("Blend", ("BlendInTime", "BlendOutTime", "BlendOutTriggerTime")),
                     ("TimeStretch", ("SamplingRate", "CurveValueMinPrecision")))
 
@@ -371,6 +564,14 @@ def snapshot_to_document_parts(snapshot: object) -> tuple[dict, dict]:
     """Project a full native snapshot to (canonical Body, Properties)."""
     native = _snapshot_without_correspondence(snapshot)
     settings = native.pop("settings", None)
+    _warn_read_facts(native.pop("read_facts", None), native.get("slots"))
+    # The snapshot gives a link on the first slot track as null; a state that starts on another track and ends on the
+    # first names it.
+    first = native["slots"][0]["name"] if native.get("slots") else None
+    for row in native.get("notify_states", []) if type(native.get("notify_states")) is list else []:
+        link = row.get("link") if type(row) is dict else None
+        if type(link) is dict and link.get("slot_name") is not None and link.get("end_slot_name", link.get("slot_name")) is None:
+            link["end_slot_name"] = first
     if native.get("notify_tracks") == []:
         # A Montage without notify tracks shows (and gets, on load or its first notify edit) the editor's track "1".
         native["notify_tracks"] = [{"name": "1"}]

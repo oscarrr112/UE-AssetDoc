@@ -30,15 +30,13 @@ struct FSectionEdit
  FName Slot;
  EAnimLinkMethod::Type Method = EAnimLinkMethod::Absolute;
 };
-// Private authoring context derived only from the composite's declared notify keys.
-// This is not a serialized bypass or authority to remove unmanaged events.
-enum class EManagedNotifyReplacement : uint8 { None = 0, Events = 1, States = 2, Both = 3 };
-ENUM_CLASS_FLAGS(EManagedNotifyReplacement);
 struct FStructuralIntent
 {
  TOptional<TArray<FSlotEdit>> Slots;
  TOptional<TArray<FSectionEdit>> Sections;
- EManagedNotifyReplacement ReplaceManagedFamilies = EManagedNotifyReplacement::None;
+ // Set only by the notify composite: the families it lists replace every event of that family, so the structural
+ // edit does not retain them.
+ bool bReplaceNotifies = false, bReplaceNotifyStates = false;
 };
 struct FPreparedStructuralEdit;
 

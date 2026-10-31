@@ -1570,45 +1570,45 @@ bool FAssetDocumentAIKeyTypePropertiesRejectsUnsupportedTest::RunTest(
 	KeyType->RotatorValue.Roll = PositiveInfinity;
 	TestNonFiniteRejected(GET_MEMBER_NAME_CHECKED(
 		UAssetDocumentAITypedPreimageTestKeyType, RotatorValue));
+	// A property outside the typed families is kept as its export text: the capture succeeds, and its rollback puts the
+	// captured value back.
+	KeyType->UnsupportedArrayValue = {1, 2};
 	for (FName Name : UnsupportedNames)
 	{
-		TSharedPtr<IPropertyHandle> Unsupported = RequireHandle(
+		TSharedPtr<IPropertyHandle> Retained = RequireHandle(
 			*this, Rows, Name);
-		if (Unsupported.IsValid())
+		if (!Retained.IsValid())
 		{
-			FTestTransaction Transaction(Fixture.Context);
-			const FAssetDocumentEditorTypedPreimageResult Capture =
-				CaptureAndEnlistAssetDocumentAIBlackboardKeyTypePropertiesPreimage(
-					*Fixture.Lease,
-					*KeyType,
-					Rows.ToSharedRef(),
-					TArray<TSharedRef<IPropertyHandle>>(
-						{Unsupported.ToSharedRef()}),
-					Components,
-					Transaction);
-			TestFalse(
-				*FString::Printf(TEXT("unsupported property fails: %s"),
-					*Name.ToString()),
-				Capture.bSucceeded);
-			TestTrue(TEXT("unsupported family diagnostic is stable"),
-				HasDiagnostic(
-					Capture.Diagnostics,
-					TEXTVIEW("AITypedPreimage.KeyTypePropertyNotAdmitted")));
-			TestTrue(TEXT("unsupported family enlists no action"),
-				Transaction.Actions.IsEmpty());
-			RequireFailureClosedCapture(
-				*this,
-				TEXTVIEW("unsupported KeyType family"),
-				Capture,
-				Transaction,
-				TEXTVIEW("/AITypedPreimage/BlackboardKeyType"),
-				TEXTVIEW("AITypedPreimage.KeyTypePropertyNotAdmitted"),
-				LifecycleBeforeRejections,
-				KeyType->PostEditChangePropertyCount,
-				bDirtyBeforeRejections,
-				Fixture.Package->IsDirty());
+			continue;
 		}
+		FProperty* Property = Retained->GetProperty();
+		FString Captured;
+		Property->ExportTextItem_InContainer(Captured, KeyType, nullptr, KeyType, PPF_None);
+		FTestTransaction Transaction(Fixture.Context);
+		const FAssetDocumentEditorTypedPreimageResult Capture =
+			CaptureAndEnlistAssetDocumentAIBlackboardKeyTypePropertiesPreimage(
+				*Fixture.Lease,
+				*KeyType,
+				Rows.ToSharedRef(),
+				TArray<TSharedRef<IPropertyHandle>>({Retained.ToSharedRef()}),
+				Components,
+				Transaction);
+		if (!TestTrue(*FString::Printf(TEXT("retained property captures: %s"), *Name.ToString()),
+			Capture.bSucceeded && Transaction.Actions.Num() == Components.Num()))
+		{
+			continue;
+		}
+		Property->ClearValue_InContainer(KeyType);
+		for (const TSharedRef<IAssetDocumentRollbackAction>& Action : Transaction.Actions)
+		{
+			Action->Rollback(TEXTVIEW("Test.Retained"));
+		}
+		FString Restored;
+		Property->ExportTextItem_InContainer(Restored, KeyType, nullptr, KeyType, PPF_None);
+		TestEqual(*FString::Printf(TEXT("retained property rolls back: %s"), *Name.ToString()), Restored, Captured);
 	}
+	KeyType->PostEditChangePropertyCount = LifecycleBeforeRejections;
+	Fixture.Package->SetDirtyFlag(bDirtyBeforeRejections);
 
 	TSharedPtr<IPropertyHandle> UnsupportedStruct = RequireHandle(
 		*this,
@@ -2769,23 +2769,14 @@ bool FAssetDocumentAIBlackboardLocalKeysRejectsUnsupportedTest::RunTest(
 		MakeEntry(TEXT("Unsupported"), *UnsupportedKeyType,
 			TEXT("unsupported"), TEXT("Reject"), false)});
 	Fixture.Package->SetDirtyFlag(false);
+	// A key type with properties outside the typed families is kept by their export text, so the local keys capture.
 	FTestTransaction UnsupportedTransaction(Fixture.Context);
-	const int32 UnsupportedLifecycleBefore = Root->PostEditChangePropertyCount;
-	const bool bUnsupportedDirtyBefore = Fixture.Package->IsDirty();
 	const FAssetDocumentEditorTypedPreimageResult Unsupported =
 		CaptureAndEnlistAssetDocumentAIBlackboardLocalKeysPreimage(
 			*Fixture.Lease, *Root, Components, UnsupportedTransaction);
-	RequireFailureClosedCapture(
-		*this,
-		TEXTVIEW("local KeyType arbitrary property closure"),
-		Unsupported,
-		UnsupportedTransaction,
-		TEXTVIEW("/AITypedPreimage/BlackboardLocalKeys"),
-		TEXTVIEW("AITypedPreimage.BlackboardLocalKeysInvalid"),
-		UnsupportedLifecycleBefore,
-		Root->PostEditChangePropertyCount,
-		bUnsupportedDirtyBefore,
-		Fixture.Package->IsDirty());
+	TestTrue(TEXT("local KeyType with retained properties captures"),
+		Unsupported.bSucceeded && UnsupportedTransaction.Actions.Num() == Components.Num());
+	TestFalse(TEXT("local KeyType capture leaves the package clean"), Fixture.Package->IsDirty());
 	ApplyKeys(*Root, {});
 	Root->PostEditChangePropertyCount = 0;
 	Fixture.Package->SetDirtyFlag(false);

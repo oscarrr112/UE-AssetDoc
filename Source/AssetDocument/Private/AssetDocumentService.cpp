@@ -1578,6 +1578,16 @@ FAssetDocumentResult FAssetDocumentService::Extract(const FAssetDocumentExtractR
 				  TEXT("To edit a copy, set Target to a new /Game path and apply it (Action Create), or use duplicate_asset.")
 				: TEXT("AssetDocument extracted"));
 		Result.bReadOnly = bReadOnly && Result.IsSuccess();
+		// The graph nodes' sizes travel beside the document; they are never part of it (nor of its revision).
+		const TSharedPtr<FJsonObject>* Layout = nullptr;
+		if (Result.Payload.IsValid() && Result.Payload->TryGetObjectField(AssetDocumentExtractLayoutField, Layout))
+		{
+			if (Request.bIncludeLayout)
+			{
+				Result.Layout = *Layout;
+			}
+			Result.Payload->RemoveField(AssetDocumentExtractLayoutField);
+		}
 		if (Request.bIncludeBaseRevision && !bReadOnly && Result.IsSuccess() && Result.Payload.IsValid())
 		{
 			// The revision is that of the default extract (diff_only), whatever this extract's options.
@@ -1984,7 +1994,7 @@ FAssetDocumentResult FAssetDocumentService::Duplicate(const FAssetDocumentDuplic
 	return UE::AssetDocument::DuplicateAsset(Request);
 }
 
-FAssetDocumentRuntimeResultDto IAssetDocumentGenericRuntimeRoute::DispatchSync(const TSharedPtr<FJsonObject>& Options)
+FAssetDocumentRuntimeResultDto IAssetDocumentGenericRuntimeRoute::DispatchSync(const FAssetDocumentSyncRequest& Request)
 {
 	FAssetDocumentRuntimeResultDto Result;
 	FAssetDocumentRuntimeDiagnostic Diagnostic;
@@ -2017,7 +2027,9 @@ FAssetDocumentRuntimeResultDto FAssetDocumentService::DispatchSidecarSync(const 
 		return ServiceLocal::MakeServiceRuntimeFailure(TEXT("GenericRuntime.Inactive"),
 			TEXT("The AssetDocument Python runtime is not available."));
 	}
-	return Route->DispatchSync(Options);
+	FAssetDocumentSyncRequest Request;
+	Request.Options = Options;
+	return Route->DispatchSync(Request);
 }
 
 FAssetDocumentRuntimeResultDto FAssetDocumentService::ExtractForMirror(const FString& PackageName) const

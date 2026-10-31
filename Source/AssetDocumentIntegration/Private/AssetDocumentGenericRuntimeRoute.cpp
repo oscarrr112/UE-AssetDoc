@@ -16,6 +16,7 @@
 #include "AssetDocumentEditorNonInteractiveScope.h"
 #include "AssetDocumentGraphDefaultsPropagation.h"
 #include "Editor.h"
+#include "AssetDocumentExactBlueprintClasses.h"
 #include "Engine/Blueprint.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Dom/JsonObject.h"
@@ -435,6 +436,44 @@ FAssetDocumentContractValidationResult FAssetDocumentGenericRuntimeRoute::BindRu
 	return Result;
 }
 
+TOptional<FAssetDocumentRuntimeResultDto> FAssetDocumentGenericRuntimeRoute::RouteProfileClass(
+	FAssetDocumentRuntimeRequestDto& Request) const
+{
+	if (Request.RequestedAssetClassPath.IsEmpty() || TargetActivations.Contains(Request.RequestedAssetClassPath))
+	{
+		return {};
+	}
+	const UClass* Class = FSoftClassPath(Request.RequestedAssetClassPath).ResolveClass();
+	if (Class == nullptr || !Class->IsChildOf(UBlueprint::StaticClass()))
+	{
+		return {};
+	}
+	const UClass* ProfileClass = FindAssetDocumentBlueprintProfileClass(Class);
+	if (ProfileClass == nullptr)
+	{
+		FAssetDocumentRuntimeResultDto Failure = MakeRuntimeFailure(Request, TEXT("ClassResolve.ProfileRequired"),
+			*FString::Printf(TEXT("%s is a Blueprint class no AssetDocument profile reads (a RigVM Blueprint without its own profile, or a Level Script Blueprint); its graphs cannot be shown or edited as a document."),
+				*Request.RequestedAssetClassPath));
+		Failure.Diagnostics[0].Path = TEXT("/Class");
+		return Failure;
+	}
+	if (ProfileClass != Class && TargetActivations.Contains(ProfileClass->GetPathName()))
+	{
+		Request.RequestedProfileClassPath = ProfileClass->GetPathName();
+	}
+	return {};
+}
+
+const FAssetDocumentRuntimeTargetActivation* FAssetDocumentGenericRuntimeRoute::FindTargetActivation(
+	const FAssetDocumentRuntimeRequestDto& Request) const
+{
+	if (const FAssetDocumentRuntimeTargetActivation* Exact = TargetActivations.Find(Request.RequestedAssetClassPath))
+	{
+		return Exact;
+	}
+	return Request.RequestedProfileClassPath.IsEmpty() ? nullptr : TargetActivations.Find(Request.RequestedProfileClassPath);
+}
+
 FAssetDocumentRuntimeValueDto FAssetDocumentGenericRuntimeRoute::DispatchDescribeRegisteredProfiles() const
 {
 	if (bTargetActivationsBound) return RegistrationProjection;
@@ -514,6 +553,10 @@ FAssetDocumentResult FAssetDocumentGenericRuntimeRoute::DispatchApplyFileImpl(
 		return ProjectRuntimeResult(Failure);
 	}
 	NormalizeAuthoredFloatPrecision(Adapted.GetValue());
+	if (TOptional<FAssetDocumentRuntimeResultDto> Refused = RouteProfileClass(Adapted.GetValue()))
+	{
+		return ProjectRuntimeResult(Refused.GetValue());
+	}
 	FAnimationRequestScope AnimationScope(AnimationRequestBinding, Adapted.GetValue());
 	if (!AnimationScope.Validation.bValid)
 	{
@@ -521,7 +564,7 @@ FAssetDocumentResult FAssetDocumentGenericRuntimeRoute::DispatchApplyFileImpl(
 		Failure.Diagnostics.Append(AnimationScope.Validation.Diagnostics);
 		return ProjectRuntimeResult(Failure);
 	}
-	const FAssetDocumentRuntimeTargetActivation* TargetActivation = TargetActivations.Find(Adapted->RequestedAssetClassPath);
+	const FAssetDocumentRuntimeTargetActivation* TargetActivation = FindTargetActivation(Adapted.GetValue());
 	if ((bTargetActivationsBound && Runtime->GetActiveRuntimeRevision() != ActivationRevision)
 		|| (!bTargetActivationsBound && !Runtime->GetActiveRuntimeRegistrationProjection().Elements.IsEmpty()))
 	{
@@ -741,6 +784,10 @@ FAssetDocumentResult FAssetDocumentGenericRuntimeRoute::DispatchValidateImpl(
 	// The same request Apply prepares; it stops after Preflight.
 	Adapted->Operation = EAssetDocumentRuntimeOperation::Apply;
 	NormalizeAuthoredFloatPrecision(Adapted.GetValue());
+	if (TOptional<FAssetDocumentRuntimeResultDto> Refused = RouteProfileClass(Adapted.GetValue()))
+	{
+		return ProjectRuntimeResult(Refused.GetValue());
+	}
 	FAnimationRequestScope AnimationScope(AnimationRequestBinding, Adapted.GetValue());
 	if (!AnimationScope.Validation.bValid)
 	{
@@ -748,7 +795,7 @@ FAssetDocumentResult FAssetDocumentGenericRuntimeRoute::DispatchValidateImpl(
 		Failure.Diagnostics.Append(AnimationScope.Validation.Diagnostics);
 		return ProjectRuntimeResult(Failure);
 	}
-	const FAssetDocumentRuntimeTargetActivation* TargetActivation = TargetActivations.Find(Adapted->RequestedAssetClassPath);
+	const FAssetDocumentRuntimeTargetActivation* TargetActivation = FindTargetActivation(Adapted.GetValue());
 	if ((bTargetActivationsBound && Runtime->GetActiveRuntimeRevision() != ActivationRevision)
 		|| (!bTargetActivationsBound && !Runtime->GetActiveRuntimeRegistrationProjection().Elements.IsEmpty()))
 	{
@@ -872,6 +919,10 @@ FAssetDocumentRuntimeResultDto FAssetDocumentGenericRuntimeRoute::DispatchExtrac
 		Failure.Diagnostics.Insert(Diagnostics, 0);
 		return Failure;
 	}
+	if (TOptional<FAssetDocumentRuntimeResultDto> Refused = RouteProfileClass(Adapted.GetValue()))
+	{
+		return Refused.GetValue();
+	}
 	FAnimationRequestScope AnimationScope(AnimationRequestBinding, Adapted.GetValue());
 	if (!AnimationScope.Validation.bValid)
 	{
@@ -912,6 +963,10 @@ FAssetDocumentRuntimeResultDto FAssetDocumentGenericRuntimeRoute::DispatchDiffIm
 		return Failure;
 	}
 	NormalizeAuthoredFloatPrecision(Adapted.GetValue());
+	if (TOptional<FAssetDocumentRuntimeResultDto> Refused = RouteProfileClass(Adapted.GetValue()))
+	{
+		return Refused.GetValue();
+	}
 	FAnimationRequestScope AnimationScope(AnimationRequestBinding, Adapted.GetValue());
 	if (!AnimationScope.Validation.bValid)
 	{
@@ -952,6 +1007,10 @@ FAssetDocumentRuntimeResultDto FAssetDocumentGenericRuntimeRoute::DispatchInspec
 			TEXT("The Service request could not be adapted."));
 		Failure.Diagnostics.Insert(Diagnostics, 0);
 		return Failure;
+	}
+	if (TOptional<FAssetDocumentRuntimeResultDto> Refused = RouteProfileClass(Adapted.GetValue()))
+	{
+		return Refused.GetValue();
 	}
 	FAnimationRequestScope AnimationScope(AnimationRequestBinding, Adapted.GetValue());
 	if (!AnimationScope.Validation.bValid)
@@ -995,6 +1054,10 @@ FAssetDocumentRuntimeResultDto FAssetDocumentGenericRuntimeRoute::DispatchInspec
 		Failure.Diagnostics.Insert(Diagnostics, 0);
 		return Failure;
 	}
+	if (TOptional<FAssetDocumentRuntimeResultDto> Refused = RouteProfileClass(Adapted.GetValue()))
+	{
+		return Refused.GetValue();
+	}
 	FAnimationRequestScope AnimationScope(AnimationRequestBinding, Adapted.GetValue());
 	if (!AnimationScope.Validation.bValid)
 	{
@@ -1037,6 +1100,10 @@ FAssetDocumentRuntimeResultDto FAssetDocumentGenericRuntimeRoute::DispatchCreate
 			TEXT("The Service request could not be adapted."));
 		Failure.Diagnostics.Insert(Diagnostics, 0);
 		return Failure;
+	}
+	if (TOptional<FAssetDocumentRuntimeResultDto> Refused = RouteProfileClass(Adapted.GetValue()))
+	{
+		return Refused.GetValue();
 	}
 	FAnimationRequestScope AnimationScope(AnimationRequestBinding, Adapted.GetValue());
 	if (!AnimationScope.Validation.bValid)
@@ -1150,7 +1217,7 @@ FAssetDocumentRuntimeResultDto FAssetDocumentGenericRuntimeRoute::DispatchExtrac
 	return Result;
 }
 
-FAssetDocumentRuntimeResultDto FAssetDocumentGenericRuntimeRoute::DispatchSync(const TSharedPtr<FJsonObject>& Options)
+FAssetDocumentRuntimeResultDto FAssetDocumentGenericRuntimeRoute::DispatchSync(const FAssetDocumentSyncRequest& Request)
 {
 	if (Runtime == nullptr)
 	{
@@ -1162,7 +1229,7 @@ FAssetDocumentRuntimeResultDto FAssetDocumentGenericRuntimeRoute::DispatchSync(c
 	}
 	TArray<FAssetDocumentRuntimeDiagnostic> Diagnostics;
 	TOptional<FAssetDocumentRuntimeRequestDto> Adapted =
-		FAssetDocumentGenericRequestAdapter::AdaptSync(Options, Runtime->GetActiveRuntimeRevision(), Diagnostics);
+		FAssetDocumentGenericRequestAdapter::AdaptSync(Request.Options, Runtime->GetActiveRuntimeRevision(), Diagnostics);
 	if (!Adapted.IsSet())
 	{
 		FAssetDocumentRuntimeResultDto Failure = MakeRuntimeFailure(

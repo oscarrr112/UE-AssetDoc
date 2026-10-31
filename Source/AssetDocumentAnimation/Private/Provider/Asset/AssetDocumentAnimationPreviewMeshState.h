@@ -28,8 +28,9 @@ inline FAssetDocumentContractValidationResult Result(bool bValid, const TCHAR* C
  }
  return R;
 }
-// Classification-only snapshot projection; no stored soft path escapes this helper.
-bool ReadMontageProfilePreviewMesh(const UAnimMontage& Target, USkeletalMesh*& OutMesh);
+// Read-only snapshot projection: the loaded mesh, or (OutMesh null) the stored canonical path of a
+// reference that does not load or does not fit the Skeleton; both empty when none is set.
+bool ReadMontageProfilePreviewMesh(const UAnimMontage& Target, USkeletalMesh*& OutMesh, FString& OutStoredPath);
 inline USkeletalMesh* ReadPreviewMesh(const UAnimationAsset& Asset) { return Asset.GetPreviewMesh(); }
 inline bool ExactTarget(const UObject* Object)
 {

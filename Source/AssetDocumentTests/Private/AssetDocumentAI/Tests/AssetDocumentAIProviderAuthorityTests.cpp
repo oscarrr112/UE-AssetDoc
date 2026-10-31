@@ -394,7 +394,7 @@ void RequireStructCanonicalWriteAuthority(FAutomationTestBase& Test)
 		int32 CallerOccurrencesPerPacket;
 	};
 	const FCallerPackets Callers[] = {
-		{Update, TEXT("bool PrepareEntryMetadataForwardWrite("),
+		{Update, TEXT("bool PrepareEntryKeyTypeWrite("),
 			TEXT("FAssetDocumentPrimitiveOutcome ApplyEntryMetadataForwardWriteChanges("), TEXT("UpdateExistingV2"), 1},
 		{Add, TEXT("FAssetDocumentPrimitiveOutcome ApplyAssetDocumentAIBlackboardEntryAddWithIdentity("),
 			TEXT("FAssetDocumentPrimitiveOutcome ApplyAssetDocumentAIBlackboardEntryAddWithIdentity("), TEXT("AddV2"), 2},
@@ -1272,7 +1272,8 @@ void RequireEntryRemoveAuthority(FAutomationTestBase& Test)
 			TEXT("AIProvider.Blackboard.KeyMissing"), TEXT("AIProvider.Blackboard.KeyInherited"),
 			TEXT("AIProvider.Blackboard.OrderedKeysLifecycleUnavailable"),
 			TEXT("AIProvider.Blackboard.DerivedRefreshFailed"),
-			TEXT("AIProvider.Blackboard.EntryChangedSetMismatch")});
+			TEXT("AIProvider.Blackboard.EntryChangedSetMismatch"),
+			TEXT("Graph.PieActive"), TEXT("AIProvider.Blackboard.LayoutInUse")});
 	Test.TestEqual(TEXT("SC-REMOVE public module chain is exact"),
 		Remove->Admission.PublicModule, FString(TEXT("AssetDocumentAI+AIModule+PropertyEditor")));
 	Test.TestEqual(TEXT("SC-REMOVE private-public header chain is exact"),

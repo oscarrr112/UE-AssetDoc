@@ -11,6 +11,7 @@
 #include "Serialization/ObjectReader.h"
 #include "Serialization/ObjectWriter.h"
 #include "UObject/Class.h"
+#include "UObject/MetaData.h"
 #include "UObject/Package.h"
 #include "UObject/UObjectGlobals.h"
 #include "UObject/UObjectHash.h"
@@ -210,6 +211,10 @@ TUniquePtr<FAssetDocumentPackageSnapshot> FAssetDocumentPackageSnapshot::Capture
 	Snapshot->Package = &Package;
 	Snapshot->PackageName = Package.GetName();
 	Snapshot->bWasDirty = Package.IsDirty();
+#if WITH_METADATA
+	Snapshot->CapturedObjectMetaData = Package.GetMetaData().ObjectMetaDataMap;
+	Snapshot->CapturedRootMetaData = Package.GetMetaData().RootMetaDataMap;
+#endif
 	if (UObject* Primary = Package.FindAssetInPackage())
 	{
 		Snapshot->PrimaryAsset = Primary;
@@ -273,6 +278,15 @@ TUniquePtr<FAssetDocumentPackageSnapshot> FAssetDocumentPackageSnapshot::Capture
 	Snapshot->ObjectsReinstancedHandle = FCoreUObjectDelegates::OnObjectsReinstanced.AddRaw(
 		Snapshot.Get(), &FAssetDocumentPackageSnapshot::OnObjectsReplaced);
 	return Snapshot;
+}
+
+void FAssetDocumentPackageSnapshot::RestoreMetaData()
+{
+#if WITH_METADATA
+	FMetaData& MetaData = Package->GetMetaData();
+	MetaData.ObjectMetaDataMap = CapturedObjectMetaData;
+	MetaData.RootMetaDataMap = CapturedRootMetaData;
+#endif
 }
 
 FAssetDocumentPackageSnapshot::~FAssetDocumentPackageSnapshot()
@@ -453,6 +467,7 @@ FAssetDocumentContractValidationResult FAssetDocumentPackageSnapshot::RestoreWit
 	if (!HasErrors(RestoreDiagnostics) && VerifyObjectSet(Current, RestoreDiagnostics)
 		&& CollectCurrentAuthoredObjects().Num() == Current.Num())
 	{
+		RestoreMetaData();
 		Package->SetDirtyFlag(bWasDirty);
 		Result.bValid = true;
 	}
@@ -487,6 +502,7 @@ FAssetDocumentContractValidationResult FAssetDocumentPackageSnapshot::Restore()
 	}
 	RestoreBytes(RestoreDiagnostics);
 	RunRebuilders(RestoreDiagnostics);
+	RestoreMetaData();
 	const bool bVerified = !HasErrors(RestoreDiagnostics) && VerifyObjectSet(BeforeCallbacks, RestoreDiagnostics);
 	if (bVerified)
 	{

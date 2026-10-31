@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "Provider/BehaviorTree/AssetDocumentAIBehaviorTreeScratchAuthoring.h"
 #include "Provider/BehaviorTree/AssetDocumentAIBehaviorTreeAuthoredReadbackInternal.h"
+#include "Provider/BehaviorTree/AssetDocumentAIBehaviorTreeAuthoredGraphValidation.h"
+#include "AIGraphNode.h"
+#include "BehaviorTreeDecoratorGraphNode_Decorator.h"
+#include "BehaviorTreeGraphNode_CompositeDecorator.h"
+#include "AssetDocumentEditorPropertyValueCodec.h"
 #include "BehaviorTree/BehaviorTreeTypes.h"
 #include "BehaviorTree/BehaviorTree.h"
 #include "BehaviorTree/ValueOrBBKey.h"
@@ -14,6 +19,7 @@
 #include "PropertyEditorModule.h"
 #include "PropertyHandle.h"
 #include "PropertyCustomizationHelpers.h"
+#include "GameplayTagContainer.h"
 #include "StructUtils/InstancedStruct.h"
 #include "UObject/SoftObjectPath.h"
 #include "UObject/StructOnScope.h"
@@ -356,6 +362,34 @@ bool WriteValue(IPropertyHandle& Handle, const FValue& Value, int32 Depth, bool 
    }
    return true;
   }
+  // A gameplay tag and a tag container are set whole, as the tag picker sets them. The struct form keeps a tag name
+  // the tag table no longer lists (as loading the asset does).
+  if (Struct->Struct == FGameplayTag::StaticStruct() || Struct->Struct == FGameplayTagContainer::StaticStruct())
+  {
+   const auto TagText = [](const FValue& Tag, FString& Out)
+   {
+    if (Tag.Kind != EKind::String) return false;
+    Out += FString::Printf(TEXT("(TagName=\"%s\")"), *Tag.StringValue.ReplaceCharWithEscapedChar());
+    return true;
+   };
+   FString Formatted;
+   if (Struct->Struct == FGameplayTag::StaticStruct())
+   {
+    if (!TagText(Value, Formatted)) return false;
+   }
+   else
+   {
+    if (Value.Kind != EKind::Array) return false;
+    Formatted = TEXT("(GameplayTags=(");
+    for (int32 Index = 0; Index < Value.Elements.Num(); ++Index)
+    {
+     if (Index > 0) Formatted += TEXT(",");
+     if (!TagText(Value.Elements[Index], Formatted)) return false;
+    }
+    Formatted += TEXT("))");
+   }
+   return Handle.SetValueFromFormattedString(Formatted, Flags) == FPropertyAccess::Success;
+  }
   if (Value.Kind != EKind::Object) return false;
   if (Struct->Struct == FBlackboardKeySelector::StaticStruct())
   {
@@ -406,7 +440,15 @@ bool WriteValue(IPropertyHandle& Handle, const FValue& Value, int32 Depth, bool 
  if (Value.Kind != EKind::String) return false;
  if (CastField<FStrProperty>(Property)) return Handle.SetValue(Value.StringValue, Flags) == FPropertyAccess::Success;
  if (CastField<FNameProperty>(Property)) return Handle.SetValue(FName(*Value.StringValue), Flags) == FPropertyAccess::Success;
- if (CastField<FTextProperty>(Property)) return Handle.SetValue(FText::FromString(Value.StringValue), Flags) == FPropertyAccess::Success;
+ if (CastField<FTextProperty>(Property))
+ {
+  // The shared text form. A text form (LOCTABLE, INVTEXT, NSLOCTEXT) sets that text; a string the replaced tree's
+  // text of this property reads as keeps that text; any other string is a new text.
+  FText Text;
+  if (const FText* Kept = FScopedReplacedTexts::Find(*Property, Value.StringValue)) Text = *Kept;
+  else if (!UE::AssetDocument::EditorPropertyValueCodec::DecodeText(Value.StringValue, Text)) return false;
+  return Handle.SetValue(Text, Flags) == FPropertyAccess::Success;
+ }
  return false;
 }
 }
@@ -455,7 +497,33 @@ bool WriteIsolatedValueOrProperties(const TSharedRef<FStructOnScope>& Storage,
  return true;
 }
 
-bool WriteProperties(UObject& Object, const FValue& Properties, FString& Error)
+namespace
+{
+bool IsScratchUnsupportedMarker(const FValue& Value)
+{
+ const auto* Reason = FindAssetDocumentAIBehaviorTreeField(Value, TEXT("Unsupported"));
+ return Value.Kind == EKind::Object && Reason && Reason->Kind == EKind::String;
+}
+
+// The kept instance's value of a marked property. Such a value has no form the property editor reads back exactly
+// (a non-finite number, a map with integer keys), so it is copied as stored, between the property's own change
+// notifications; a value holding instanced objects is not copied (those objects belong to the kept instance).
+bool KeepScratchMarkedProperty(UObject& Object, IPropertyHandle& Handle, const UObject* Kept, FString& Error)
+{
+ const FProperty* Property = Handle.GetProperty();
+ if (!Kept || Kept->GetClass() != Object.GetClass()) return true;
+ if (!Property || Property->HasAnyPropertyFlags(CPF_InstancedReference | CPF_ContainsInstancedReference))
+ { Error = Object.GetClass()->GetPathName() + TEXT(": a marked property holding instanced objects cannot be kept"); return false; }
+ Handle.NotifyPreChange();
+ Property->CopyCompleteValue_InContainer(&Object, Kept);
+ Handle.NotifyPostChange(EPropertyChangeType::ValueSet);
+ if (Property->Identical_InContainer(&Object, Kept, 0, PPF_None)) return true;
+ Error = Object.GetClass()->GetPathName() + TEXT(".") + Property->GetName() + TEXT(": the marked value could not be kept");
+ return false;
+}
+}
+
+bool WriteProperties(UObject& Object, const FValue& Properties, FString& Error, const UObject* Kept)
 {
  if (Properties.Kind != EKind::Object) { Error = TEXT("authored_properties must be an object"); return false; }
  if (Properties.ObjectKeys.IsEmpty()) return true;
@@ -483,6 +551,11 @@ bool WriteProperties(UObject& Object, const FValue& Properties, FString& Error)
   if (!Handle || !Handle->IsValid() || !(*Handle)->GetProperty() || (*Handle)->GetProperty()->GetName() != Properties.ObjectKeys[Index]
    || !Readback::IsAuthoredProperty(**Handle))
   { Error = Object.GetClass()->GetPathName() + TEXT(".") + Properties.ObjectKeys[Index] + TEXT(": typed property write unavailable or invalid"); return false; }
+  if (IsScratchUnsupportedMarker(Properties.Elements[Index]))
+  {
+   if (!KeepScratchMarkedProperty(Object, **Handle, Kept, Error)) return false;
+   continue;
+  }
   if ((*Handle)->IsEditConst())
   {
    // Complete defaults include fields disabled by their stock edit condition.
@@ -496,6 +569,75 @@ bool WriteProperties(UObject& Object, const FValue& Properties, FString& Error)
  FValue Actual;
  if (!Readback::BuildAuthoredProperties(Object, Actual, nullptr, Readback::EAuthoredGraphReadbackVersion::V2)) { Error = TEXT("Typed authored readback failed after property write"); return false; }
  return true;
+}
+
+namespace
+{
+FScopedReplacedTexts* GReplacedTexts = nullptr;
+
+FString ReplacedTextKey(const FProperty& Property, const FString& Value)
+{
+ const UStruct* Owner = Property.GetOwnerStruct();
+ return FString::Printf(TEXT("%s:%s=%s"), Owner != nullptr ? *Owner->GetPathName() : TEXT(""), *Property.GetName(), *Value);
+}
+
+void CollectReplacedTexts(const UAIGraphNode& Node, TMap<FString, FText>& Out,
+ TMap<FGuid, const UObject*>& OutInstances, TMap<FGuid, const UAIGraphNode*>& OutMissing, int32 Depth)
+{
+ if (Depth > 64) return;
+ if (Node.NodeInstance) OutInstances.Add(Node.NodeGuid, Node.NodeInstance);
+ else if (UE::AssetDocumentAI::BehaviorTreeAuthoredReadback::IsMissingClassNode(Node)) OutMissing.Add(Node.NodeGuid, &Node);
+ if (const auto* Composite = Cast<UBehaviorTreeGraphNode_CompositeDecorator>(&Node); Composite && Composite->GetBoundGraph())
+  for (const UEdGraphNode* Bound : Composite->GetBoundGraph()->Nodes)
+   if (const auto* Test = Cast<UBehaviorTreeDecoratorGraphNode_Decorator>(Bound); Test && Test->NodeInstance)
+    OutInstances.Add(Test->NodeGuid, Test->NodeInstance);
+ if (const UObject* Instance = Node.NodeInstance)
+ {
+  for (TFieldIterator<FTextProperty> It(Instance->GetClass()); It; ++It)
+  {
+   if (It->ArrayDim != 1) continue;
+   const FText& Text = It->GetPropertyValue_InContainer(Instance);
+   if (Text.IsEmpty()) continue;
+   Out.Add(ReplacedTextKey(**It, UE::AssetDocument::EditorPropertyValueCodec::EncodeText(Text)), Text);
+   Out.Add(ReplacedTextKey(**It, Text.ToString()), Text);
+  }
+ }
+ for (const UAIGraphNode* Sub : Node.SubNodes)
+  if (Sub) CollectReplacedTexts(*Sub, Out, OutInstances, OutMissing, Depth + 1);
+}
+}
+
+FScopedReplacedTexts::FScopedReplacedTexts(const UBehaviorTree* Replaced)
+ : Previous(GReplacedTexts)
+{
+#if WITH_EDITORONLY_DATA
+ if (Replaced && Replaced->BTGraph)
+  for (const UEdGraphNode* Node : Replaced->BTGraph->Nodes)
+   if (const auto* AINode = Cast<UAIGraphNode>(Node)) CollectReplacedTexts(*AINode, Texts, Instances, MissingClassNodes, 0);
+#endif
+ GReplacedTexts = this;
+}
+
+FScopedReplacedTexts::~FScopedReplacedTexts()
+{
+ GReplacedTexts = Previous;
+}
+
+const FText* FScopedReplacedTexts::Find(const FProperty& Property, const FString& Value)
+{
+ return GReplacedTexts ? GReplacedTexts->Texts.Find(ReplacedTextKey(Property, Value)) : nullptr;
+}
+
+const UObject* FScopedReplacedTexts::FindInstance(const FGuid& NodeGuid)
+{
+ const UObject* const* Instance = GReplacedTexts ? GReplacedTexts->Instances.Find(NodeGuid) : nullptr;
+ return Instance ? *Instance : nullptr;
+}
+
+const UAIGraphNode* FScopedReplacedTexts::FindMissingClassNode(const FGuid& NodeGuid)
+{
+ const UAIGraphNode* const* Node = GReplacedTexts ? GReplacedTexts->MissingClassNodes.Find(NodeGuid) : nullptr;
+ return Node ? *Node : nullptr;
 }
 
 bool WriteExactHiddenField(UObject& Object, FName Field, const FString& Formatted, FString& Error)

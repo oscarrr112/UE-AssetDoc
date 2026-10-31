@@ -18,9 +18,16 @@
 // written, after one Modify() of the owner. Non-editable fields (CopyAllEditableProperties rules: not
 // BlueprintReadOnly / Transient / EditConst / deprecated) and fields owned by other document keys are refused with
 // IKRig.FieldNotEditable. AssetDocumentIKRigStructWritesTests.cpp compares the result with the real struct wrapper.
+//
+// A field the codec cannot represent reads as a marker ({"Unsupported": ..., "Text": ...}, MakeUnrepresentedMarker)
+// and is never written: left as read or omitted, it keeps its stored value; a marker that is not the field's current
+// one (edited, or placed where the field reads as a value) or a value given for a field with no document form is
+// refused with <Profile>.UnrepresentedValue. A field whose value holds marked members (a struct with a TOptional
+// member, ...) is decoded as an edit of its current value, so those members keep theirs.
 
 #include "AssetDocumentIKRigStructWrites.h"
 
+#include "AssetDocumentEditorMarkerText.h"
 #include "AssetDocumentEditorPropertyValueCodec.h"
 #include "AssetDocumentRigPrimitives.h"
 #include "UObject/UnrealType.h"
@@ -56,11 +63,106 @@ struct FPlannedWrite
 	TUniquePtr<FPropertyValue> Value;
 };
 
-// The new value of every editable field of Type (listed: decoded over the default; unlisted: the default) that
-// differs from the current one.
-bool PlanWrites(FReader& Op, const TCHAR* Key, const FValue& Settings, const UStruct& Type, const void* Container,
-	const void* Defaults, UObject* Owner, TFunctionRef<bool(const FProperty&)> Skip, TArray<FPlannedWrite>& OutWrites)
+bool SameText(const FValue& Left, const FValue& Right, const TCHAR* Key)
 {
+	const FValue* A = FindField(Left, Key);
+	const FValue* B = FindField(Right, Key);
+	if (A == nullptr || B == nullptr)
+	{
+		return A == B;
+	}
+	return A->Kind == B->Kind && A->StringValue.Equals(B->StringValue, ESearchCase::CaseSensitive);
+}
+
+// Whether the marker texts are the same for a value held by Within (EditorMarkerText: paths into the asset compare as
+// the asset's own path names them).
+bool SameMarkerText(const FValue& Authored, const FValue& Current, const UObject* Within)
+{
+	const FValue* A = FindField(Authored, TEXT("Text"));
+	const FValue* B = FindField(Current, TEXT("Text"));
+	if (A == nullptr || B == nullptr || A->Kind != EAssetDocumentRuntimeValueKind::String || B->Kind != EAssetDocumentRuntimeValueKind::String)
+	{
+		return SameText(Authored, Current, TEXT("Text"));
+	}
+	return UE::AssetDocument::EditorMarkerText::IsSameText(A->StringValue, B->StringValue, Within);
+}
+
+// The path (below Path) of the first marker in Authored that is not the marker Current holds at the same place (Within:
+// the object holding the value).
+bool FindChangedMarker(const FValue& Authored, const FValue* Current, const FString& Path, const UObject* Within, FString& OutPath)
+{
+	if (IsMarker(Authored))
+	{
+		if (Current != nullptr && IsMarker(*Current) && SameText(Authored, *Current, TEXT("Unsupported"))
+			&& SameMarkerText(Authored, *Current, Within))
+		{
+			return false;
+		}
+		OutPath = Path;
+		return true;
+	}
+	for (int32 Index = 0; Index < Authored.Elements.Num(); ++Index)
+	{
+		const FValue* Inner = nullptr;
+		FString Where;
+		if (Authored.Kind == EAssetDocumentRuntimeValueKind::Object && Authored.ObjectKeys.IsValidIndex(Index))
+		{
+			Inner = Current != nullptr && Current->Kind == EAssetDocumentRuntimeValueKind::Object
+				? FindField(*Current, Authored.ObjectKeys[Index]) : nullptr;
+			Where = Path + TEXT("/") + Authored.ObjectKeys[Index];
+		}
+		else if (Authored.Kind == EAssetDocumentRuntimeValueKind::Array)
+		{
+			Inner = Current != nullptr && Current->Kind == EAssetDocumentRuntimeValueKind::Array && Current->Elements.IsValidIndex(Index)
+				? &Current->Elements[Index] : nullptr;
+			Where = FString::Printf(TEXT("%s/%d"), *Path, Index);
+		}
+		else
+		{
+			continue;
+		}
+		if (FindChangedMarker(Authored.Elements[Index], Inner, Where, Within, OutPath))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+// Value without its marked members: decoded as an edit, it leaves what they stand for as it is.
+FValue WithoutMarkers(const FValue& Value)
+{
+	FValue Out = Value;
+	if (Value.Kind == EAssetDocumentRuntimeValueKind::Object)
+	{
+		Out.ObjectKeys.Reset();
+		Out.Elements.Reset();
+		for (int32 Index = 0; Index < Value.Elements.Num() && Value.ObjectKeys.IsValidIndex(Index); ++Index)
+		{
+			if (!IsMarker(Value.Elements[Index]))
+			{
+				Out.ObjectKeys.Add(Value.ObjectKeys[Index]);
+				Out.Elements.Add(WithoutMarkers(Value.Elements[Index]));
+			}
+		}
+	}
+	else if (Value.Kind == EAssetDocumentRuntimeValueKind::Array)
+	{
+		for (FValue& Element : Out.Elements)
+		{
+			Element = WithoutMarkers(Element);
+		}
+	}
+	return Out;
+}
+
+// The new value of every editable field of Type (listed: decoded over the default; unlisted: the default) that
+// differs from the current one. Marked fields: see the file comment.
+bool PlanWrites(FReader& Op, const TCHAR* Key, const FValue& Settings, const UStruct& Type, const void* Container,
+	const void* Defaults, UObject* Owner, const TCHAR* Profile, TFunctionRef<bool(const FProperty&)> Skip,
+	TArray<FPlannedWrite>& OutWrites)
+{
+	const FString Unrepresented = FString::Printf(TEXT("%s.UnrepresentedValue"), Profile);
 	if (Settings.Kind != EAssetDocumentRuntimeValueKind::Object)
 	{
 		return Op.Fail(TEXT("Graph.InvalidArgument"), FString::Printf(TEXT("%s is an object of settings."), Key), Key);
@@ -93,15 +195,60 @@ bool PlanWrites(FReader& Op, const TCHAR* Key, const FValue& Settings, const USt
 		{
 			continue;
 		}
+		const FString Where = FString::Printf(TEXT("%s/%s"), Key, *Property.GetName());
+		const void* CurrentValue = Property.ContainerPtrToValuePtr<void>(Container);
+		const FValue Current = EncodeFieldOrMarker(Property, Container);
+		const bool bMarked = IsMarker(Current);
+		const bool bHoldsMarker = HoldsMarker(Current);
 		TUniquePtr<FPropertyValue> Value = MakeUnique<FPropertyValue>(Property);
 		Property.CopyCompleteValue(Value->Memory, Property.ContainerPtrToValuePtr<void>(Defaults));
+		FString Code;
 		if (const FValue* const* Authored = Listed.Find(Property.GetFName()))
 		{
-			FString Code;
+			FString MarkerPath;
+			if (FindChangedMarker(**Authored, &Current, Where, Owner, MarkerPath))
+			{
+				return Op.Fail(Unrepresented, bMarked || bHoldsMarker
+					? FString::Printf(TEXT("The marker was edited; AssetDoc cannot write this content (%s). Leave the marker as read, "
+						"or omit it to keep the content."), *Property.GetCPPType())
+					: FString::Printf(TEXT("'%s' reads as a value here, not a marker; a marker cannot be written. Give a value, "
+						"or omit it."), *Property.GetName()), MarkerPath);
+			}
+			if (IsMarker(**Authored))
+			{
+				// Left as read: the stored value stays.
+				continue;
+			}
+			FString CodecId;
+			if (!UE::AssetDocument::EditorPropertyValueCodec::Inspect(Property, CodecId))
+			{
+				return Op.Fail(Unrepresented, FString::Printf(TEXT("%s has no document form, so '%s' cannot be written: leave its "
+					"\"Unsupported\" marker as read, or omit the field to keep its value."), *Property.GetCPPType(), *Property.GetName()), Where);
+			}
+			if (bHoldsMarker)
+			{
+				Property.CopyCompleteValue(Value->Memory, CurrentValue);
+			}
 			if (!UE::AssetDocument::EditorPropertyValueCodec::Decode(Property, **Authored, Value->Memory, Code, Owner))
 			{
 				return Op.Fail(TEXT("IKRig.InvalidValue"), FString::Printf(TEXT("The value of '%s' does not fit the field (%s)."),
-					*Property.GetName(), *Code), FString::Printf(TEXT("%s/%s"), Key, *Property.GetName()));
+					*Property.GetName(), *Code), Where);
+			}
+		}
+		else if (bMarked)
+		{
+			// Omitted: a value the document has no form for keeps its stored value.
+			continue;
+		}
+		else if (bHoldsMarker)
+		{
+			// Omitted: the default, except the marked members, which keep their stored values.
+			Property.CopyCompleteValue(Value->Memory, CurrentValue);
+			if (!UE::AssetDocument::EditorPropertyValueCodec::Decode(Property, WithoutMarkers(EncodeFieldOrMarker(Property, Defaults)),
+				Value->Memory, Code, Owner))
+			{
+				return Op.Fail(TEXT("IKRig.InvalidValue"), FString::Printf(TEXT("'%s' could not be reset to its default (%s)."),
+					*Property.GetName(), *Code), Where);
 			}
 		}
 		if (!Property.Identical(Property.ContainerPtrToValuePtr<void>(Container), Value->Memory, PPF_None))
@@ -114,7 +261,7 @@ bool PlanWrites(FReader& Op, const TCHAR* Key, const FValue& Settings, const USt
 } // namespace
 
 bool WriteSettingsStruct(FReader& Op, const TCHAR* Key, const UScriptStruct& Type, void* Memory, const void* Defaults,
-	UObject& Owner, TFunctionRef<bool(const FProperty&)> Skip, FStructWriteResult& OutResult)
+	UObject& Owner, const TCHAR* Profile, TFunctionRef<bool(const FProperty&)> Skip, FStructWriteResult& OutResult)
 {
 	const FValue* Settings = nullptr;
 	if (!Op.Object(Key, Settings))
@@ -122,7 +269,7 @@ bool WriteSettingsStruct(FReader& Op, const TCHAR* Key, const UScriptStruct& Typ
 		return false;
 	}
 	TArray<FPlannedWrite> Writes;
-	if (!PlanWrites(Op, Key, *Settings, Type, Memory, Defaults, &Owner, Skip, Writes))
+	if (!PlanWrites(Op, Key, *Settings, Type, Memory, Defaults, &Owner, Profile, Skip, Writes))
 	{
 		return false;
 	}
@@ -168,7 +315,7 @@ bool WriteObjectFields(FReader& Op, const TCHAR* Key, UObject& Object, TConstArr
 	const UObject* Defaults = Object.GetClass()->GetDefaultObject();
 	TArray<FPlannedWrite> Writes;
 	auto NotListed = [Fields](const FProperty& Property) { return !Fields.Contains(Property.GetFName()); };
-	if (!PlanWrites(Op, Key, Renamed, *Object.GetClass(), &Object, Defaults, &Object, NotListed, Writes))
+	if (!PlanWrites(Op, Key, Renamed, *Object.GetClass(), &Object, Defaults, &Object, TEXT("IKRig"), NotListed, Writes))
 	{
 		return false;
 	}

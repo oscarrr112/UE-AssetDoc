@@ -750,6 +750,240 @@ class BehaviorTreeProductionTests(unittest.TestCase):
         self.assertEqual(result["Properties"], {})
         self.assertTrue(all(access == "read_only" for _, access in context.handoffs))
 
+    def test_detached_branch_extracts_reapplies_unchanged_and_keeps_through_an_edit(self):
+        profile = BehaviorTreeProfile(); doc = document()
+        doc["Body"]["Tree"]["Detached"] = [{"Id": guid(30), "Class": "/Script/AIModule.BTTask_Wait",
+                                            "Properties": {"Count": 3}, "Editor": {"Position": {"X": 700, "Y": 90}}}]
+        state = State(doc); context = TypedContext(RuntimePhase.VERIFY, state)
+        self.assertEqual(state.tree["detached"][0]["stable_node_id"], guid(30).upper())
+        actual = profile.extract(target=TARGET, context=context)
+        self.assertEqual(actual["Body"]["Tree"]["Detached"][0]["Properties"], {"Count": 3})
+        self.assertEqual(profile.diff(deepcopy(actual), actual, context=context), ())
+        desired = deepcopy(actual)
+        desired["Body"]["Tree"]["Detached"][0]["Properties"]["Count"] = 4
+        desired["Body"]["Tree"]["Root"]["Properties"]["Count"] = 5
+        changes = {item.path: item for item in profile.diff(desired, actual, context=context)}
+        self.assertEqual(set(changes), {"/Body/Tree/Detached/0/Properties/Count", "/Body/Tree/Root/Properties/Count"})
+        # An edit elsewhere keeps the branch, unconnected, through scratch authoring.
+        edited = deepcopy(actual); edited["Body"]["Tree"]["Root"]["Properties"]["Count"] = 5
+        apply = TypedContext(RuntimePhase.APPLY, state)
+        profile.apply(edited, context=apply)
+        scratch = next(row[2]["tree"] for row in apply.calls if row[0] == "ai.behavior_tree.graph.author_scratch.v1")
+        self.assertEqual([item["stable_node_id"] for item in scratch["detached"]], [guid(30).upper()])
+        self.assertEqual(state.tree["detached"][0]["editor"]["position"], {"x": 700, "y": 90})
+        # Omitting Detached keeps the branch; an explicit [] removes it.
+        omitted = deepcopy(actual); del omitted["Body"]["Tree"]["Detached"]
+        self.assertEqual(profile.diff(omitted, actual, context=context), ())
+        removed = deepcopy(actual); removed["Body"]["Tree"]["Detached"] = []
+        changes = {item.path: item for item in profile.diff(removed, actual, context=context)}
+        self.assertEqual((changes["/Body/Tree/Detached"].before, changes["/Body/Tree/Detached"].after), ([guid(30).upper()], None))
+
+    def test_a_document_rewriting_only_root_keeps_the_detached_branches(self):
+        profile = BehaviorTreeProfile(); doc = document()
+        doc["Body"]["Tree"]["Detached"] = [{"Id": guid(30), "Class": "/Script/AIModule.BTTask_Wait",
+                                            "Properties": {"Count": 3}, "Editor": {"Position": {"X": 700, "Y": 90}}}]
+        state = State(doc)
+        actual = profile.extract(target=TARGET, context=TypedContext(RuntimePhase.VERIFY, state))
+        edited = deepcopy(actual); del edited["Body"]["Tree"]["Detached"]
+        edited["Body"]["Tree"]["Root"]["Properties"]["Count"] = 5
+        apply = TypedContext(RuntimePhase.APPLY, state)
+        profile.apply(edited, context=apply)
+        scratch = next(row[2]["tree"] for row in apply.calls if row[0] == "ai.behavior_tree.graph.author_scratch.v1")
+        self.assertEqual([item["stable_node_id"] for item in scratch["detached"]], [guid(30).upper()])
+        self.assertEqual(scratch["detached"][0]["authored_properties"]["Count"], 3)
+        profile.verify(edited, context=TypedContext(RuntimePhase.VERIFY, state))
+        after = profile.extract(target=TARGET, context=TypedContext(RuntimePhase.VERIFY, state))
+        self.assertEqual(after["Body"]["Tree"]["Detached"][0]["Id"], guid(30).upper())
+        # A branch the Root now holds entirely was wired in and is not kept as well.
+        wired = deepcopy(edited)
+        wired["Body"]["Tree"]["Root"].setdefault("Children", []).append(deepcopy(actual["Body"]["Tree"]["Detached"][0]))
+        apply = TypedContext(RuntimePhase.APPLY, State(doc))
+        profile.apply(wired, context=apply)
+        scratch = next(row[2]["tree"] for row in apply.calls if row[0] == "ai.behavior_tree.graph.author_scratch.v1")
+        self.assertNotIn("detached", scratch)
+
+    def test_a_root_using_part_of_a_detached_branch_needs_detached_listed(self):
+        profile = BehaviorTreeProfile(); doc = document()
+        doc["Body"]["Tree"]["Detached"] = [{"Id": guid(30), "Class": "/Script/AIModule.BTComposite_Sequence",
+                                            "Children": [{"Id": guid(31), "Class": "/Script/AIModule.BTTask_Wait"}]}]
+        state = State(doc)
+        actual = profile.extract(target=TARGET, context=TypedContext(RuntimePhase.VERIFY, state))
+        split = deepcopy(actual); del split["Body"]["Tree"]["Detached"]
+        split["Body"]["Tree"]["Root"]["Children"].append(deepcopy(actual["Body"]["Tree"]["Detached"][0]["Children"][0]))
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            profile.apply(split, context=TypedContext(RuntimePhase.APPLY, state))
+        self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                         ("BehaviorTree.DetachedBranchSplit", "/Body/Tree/Detached"))
+
+    def test_connected_tree_has_no_detached_key_anywhere(self):
+        profile = BehaviorTreeProfile(); state = State(); context = TypedContext(RuntimePhase.VERIFY, state)
+        actual = profile.extract(target=TARGET, context=context)
+        self.assertNotIn("Detached", actual["Body"]["Tree"])
+        self.assertNotIn("detached", state.tree)
+        payload = profile.diff_payload(deepcopy(actual), actual, context=context)
+        self.assertFalse(any("Detached" in row["path"] for rows in payload.values() for row in rows))
+
+    def marked_property_context(self, phase, state=None):
+        reason = "A TMap<int32,float> property value has no document form; AssetDoc keeps the value."
+        default = {"Text": "()", "Unsupported": reason}
+        if state is None:
+            state = State(self.typed_value_document({"Count": 1}))
+            state.tree["root"]["authored_properties"] = {}
+            state.tree["root"]["children"][0]["authored_properties"] = {
+                "Count": 1, "Table": {"Text": "((1, 2.000000))", "Unsupported": reason}}
+        context = TypedContext(phase, state)
+
+        def inspected(class_path):
+            if class_path == "/Script/AIModule.BTComposite_Sequence":
+                return {"node_class_path": class_path, "authored_defaults": {}, "property_schema": {}, "node_family": "composite"}
+            return {"node_class_path": class_path, "node_family": "task", "authored_defaults": {"Count": 0, "Table": default},
+                    "property_schema": {"Count": {"kind": "value", "value_type": "integer", "integer_bits": 16, "integer_signed": True},
+                                        "Table": {"kind": "unsupported", "default": default}}}
+        context.class_inspector = inspected
+        return context
+
+    def test_marked_property_extracts_with_a_warning_and_is_kept_through_edits(self):
+        from asset_document.diagnostics import collecting_read_warnings
+        profile = BehaviorTreeProfile()
+        context = self.marked_property_context(RuntimePhase.VERIFY)
+        live = deepcopy(context.state.tree["root"]["children"][0]["authored_properties"]["Table"])
+        with collecting_read_warnings() as warnings:
+            actual = profile.extract(target=TARGET, context=context)
+        self.assertEqual(actual["Body"]["Tree"]["Root"]["Children"][0]["Properties"], {"Count": 1, "Table": live})
+        self.assertEqual([(item.path, item.code) for item in warnings],
+                         [("/Body/Tree/Root/Children/0/Properties/Table", "BehaviorTree.Unrepresented")])
+        self.assertEqual(profile.diff(deepcopy(actual), actual, context=context), ())
+        # An edit elsewhere, and the marked property omitted: both keep the asset's value.
+        for name, edit in (("edit", lambda node: node["Properties"].update(Count=2)),
+                           ("omitted", lambda node: node["Properties"].pop("Table"))):
+            with self.subTest(name):
+                desired = deepcopy(actual)
+                edit(desired["Body"]["Tree"]["Root"]["Children"][0])
+                apply = self.marked_property_context(RuntimePhase.APPLY, deepcopy(context.state))
+                profile.validate(desired, context=self.marked_property_context(RuntimePhase.VALIDATE, deepcopy(context.state)))
+                profile.apply(desired, context=apply)
+                scratch = next(row[2]["tree"] for row in apply.calls if row[0] == "ai.behavior_tree.graph.author_scratch.v1")
+                self.assertEqual(scratch["root"]["children"][0]["authored_properties"]["Table"], live)
+        omitted = deepcopy(actual)
+        del omitted["Body"]["Tree"]["Root"]["Children"][0]["Properties"]["Table"]
+        self.assertEqual(profile.diff(omitted, actual, context=context), ())
+        # A new node of the class takes the class default without naming the property.
+        added = deepcopy(actual)
+        added["Body"]["Tree"]["Root"]["Children"].append({"Id": guid(3), "Class": "/Script/AIModule.BTTask_Wait"})
+        apply = self.marked_property_context(RuntimePhase.APPLY, deepcopy(context.state))
+        profile.apply(added, context=apply)
+        scratch = next(row[2]["tree"] for row in apply.calls if row[0] == "ai.behavior_tree.graph.author_scratch.v1")
+        self.assertEqual(scratch["root"]["children"][1]["authored_properties"]["Table"]["Text"], "()")
+
+    def test_an_edited_or_new_marker_and_a_value_for_a_marked_property_are_refused(self):
+        profile = BehaviorTreeProfile()
+        context = self.marked_property_context(RuntimePhase.VERIFY)
+        actual = profile.extract(target=TARGET, context=context)
+        node_path = "/Body/Tree/Root/Children/0/Properties/Table"
+        edited = deepcopy(actual); edited["Body"]["Tree"]["Root"]["Children"][0]["Properties"]["Table"]["Text"] = "((1, 3.0))"
+        valued = deepcopy(actual); valued["Body"]["Tree"]["Root"]["Children"][0]["Properties"]["Table"] = {"1": 3.0}
+        moved = deepcopy(actual)
+        moved["Body"]["Tree"]["Root"]["Children"].append({"Id": guid(3), "Class": "/Script/AIModule.BTTask_Wait",
+            "Properties": {"Table": deepcopy(actual["Body"]["Tree"]["Root"]["Children"][0]["Properties"]["Table"])}})
+        for name, desired, path in (("edited", edited, node_path), ("value", valued, node_path),
+                                    ("new node", moved, "/Body/Tree/Root/Children/1/Properties/Table")):
+            for phase in (RuntimePhase.VALIDATE, RuntimePhase.PREFLIGHT):
+                with self.subTest(name, phase=phase):
+                    run = self.marked_property_context(phase, deepcopy(context.state))
+                    operation = profile.validate if phase is RuntimePhase.VALIDATE else profile.preflight
+                    with self.assertRaises(AssetDocumentContractError) as raised:
+                        operation(desired, context=run)
+                    self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                                     ("BehaviorTree.UnrepresentedValue", path))
+
+    GONE = "/Game/Gone/BTT_Gone.BTT_Gone_C"
+    GONE_REASON = "The node's class /Game/Gone/BTT_Gone.BTT_Gone_C is missing; AssetDoc keeps the node as it is."
+
+    def missing_class_context(self, phase, state=None):
+        if state is None:
+            doc = self.typed_value_document({"Count": 1})
+            marked = lambda index: {"Id": guid(index), "Class": self.GONE, "Unsupported": self.GONE_REASON,
+                                    "Editor": {"Position": {"X": 400 + index, "Y": 0}}}
+            doc["Body"]["Tree"]["Root"]["Children"].append(dict(marked(3), Decorators=[marked(4)], Services=[marked(5)]))
+            state = State(doc)
+            state.tree["root"]["authored_properties"] = {}
+            state.tree["root"]["children"][0]["authored_properties"] = {"Count": 1}
+        context = TypedContext(phase, state)
+
+        def inspected(class_path):
+            self.assertNotEqual(class_path, self.GONE, "a node whose class is missing has no class evidence")
+            if class_path == "/Script/AIModule.BTComposite_Sequence":
+                return {"node_class_path": class_path, "authored_defaults": {}, "property_schema": {}, "node_family": "composite"}
+            return {"node_class_path": class_path, "node_family": "task", "authored_defaults": {"Count": 0},
+                    "property_schema": {"Count": {"kind": "value", "value_type": "integer", "integer_bits": 16, "integer_signed": True}}}
+        context.class_inspector = inspected
+        return context
+
+    def test_a_node_whose_class_is_missing_extracts_marked_and_is_kept_through_edits(self):
+        from asset_document.diagnostics import collecting_read_warnings
+        profile = BehaviorTreeProfile()
+        context = self.missing_class_context(RuntimePhase.VERIFY)
+        with collecting_read_warnings() as warnings:
+            actual = profile.extract(target=TARGET, context=context)
+        node = actual["Body"]["Tree"]["Root"]["Children"][1]
+        for item in (node, node["Decorators"][0], node["Services"][0]):
+            self.assertEqual((item["Class"], item["Unsupported"], "Properties" in item), (self.GONE, self.GONE_REASON, False))
+        pointer = "/Body/Tree/Root/Children/1"
+        self.assertEqual([(item.path, item.code) for item in warnings],
+                         [(pointer, "BehaviorTree.Unrepresented"), (pointer + "/Decorators/0", "BehaviorTree.Unrepresented"),
+                          (pointer + "/Services/0", "BehaviorTree.Unrepresented")])
+        self.assertEqual(profile.diff(deepcopy(actual), actual, context=context), ())
+        live = deepcopy(context.state.tree["root"]["children"][1])
+        # Unchanged, and with an edit elsewhere: the marked nodes are rebuilt as the asset holds them.
+        edited = deepcopy(actual); edited["Body"]["Tree"]["Root"]["Children"][0]["Properties"]["Count"] = 2
+        for name, desired in (("unchanged", deepcopy(actual)), ("edit elsewhere", edited)):
+            with self.subTest(name):
+                profile.validate(desired, context=self.missing_class_context(RuntimePhase.VALIDATE, deepcopy(context.state)))
+                profile.preflight(desired, context=self.missing_class_context(RuntimePhase.PREFLIGHT, deepcopy(context.state)))
+                apply = self.missing_class_context(RuntimePhase.APPLY, deepcopy(context.state))
+                profile.apply(desired, context=apply)
+                scratch = next(row[2]["tree"] for row in apply.calls if row[0] == "ai.behavior_tree.graph.author_scratch.v1")
+                self.assertEqual(scratch["root"]["children"][1], live)
+        self.assertEqual([item.path for item in profile.diff(edited, actual, context=context)],
+                         ["/Body/Tree/Root/Children/0/Properties/Count"])
+
+    def test_an_edited_or_new_marked_node_is_refused(self):
+        profile = BehaviorTreeProfile()
+        context = self.missing_class_context(RuntimePhase.VERIFY)
+        actual = profile.extract(target=TARGET, context=context)
+        pointer = "/Body/Tree/Root/Children/1"
+
+        def changed(edit):
+            desired = deepcopy(actual)
+            edit(desired["Body"]["Tree"]["Root"]["Children"])
+            return desired
+
+        cases = (
+            ("class", changed(lambda children: children[1].update(Class="/Game/Gone/BTT_Other.BTT_Other_C")), pointer),
+            ("reason", changed(lambda children: children[1]["Services"][0].update(Unsupported="other")),
+             pointer + "/Services/0"),
+            ("properties", changed(lambda children: children[1]["Decorators"][0].update(Properties={})),
+             pointer + "/Decorators/0/Properties"),
+            ("new id", changed(lambda children: children.append(dict(deepcopy(children[1]), Id=guid(6),
+                Decorators=[], Services=[], Editor={"Position": {"X": 900, "Y": 0}}))), "/Body/Tree/Root/Children/2"),
+        )
+        for name, desired, path in cases:
+            for phase in (RuntimePhase.VALIDATE, RuntimePhase.PREFLIGHT):
+                with self.subTest(name, phase=phase):
+                    run = self.missing_class_context(phase, deepcopy(context.state))
+                    operation = profile.validate if phase is RuntimePhase.VALIDATE else profile.preflight
+                    with self.assertRaises(AssetDocumentContractError) as raised:
+                        operation(desired, context=run)
+                    self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                                     ("BehaviorTree.UnrepresentedValue", path))
+        # A marked node cannot be created: no asset holds it yet.
+        created = deepcopy(actual); created["Action"] = "Create"
+        run = self.missing_class_context(RuntimePhase.VALIDATE, State(exists=False))
+        with self.assertRaises(AssetDocumentContractError) as raised:
+            profile.validate(created, context=run)
+        self.assertEqual((raised.exception.diagnostic.code, raised.exception.diagnostic.path),
+                         ("BehaviorTree.UnrepresentedValue", pointer))
+
     def test_provider_failure_ends_apply_before_install_or_blackboard(self):
         context = TypedContext(RuntimePhase.APPLY, State()); context.fail_id = "ai.behavior_tree.graph.author_scratch.v1"
         with self.assertRaises(AssetDocumentContractError) as raised:

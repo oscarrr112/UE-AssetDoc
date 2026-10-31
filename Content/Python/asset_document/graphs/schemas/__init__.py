@@ -46,6 +46,8 @@ class SchemaAdapter:
     # True when an apply records each node's document Id and authored action key with the node (graph.finalize.v1
     # node_meta) and extract writes them back: a round trip keeps the author's Ids and action spellings.
     keeps_authored_ids = False
+    # Nodes carry the user-set enabled state (Enable / Disable / Development Only) as "Enabled".
+    represents_enabled_state = False
 
     def normalize_action(self, key: str, *, self_class: str | None, path: str) -> str:
         return normalize_action(key, self_class=self_class, path=path)
@@ -78,8 +80,10 @@ class SchemaAdapter:
         """Name written to an extracted NodeDoc (must agree with ``live_name`` for round trips)."""
         return self.live_name(node)
 
-    def is_ignorable_live(self, node: LiveNode, graph: LiveGraph) -> bool:
-        """Live nodes that are neither extracted nor removed (e.g. editor ghost nodes)."""
+    def is_ghost_live(self, node: LiveNode) -> bool:
+        """One of the editor's disabled placeholder ("ghost") nodes, as a new Blueprint's default events are placed
+        (UEdGraphNode::IsAutomaticallyPlacedGhostNode): extracted with ``"Ghost": true``; linking it or placing its
+        event from the palette makes it a real node."""
         return node.extras.get("ghost") is True
 
     def matches_in_order(self, key: tuple) -> bool:
@@ -112,6 +116,24 @@ class SchemaAdapter:
         default each is reset to (an omitted setting is the default). None by default: omitted = keep."""
         return {}
 
+    def property_order(self, doc) -> tuple:
+        """The graph's nodes in the order their properties are set (document order by default)."""
+        return doc.nodes
+
+    def live_value_as_authored(self, action: str | None, container: str, key: str, have, wanted):
+        """The live value of a property in the form ``wanted`` states it, for the unchanged check (as is by default;
+        a schema drops parts a document may leave out to keep them)."""
+        return have
+
+    def property_items(self, action: str | None, properties) -> tuple:
+        """A node's (container, property_path, value) items in the order they are set (sorted by default)."""
+        return tuple(properties.items())
+
+    def owned_subgraph_follows_settings(self, node, live) -> bool:
+        """True when the settings this apply sets on ``node`` (its document form; ``live`` the matched live node or
+        None) give it another owned subgraph: the subgraph is then matched after the settings are set."""
+        return False
+
     def property_follows_links(self, action: str | None, container: str, key: str) -> bool:
         """A property the node only keeps once its links are made (set after the graph's links)."""
         return False
@@ -124,6 +146,12 @@ class SchemaAdapter:
         """Setting the property to ``value`` removes one of the node's pins (set after the graph's links, so the
         links the pin had are broken first)."""
         return False
+
+    def pins_shown_before_links(self, container: str, key: str, have, wanted):
+        """For a setting that lists pins to hide: when changing it from ``have`` to ``wanted`` hides pins, the value
+        to set before the graph's links (``have`` with only the pins it shows; ``wanted`` is set after the links,
+        once the hidden pins' links are broken). None when it hides none."""
+        return None
 
     def subgraph_name(self, graph: LiveGraph, owner: LiveNode | None) -> str:
         """Document name of a live subgraph (unique among its siblings)."""
@@ -205,6 +233,11 @@ class SchemaAdapter:
     def signature_flag_defaults(self, graph_role: str) -> dict | None:
         """Flag values of a freshly created graph of ``graph_role``; None when the schema has no flags."""
         return None
+
+    def signature_flags_kept(self, graph_role: str) -> frozenset:
+        """Flags of ``graph_role`` that a Signature leaving them out keeps as they are (the others reset to their
+        default)."""
+        return frozenset()
 
     def implicit_spawn_action(self, implicit_role: str, graph_role: str) -> str | None:
         return None
