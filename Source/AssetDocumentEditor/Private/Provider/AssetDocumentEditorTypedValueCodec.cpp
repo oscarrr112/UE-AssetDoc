@@ -5,6 +5,7 @@
 #include "AssetDocumentEditorFloatPrecision.h"
 #include "AssetDocumentEditorMarkerText.h"
 #include "AssetDocumentEditorPropertyValueCodec.h"
+#include "Utils/PropertySetterUtils.h"
 #include "Internationalization/Text.h"
 #include "Internationalization/TextPackageNamespaceUtil.h"
 #include "JsonObjectConverter.h"
@@ -1259,7 +1260,7 @@ bool CheckAssetDocumentEditorText(
 	if (Check.Mode == EAssetDocumentEditorCheckMode::Decode && FTextStringHelper::IsComplexText(*Value.StringValue))
 	{
 		FText Parsed;
-		if (FTextStringHelper::ReadFromBuffer(*Value.StringValue, Parsed) == nullptr)
+		if (!FPropertySetterUtils::DecodeTextString(Value.StringValue, Parsed))
 		{
 			return FailAssetDocumentEditorCheck(Check, Path, TEXT(
 				"the text macro (NSLOCTEXT/LOCTEXT/INVTEXT/LOCTABLE) could not be parsed."));
@@ -2268,7 +2269,13 @@ FString EncodeAssetDocumentEditorText(const FText& Text)
 	const FString Plain = Source != nullptr ? *Source : Text.ToString();
 	if (FTextStringHelper::IsComplexText(*Plain))
 	{
+		// A source string that reads as a text form: localized text keeps its NSLOCTEXT; a literal is written as
+		// INVTEXT so it does not read back as the table entry or text it spells.
 		FTextStringHelper::WriteToBuffer(Complex, Text);
+		if (Complex.Equals(Plain, ESearchCase::CaseSensitive))
+		{
+			Complex = FPropertySetterUtils::EncodeTextString(Text);
+		}
 		UE::AssetDocument::TextDisplays::Record(Complex, Text.ToString());
 		return Complex;
 	}
@@ -2282,13 +2289,9 @@ bool DecodeAssetDocumentEditorText(const FString& String, FText& OutText)
 		OutText = FText::GetEmpty();
 		return true;
 	}
-	if (FTextStringHelper::IsComplexText(*String))
-	{
-		return FTextStringHelper::ReadFromBuffer(*String, OutText) != nullptr;
-	}
-	// A plain string is localizable source text, as typed into the Details panel.
-	OutText = FText::FromString(String);
-	return true;
+	// A text form must parse (a malformed one is not kept as a literal); a plain string is localizable source
+	// text, as typed into the Details panel.
+	return FPropertySetterUtils::DecodeTextString(String, OutText);
 }
 
 // ---------------------------------------------------------------------------
