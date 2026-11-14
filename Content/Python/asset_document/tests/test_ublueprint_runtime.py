@@ -290,6 +290,17 @@ class DiffTests(unittest.TestCase):
         self.assertFalse(members.values_equal("((X=1.0,Y=2.0),(X=3.0,Y=4.0))", "((X=3.0,Y=4.0),(X=1.0,Y=2.0))"))
         self.assertIsNone(members.map_text_entries('("a, b")'))
 
+    def test_a_text_macro_compares_without_argument_whitespace(self):
+        # A class default authored LOCTABLE("T","K") reads back in the engine's spelling LOCTABLE("T", "K").
+        self.assertTrue(members.values_equal('LOCTABLE("/Game/ST.ST","Key")', 'LOCTABLE("/Game/ST.ST", "Key")'))
+        self.assertTrue(members.values_equal('NSLOCTEXT("Ns","Key","Hi")', 'NSLOCTEXT("Ns", "Key", "Hi")'))
+        # Whitespace inside an argument is part of the text; another key or a literal is a change.
+        self.assertFalse(members.values_equal('INVTEXT("a b")', 'INVTEXT("ab")'))
+        self.assertFalse(members.values_equal('LOCTABLE("/Game/ST.ST","Key")', 'LOCTABLE("/Game/ST.ST", "Other")'))
+        self.assertFalse(members.values_equal('LOCTABLE("/Game/ST.ST","Key")',
+                                              'INVTEXT("LOCTABLE(\\"/Game/ST.ST\\",\\"Key\\")")'))
+        self.assertFalse(members.values_equal("plain words", "plainwords"))
+
     def test_a_struct_named_by_text_compares_by_its_name(self):
         # An FKey written "Spacbar" against the read-back {"KeyName": "SpaceBar"} is a change (it was taken as
         # equal, so Apply skipped the write and its check); case alone is not (FName).

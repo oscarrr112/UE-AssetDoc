@@ -474,6 +474,33 @@ def _instances_equal(authored: dict, observed: dict, defaults: dict) -> bool:
     return True
 
 
+_TEXT_MACRO = re.compile(r"(NSLOCTEXT|LOCTEXT|INVTEXT|LOCTABLE|LOCGEN_[A-Z]+)\(")
+
+
+def text_macro_canonical(value: str) -> str | None:
+    """An FText macro string (NSLOCTEXT / LOCTEXT / INVTEXT / LOCTABLE / LOCGEN_*) without the whitespace outside
+    its quoted arguments; None for any other string."""
+    if not _TEXT_MACRO.match(value):
+        return None
+    out = []
+    quoted = escaped = False
+    for char in value:
+        if quoted:
+            out.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+            out.append(char)
+        elif not char.isspace():
+            out.append(char)
+    return "".join(out)
+
+
 def values_equal(authored: object, observed: object, defaults: dict | None = None) -> bool:
     """Authored value matches the observed typed value (authored keys only for objects). ``defaults`` (class
     path -> default values, from blueprint.member.query.v1 defaults_of) lets an instanced value list defaults."""
@@ -490,6 +517,11 @@ def values_equal(authored: object, observed: object, defaults: dict | None = Non
             return False
     if type(authored) is str and type(observed) is str:
         if authored == observed or object_path(authored) == object_path(observed):
+            return True
+        # A text macro reads back in the engine's spelling (LOCTABLE("T", "K")): whitespace between its
+        # arguments is not part of the text.
+        macro = text_macro_canonical(authored)
+        if macro is not None and macro == text_macro_canonical(observed):
             return True
         # A map's entries in another order are the same map (FMapProperty::Identical). Compiling a
         # Blueprint reorders a map whose struct default has entries (the class default object is
