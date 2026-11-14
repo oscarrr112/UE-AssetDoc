@@ -21,6 +21,7 @@ public class AssetDocumentGraph : ModuleRules
 			// Open-editor apply behaviour tests (*OpenEditorTests.cpp) read the open editors.
 			"PropertyEditor", "SubobjectEditor",
 			"AssetDocumentEditor",
+			"AssetDocumentServer",
 			"UnrealEd",
 			"BlueprintGraph",
 			"Kismet",

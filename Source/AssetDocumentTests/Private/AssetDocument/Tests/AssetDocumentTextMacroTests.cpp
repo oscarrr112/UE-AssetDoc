@@ -2,6 +2,7 @@
 
 #include "AssetDocumentGenericInspectContractTestTypes.h"
 
+#include "AssetDocumentGraphPropertyCodec.h"
 #include "Dom/JsonValue.h"
 #include "Internationalization/StringTableRegistry.h"
 #include "Misc/AutomationTest.h"
@@ -34,6 +35,21 @@ FTextProperty* FindDisplayTextProperty()
 bool SetDisplayText(UAssetDocumentGenericInspectContractTestDataAsset* Asset, const FString& Value)
 {
 	return FPropertySetterUtils::SetPropertyFromJson(Asset, FindDisplayTextProperty(), MakeShared<FJsonValueString>(Value));
+}
+
+// Blueprint and Widget Blueprint class defaults go through the graph property codec.
+bool SetDisplayTextThroughGraphCodec(UAssetDocumentGenericInspectContractTestDataAsset* Asset, const FString& Value)
+{
+	FTextProperty* Property = FindDisplayTextProperty();
+	FString Error;
+	return UE::AssetDocument::Graph::DecodePropertyValue(
+		*Property, Property->ContainerPtrToValuePtr<void>(Asset), UE::AssetDocument::Graph::MakeString(Value), Error);
+}
+
+FString ExtractDisplayTextThroughGraphCodec(UAssetDocumentGenericInspectContractTestDataAsset* Asset)
+{
+	FTextProperty* Property = FindDisplayTextProperty();
+	return UE::AssetDocument::Graph::EncodePropertyValue(*Property, Property->ContainerPtrToValuePtr<void>(Asset)).StringValue;
 }
 
 FString ExtractDisplayText(UAssetDocumentGenericInspectContractTestDataAsset* Asset)
@@ -101,6 +117,35 @@ bool FAssetDocumentTextMacroPropertyTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Literal re-applies"), SetDisplayText(Asset, ExtractedLiteral));
 	TestFalse(TEXT("Re-applied literal is not a table reference"), Asset->DisplayText.IsFromStringTable());
 	TestEqual(TEXT("Re-applied literal keeps its string"), Asset->DisplayText.ToString(), TableMacro);
+	return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAssetDocumentTextMacroGraphCodecTest,
+	"UEAssetDoc.Generic.Property.TextMacrosThroughGraphCodec",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAssetDocumentTextMacroGraphCodecTest::RunTest(const FString& Parameters)
+{
+	FTextMacroTestTable Table;
+	UAssetDocumentGenericInspectContractTestDataAsset* Asset = NewObject<UAssetDocumentGenericInspectContractTestDataAsset>(GetTransientPackage());
+	if (!TestNotNull(TEXT("DisplayText property"), FindDisplayTextProperty()))
+	{
+		return false;
+	}
+
+	const FString TableMacro = FString::Printf(TEXT("LOCTABLE(\"%s\",\"Greeting\")"), TextMacroTestTableId);
+	TestTrue(TEXT("LOCTABLE applies"), SetDisplayTextThroughGraphCodec(Asset, TableMacro));
+	TestTrue(TEXT("LOCTABLE is a table reference"), Asset->DisplayText.IsFromStringTable());
+	TestTrue(TEXT("LOCTABLE extracts as LOCTABLE"), ExtractDisplayTextThroughGraphCodec(Asset).StartsWith(TEXT("LOCTABLE(")));
+
+	TestTrue(TEXT("Plain applies"), SetDisplayTextThroughGraphCodec(Asset, TEXT("Just words")));
+	TestEqual(TEXT("Plain extracts as itself"), ExtractDisplayTextThroughGraphCodec(Asset), FString(TEXT("Just words")));
+	TestFalse(TEXT("Broken macro is rejected"), SetDisplayTextThroughGraphCodec(Asset, TEXT("LOCTABLE(\"Missing")));
+
+	// What a pre-fix apply stored: a literal that reads as a macro. It must not extract equal to the macro,
+	// or a diff would see nothing to change.
+	Asset->DisplayText = FText::FromString(TableMacro);
+	TestNotEqual(TEXT("Macro-looking literal does not extract as the macro"), ExtractDisplayTextThroughGraphCodec(Asset), TableMacro);
 	return true;
 }
 #endif

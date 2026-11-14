@@ -6,6 +6,7 @@
 #include "UObject/EnumProperty.h"
 #include "UObject/SoftObjectPath.h"
 #include "UObject/TextProperty.h"
+#include "Utils/PropertySetterUtils.h"
 #include "UObject/UnrealType.h"
 
 namespace UE::AssetDocument::Graph
@@ -139,7 +140,7 @@ FValue EncodePropertyValue(const FProperty& Property, const void* ValuePtr)
 	}
 	if (const FTextProperty* Text = CastField<FTextProperty>(&Property))
 	{
-		return MakeString(Text->GetPropertyValue(ValuePtr).ToString());
+		return MakeString(FPropertySetterUtils::EncodeTextString(Text->GetPropertyValue(ValuePtr)));
 	}
 	if (const FSoftObjectProperty* Soft = CastField<FSoftObjectProperty>(&Property))
 	{
@@ -335,7 +336,14 @@ bool DecodePropertyValue(const FProperty& Property, void* ValuePtr, const FValue
 		}
 		if (const FTextProperty* Text = CastField<FTextProperty>(&Property))
 		{
-			Text->SetPropertyValue(ValuePtr, FText::FromString(Value.StringValue));
+			FText Decoded;
+			if (!FPropertySetterUtils::DecodeTextString(Value.StringValue, Decoded))
+			{
+				OutError = FString::Printf(TEXT("'%s' is not a valid text macro (NSLOCTEXT/LOCTEXT/INVTEXT/LOCTABLE) for %s."),
+					*Value.StringValue, *Property.GetName());
+				return false;
+			}
+			Text->SetPropertyValue(ValuePtr, Decoded);
 			return true;
 		}
 	}

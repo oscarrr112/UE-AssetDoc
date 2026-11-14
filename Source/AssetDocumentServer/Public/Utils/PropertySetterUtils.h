@@ -201,6 +201,20 @@ public:
 	static TSharedPtr<FJsonValue> ExtractPropertyToJson(FProperty* Property, const void* ValuePtr);
 
 	/**
+	 * FText as a document string. A text macro (LOCTABLE / NSLOCTEXT / LOCTEXT / INVTEXT ...) is parsed into that
+	 * text, so a string table entry stays a table reference; a macro that does not parse fails; any other string is
+	 * plain source text.
+	 */
+	static bool DecodeTextString(const FString& String, FText& OutText);
+
+	/**
+	 * Inverse of DecodeTextString: table entries and invariant texts are written as their macro, other texts as their
+	 * source string (as typed into the Details panel), except that a source string which would read as a macro is
+	 * written as INVTEXT so re-applying it keeps the literal.
+	 */
+	static FString EncodeTextString(const FText& Text);
+
+	/**
 	 * Extract all editable properties from a UObject to JSON
 	 * @param Object - The UObject to extract properties from
 	 * @param bEditableOnly - If true, only extract properties with CPF_Edit flag

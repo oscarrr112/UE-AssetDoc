@@ -1,6 +1,7 @@
 // Copyright 2026 Oscar Peng. Licensed under the Apache License, Version 2.0.
 
 #include "Provider/AssetDocumentEditorTypedValueCodec.h"
+#include "Utils/PropertySetterUtils.h"
 #include "AssetDocumentEditorFloatPrecision.h"
 #include "AssetDocumentEditorPropertyValueCodec.h"
 #include "Internationalization/Text.h"
@@ -1138,7 +1139,7 @@ bool CheckAssetDocumentEditorText(
 	if (Check.Mode == EAssetDocumentEditorCheckMode::Decode && FTextStringHelper::IsComplexText(*Value.StringValue))
 	{
 		FText Parsed;
-		if (FTextStringHelper::ReadFromBuffer(*Value.StringValue, Parsed) == nullptr)
+		if (!FPropertySetterUtils::DecodeTextString(Value.StringValue, Parsed))
 		{
 			return FailAssetDocumentEditorCheck(Check, Path, TEXT(
 				"the text macro (NSLOCTEXT/LOCTEXT/INVTEXT/LOCTABLE) could not be parsed."));
@@ -1527,24 +1528,7 @@ bool IsAssetDocumentEditorValueCompatible(
 
 FString EncodeAssetDocumentEditorText(const FText& Text)
 {
-	if (Text.IsEmpty())
-	{
-		return FString();
-	}
-	FString Complex;
-	if (Text.IsFromStringTable() || Text.IsCultureInvariant())
-	{
-		FTextStringHelper::WriteToBuffer(Complex, Text);
-		return Complex;
-	}
-	const FString* Source = FTextInspector::GetSourceString(Text);
-	const FString Plain = Source != nullptr ? *Source : Text.ToString();
-	if (FTextStringHelper::IsComplexText(*Plain))
-	{
-		FTextStringHelper::WriteToBuffer(Complex, Text);
-		return Complex;
-	}
-	return Plain;
+	return FPropertySetterUtils::EncodeTextString(Text);
 }
 
 bool DecodeAssetDocumentEditorText(const FString& String, FText& OutText)
@@ -1554,13 +1538,8 @@ bool DecodeAssetDocumentEditorText(const FString& String, FText& OutText)
 		OutText = FText::GetEmpty();
 		return true;
 	}
-	if (FTextStringHelper::IsComplexText(*String))
-	{
-		return FTextStringHelper::ReadFromBuffer(*String, OutText) != nullptr;
-	}
 	// A plain string is localizable source text, as typed into the Details panel.
-	OutText = FText::FromString(String);
-	return true;
+	return FPropertySetterUtils::DecodeTextString(String, OutText);
 }
 
 // ---------------------------------------------------------------------------
