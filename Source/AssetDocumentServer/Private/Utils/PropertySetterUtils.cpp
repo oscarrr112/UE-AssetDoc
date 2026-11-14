@@ -25,6 +25,59 @@
 
 namespace
 {
+// Text values are strings. A text macro (LOCTABLE / NSLOCTEXT / LOCTEXT / INVTEXT ...) is parsed into
+// that text, so a string table entry stays a table reference; a macro that does not parse is an error
+// rather than a literal; any other string is plain source text.
+bool DecodeTextFromJsonString(const FString& String, FText& OutText)
+{
+	if (!FTextStringHelper::IsComplexText(*String))
+	{
+		OutText = FText::FromString(String);
+		return true;
+	}
+	// Requiring quotes stops the parser from falling back to the raw string when the macro is malformed.
+	FText Parsed;
+	const TCHAR* End = FTextStringHelper::ReadFromBuffer(*String, Parsed, nullptr, nullptr, true);
+	if (End == nullptr)
+	{
+		return false;
+	}
+	while (FChar::IsWhitespace(*End))
+	{
+		++End;
+	}
+	if (*End != 0)
+	{
+		return false;
+	}
+	OutText = Parsed;
+	return true;
+}
+
+// Inverse of DecodeTextFromJsonString: table entries and invariant texts come back as their macro, other
+// texts as their source string (as typed into the Details panel), except that a source string which would
+// read as a macro comes back as INVTEXT so re-applying it keeps the literal.
+FString EncodeTextToJsonString(const FText& Text)
+{
+	if (Text.IsEmpty())
+	{
+		return FString();
+	}
+	FString Written;
+	if (Text.IsFromStringTable() || Text.IsCultureInvariant())
+	{
+		FTextStringHelper::WriteToBuffer(Written, Text);
+		return Written;
+	}
+	const FString* Source = FTextInspector::GetSourceString(Text);
+	const FString Plain = Source != nullptr ? *Source : Text.ToString();
+	if (!FTextStringHelper::IsComplexText(*Plain))
+	{
+		return Plain;
+	}
+	return FString(TEXT("INVTEXT(\"")) + Plain.ReplaceCharWithEscapedChar() + TEXT("\")");
+}
+
 FString MakeChildPropertyPath(const FString& BasePath, const FString& ChildName)
 {
 	return BasePath.IsEmpty() ? ChildName : FString::Printf(TEXT("%s.%s"), *BasePath, *ChildName);
@@ -545,8 +598,12 @@ bool FPropertySetterUtils::SetValueFromTypedJson(void* ValuePtr, const FParsedTy
 		FString Value;
 		if (JsonValue->TryGetString(Value))
 		{
-			*static_cast<FText*>(ValuePtr) = FText::FromString(Value);
-			return true;
+			FText Text;
+			if (DecodeTextFromJsonString(Value, Text))
+			{
+				*static_cast<FText*>(ValuePtr) = Text;
+				return true;
+			}
 		}
 	}
 	// F-prefixed struct types (FVector, FLinearColor, FTransform, etc.)
@@ -1006,7 +1063,12 @@ bool FPropertySetterUtils::SetPropertyValueFromJson(FProperty* Property, void* V
 		FString Value;
 		if (JsonValue->TryGetString(Value))
 		{
-			TextProp->SetPropertyValue(ValuePtr, FText::FromString(Value));
+			FText Text;
+			if (!DecodeTextFromJsonString(Value, Text))
+			{
+				return false;
+			}
+			TextProp->SetPropertyValue(ValuePtr, Text);
 			return true;
 		}
 		return false;
@@ -2484,7 +2546,7 @@ TSharedPtr<FJsonValue> FPropertySetterUtils::ExtractPropertyToJson(FProperty* Pr
 	// Text
 	if (FTextProperty* TextProp = CastField<FTextProperty>(Property))
 	{
-		return MakeShared<FJsonValueString>(TextProp->GetPropertyValue(ValuePtr).ToString());
+		return MakeShared<FJsonValueString>(EncodeTextToJsonString(TextProp->GetPropertyValue(ValuePtr)));
 	}
 
 	// Object reference
