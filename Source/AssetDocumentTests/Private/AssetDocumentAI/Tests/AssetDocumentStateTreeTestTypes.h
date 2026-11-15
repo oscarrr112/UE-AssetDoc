@@ -12,6 +12,8 @@
 #include "CoreMinimal.h"
 #include "StateTreeDelegate.h"
 #include "StateTreeEvaluatorBase.h"
+#include "StateTreePropertyRef.h"
+#include "StateTreeTaskBase.h"
 #include "UObject/Object.h"
 
 #include "AssetDocumentStateTreeTestTypes.generated.h"
@@ -56,6 +58,30 @@ struct FAssetDocumentStateTreeTestEvaluator : public FStateTreeEvaluatorCommonBa
 
 	UPROPERTY(EditAnywhere, Category = "Parameter")
 	bool bVerbose = false;
+};
+
+// A task whose instance data holds property references: a native one typed by its RefType metadata and a
+// Blueprint one typed by its RefType value.
+USTRUCT()
+struct FAssetDocumentStateTreeTestRefTaskInstanceData
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, Category = "Parameter", meta = (RefType = "int32"))
+	FStateTreePropertyRef CountRef;
+
+	UPROPERTY(EditAnywhere, Category = "Parameter")
+	FStateTreeBlueprintPropertyRef Tally;
+};
+
+USTRUCT(meta = (Hidden, DisplayName = "AssetDocument Test Ref Task", Category = "AssetDocument Tests"))
+struct FAssetDocumentStateTreeTestRefTask : public FStateTreeTaskCommonBase
+{
+	GENERATED_BODY()
+
+	using FInstanceDataType = FAssetDocumentStateTreeTestRefTaskInstanceData;
+
+	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
 };
 
 // An evaluator with a delegate dispatcher an OnDelegate transition can listen to.

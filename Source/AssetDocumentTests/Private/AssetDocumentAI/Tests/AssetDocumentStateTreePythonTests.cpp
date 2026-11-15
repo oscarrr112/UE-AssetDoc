@@ -94,8 +94,16 @@ void ReleaseUndoHistory()
 // Hidden types as the picker does. The tests that author it lift Hidden for their own duration only.
 struct FScopedTestTypesVisible
 {
-	FScopedTestTypesVisible() { FAssetDocumentStateTreeTestEvaluator::StaticStruct()->RemoveMetaData(TEXT("Hidden")); }
-	~FScopedTestTypesVisible() { FAssetDocumentStateTreeTestEvaluator::StaticStruct()->SetMetaData(TEXT("Hidden"), TEXT("")); }
+	FScopedTestTypesVisible()
+	{
+		FAssetDocumentStateTreeTestEvaluator::StaticStruct()->RemoveMetaData(TEXT("Hidden"));
+		FAssetDocumentStateTreeTestRefTask::StaticStruct()->RemoveMetaData(TEXT("Hidden"));
+	}
+	~FScopedTestTypesVisible()
+	{
+		FAssetDocumentStateTreeTestEvaluator::StaticStruct()->SetMetaData(TEXT("Hidden"), TEXT(""));
+		FAssetDocumentStateTreeTestRefTask::StaticStruct()->SetMetaData(TEXT("Hidden"), TEXT(""));
+	}
 	FScopedTestTypesVisible(const FScopedTestTypesVisible&) = delete;
 	FScopedTestTypesVisible& operator=(const FScopedTestTypesVisible&) = delete;
 };
@@ -1086,6 +1094,70 @@ bool FAssetDocumentStateTreeOmittedFieldsTest::RunTest(const FString& Parameters
 	TestTrue(TEXT("the listed duration is kept"), Text.Contains(TEXT("Duration")));
 	TestNoDiff(*this, Omitted, TEXT("omitted"));
 	TestNoOpReapply(*this, Target, TEXT("omitted"));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAssetDocumentStateTreePropertyRefTest, "UEAssetDoc.StateTree.PropertyRefs",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAssetDocumentStateTreePropertyRefTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	using namespace AssetDocumentStateTreePythonTests;
+	const FScopedTestTypesVisible Visible;
+	const FTarget Target(TEXT("ST_PropertyRefs"));
+	ON_SCOPE_EXIT
+	{
+		Target.Cleanup();
+	};
+	// A reference binds as in the editor: to a parameter or a node output of its type. The Blueprint reference
+	// takes its type from its RefType instance value, set in the same document.
+	auto Body = [](const TCHAR* Bindings)
+	{
+		return FString::Printf(TEXT(R"json(
+"Schema":{"Class":"/Script/GameplayStateTreeModule.StateTreeComponentSchema"},
+"Parameters":[{"Name":"Count","Type":"int","Value":3},{"Name":"Label","Type":"string","Value":"hello"}],
+"Evaluators":[{"Type":"/Script/AssetDocumentTests.AssetDocumentStateTreeTestEvaluator","Name":"Sensor"}],
+"States":[{"Name":"Root","Tasks":[{"Type":"/Script/AssetDocumentTests.AssetDocumentStateTreeTestRefTask","Name":"Ref",
+	"Instance":{"Tally":{"RefType":"Int32"}},"Bindings":%s}]}])json"), Bindings);
+	};
+	const FString Bound = Document(Target, TEXT("Create"), Body(TEXT(R"json({"CountRef":"Parameters:Count","Tally":"Evaluators/Sensor:Count"})json")));
+	const FAssetDocumentResult Created = Apply(*this, Target, Bound, TEXT("bound"));
+	if (!TestTrue(TEXT("references to a parameter and to an evaluator output apply and compile"), Created.IsSuccess()))
+	{
+		return false;
+	}
+	const TSharedPtr<FJsonObject> Extracted = Extract(*this, Target, TEXT("bound"));
+	const FString Text = Extracted.IsValid() ? Serialize(Extracted) : FString();
+	TestTrue(TEXT("the native reference extracts its binding"), Text.Contains(TEXT("\"CountRef\":\"Parameters:Count\"")));
+	TestTrue(TEXT("the Blueprint reference extracts its binding"), Text.Contains(TEXT("\"Tally\":\"Evaluators/Sensor:Count\"")));
+	TestTrue(TEXT("the Blueprint reference keeps its type"), Text.Contains(TEXT("Int32")));
+	TestNoDiff(*this, Bound, TEXT("bound"));
+	TestNoOpReapply(*this, Target, TEXT("bound"));
+	const FString BeforeInvalid = Serialize(Extract(*this, Target, TEXT("before invalid")));
+
+	struct FInvalid
+	{
+		const TCHAR* Stage;
+		const TCHAR* Bindings;
+		const TCHAR* Code;
+		const TCHAR* Path;
+	};
+	const FInvalid Invalid[] = {
+		{TEXT("OtherType"), TEXT(R"json({"CountRef":"Parameters:Count","Tally":"Parameters:Label"})json"),
+			TEXT("StateTree.BindingTypeMismatch"), TEXT("/Body/States/0/Tasks/0/Bindings/Tally")},
+		{TEXT("NativeOtherType"), TEXT(R"json({"CountRef":"Evaluators/Sensor:Distance","Tally":"Parameters:Count"})json"),
+			TEXT("StateTree.BindingTypeMismatch"), TEXT("/Body/States/0/Tasks/0/Bindings/CountRef")},
+		{TEXT("NodeValueNotOutput"), TEXT(R"json({"CountRef":"Parameters:Count","Tally":"Evaluators/Sensor:Threshold"})json"),
+			TEXT("StateTree.BindingSourceNotAccessible"), TEXT("/Body/States/0/Tasks/0/Bindings/Tally")},
+	};
+	for (const FInvalid& Case : Invalid)
+	{
+		const FString Json = Document(Target, TEXT("Update"), Body(Case.Bindings));
+		TestFailsWith(*this, Validate(*this, Json, Case.Stage), Case.Code, Case.Path, *FString::Printf(TEXT("%s (validate)"), Case.Stage));
+		TestFailsWith(*this, Apply(*this, Target, Json, Case.Stage), Case.Code, Case.Path, Case.Stage);
+	}
+	TestTrue(TEXT("the failed applies leave the bound tree"), ExtractEquals(*this, Target, BeforeInvalid, TEXT("after invalid")));
 	return !HasAnyErrors();
 }
 

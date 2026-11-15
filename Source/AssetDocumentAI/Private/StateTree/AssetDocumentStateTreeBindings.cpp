@@ -4,7 +4,12 @@
 // StateTree property bindings: what the binding menu of a property offers and writes. A source is
 // accepted only when the editor would list it for the target (UStateTreeEditorData::GetBindableStructs,
 // the structs updated before the target in the execution path) and its property is compatible
-// (UE::PropertyBinding::GetPropertyCompatibility); the write is FPropertyBindingBindingCollection::
+// (UE::PropertyBinding::GetPropertyCompatibility). A property reference target (FStateTreePropertyRef,
+// FStateTreeBlueprintPropertyRef) follows the editor's own rules for references instead
+// (FStateTreeBindingExtension, the binding compiler): the source must be accessible to a reference
+// (UE::StateTree::PropertyRefHelpers::IsPropertyAccessibleForPropertyRef: parameters, events, and outputs or references of
+// tasks, global tasks and evaluators) and of the referenced type (IsPropertyRefCompatibleWithProperty; a Blueprint
+// reference's type is its RefType instance value). The write is FPropertyBindingBindingCollection::
 // AddBinding or FStateTreeEditorPropertyBindings::AddFunctionBinding (property functions, whose own
 // inputs are bound the same way). Output bindings are preserved and not authored.
 
@@ -19,6 +24,7 @@
 #include "StateTreeEditorPropertyBindings.h"
 #include "StateTreePropertyBindings.h"
 #include "StateTreePropertyFunctionBase.h"
+#include "StateTreePropertyRefHelpers.h"
 #include "StateTreeSchema.h"
 #include "StructUtils/UserDefinedStruct.h"
 
@@ -95,6 +101,9 @@ struct FResolvedPath
 	FPropertyBindingPath Path;
 	const FProperty* Leaf = nullptr;
 	const UStruct* WholeStruct = nullptr;
+	// The leaf's value, when the struct has one (context data does not); a reference target's value says its type.
+	const void* LeafAddress = nullptr;
+	TArray<FPropertyBindingPathIndirection> Indirections;
 };
 
 // DefaultStruct: the struct of a path written without "struct" (the inputs of a property function,
@@ -153,6 +162,8 @@ bool ResolvePath(FReader& Reader, FStringView Key, const UStateTreeEditorData& E
 			*PathText, *GetNameSafe(View.GetStruct()), *Error, *FString::Join(Names, TEXT(", "))), TEXT("path"));
 	}
 	Out.Leaf = Indirections.Last().GetProperty();
+	Out.LeafAddress = View.IsValid() ? Indirections.Last().GetPropertyAddress() : nullptr;
+	Out.Indirections = MoveTemp(Indirections);
 	return Out.Leaf != nullptr ? true : PathReader.Fail(TEXT("StateTree.InvalidBinding"), TEXT("The path names no property."), TEXT("path"));
 }
 
@@ -166,8 +177,45 @@ bool IsAccessible(const UStateTreeEditorData& EditorData, const FGuid& TargetStr
 	});
 }
 
-bool CheckCompatible(FReader& Item, const FResolvedPath& Source, const FResolvedPath& Target)
+// A property reference target: what FStateTreeBindingExtension offers and the binding compiler accepts.
+bool CheckPropertyRef(FReader& Item, const UStateTreeEditorData& EditorData, const FResolvedPath& Source, const FResolvedPath& Target)
 {
+	using namespace UE::StateTree::PropertyRefHelpers;
+	if (Source.WholeStruct != nullptr || Source.Leaf == nullptr)
+	{
+		return Item.Fail(TEXT("StateTree.BindingTypeMismatch"), FString::Printf(TEXT("'%s' is a property reference: it refers to one "
+			"property, not to a whole struct or object."), *BindingPathText(Target.Path)), TEXT("source"));
+	}
+	TInstancedStruct<FPropertyBindingBindableStructDescriptor> Descriptor;
+	const FStateTreeBindableStructDesc* SourceDesc = EditorData.GetBindableStructByID(Source.Path.GetStructID(), Descriptor)
+		? Descriptor.GetPtr<FStateTreeBindableStructDesc>() : nullptr;
+	if (SourceDesc == nullptr || !IsPropertyAccessibleForPropertyRef(Source.Indirections, *SourceDesc))
+	{
+		return Item.Fail(TEXT("StateTree.BindingSourceNotAccessible"), FString::Printf(TEXT("'%s' is a property reference: it can refer "
+			"to tree and state parameters, events, and the outputs (or references) of tasks, global tasks and evaluators; not to "
+			"context data, conditions, considerations, property functions or other node values."), *BindingPathText(Target.Path)),
+			TEXT("source"));
+	}
+	if (Target.LeafAddress == nullptr)
+	{
+		return Item.Fail(TEXT("StateTree.InvalidBinding"), FString::Printf(TEXT("'%s' has no value to read its referenced type from."),
+			*BindingPathText(Target.Path)), TEXT("target"));
+	}
+	if (!IsPropertyRefCompatibleWithProperty(*Target.Leaf, *Source.Leaf, Target.LeafAddress, Source.LeafAddress))
+	{
+		return Item.Fail(TEXT("StateTree.BindingTypeMismatch"), FString::Printf(TEXT("Property reference '%s' cannot refer to %s '%s': "
+			"the referenced type differs (a Blueprint node's reference takes its type from its RefType instance value)."),
+			*BindingPathText(Target.Path), *Source.Leaf->GetCPPType(), *BindingPathText(Source.Path)), TEXT("source"));
+	}
+	return true;
+}
+
+bool CheckCompatible(FReader& Item, const UStateTreeEditorData& EditorData, const FResolvedPath& Source, const FResolvedPath& Target)
+{
+	if (Target.Leaf != nullptr && UE::StateTree::PropertyRefHelpers::IsPropertyRef(*Target.Leaf))
+	{
+		return CheckPropertyRef(Item, EditorData, Source, Target);
+	}
 	if (Source.WholeStruct != nullptr)
 	{
 		// FCachedBindingData::ArePropertyAndContextStructCompatible: the same struct, or an object
@@ -343,7 +391,7 @@ bool ApplyBindings(FCall& Call, FReader& ListReader, const FValue& List, UStateT
 				"a node can bind to the context, the tree parameters, evaluators, global tasks and the parameters, events and tasks of "
 				"the states that are active before it (parents and earlier tasks)."), TEXT("source"));
 		}
-		if (!CheckCompatible(Item, Entry.Source, Entry.Target))
+		if (!CheckCompatible(Item, EditorData, Entry.Source, Entry.Target))
 		{
 			return false;
 		}

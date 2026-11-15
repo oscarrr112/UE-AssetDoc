@@ -77,6 +77,7 @@
 #include "UObject/EnumProperty.h"
 #include "UObject/UObjectIterator.h"
 #include "UObject/UnrealType.h"
+#include "StateTreePropertyRef.h"
 
 namespace UE::AssetDocument::Graph::StateTree
 {
@@ -488,6 +489,109 @@ void EditMember(UObject& Owner, FName MemberName, TFunctionRef<void()> Write)
 	Owner.PostEditChangeChainProperty(ChainEvent);
 }
 
+// Property references. A native one (FStateTreePropertyRef) takes its type from metadata: it is bound, never set by
+// value. A Blueprint one (FStateTreeBlueprintPropertyRef) has its type as editable fields, the ones its Details row
+// shows (RefType, bIsRefToArray, bIsOptional, TypeObject); the compiler's RefAccessIndex is not a document value.
+bool IsNativePropertyRef(const FProperty& Property)
+{
+	const FStructProperty* Struct = CastField<FStructProperty>(&Property);
+	return Struct != nullptr && Struct->Struct != nullptr && Struct->Struct->IsChildOf(FStateTreePropertyRef::StaticStruct())
+		&& !Struct->Struct->IsChildOf(FStateTreeBlueprintPropertyRef::StaticStruct());
+}
+
+bool IsBlueprintPropertyRef(const FProperty& Property)
+{
+	const FStructProperty* Struct = CastField<FStructProperty>(&Property);
+	return Struct != nullptr && Struct->Struct != nullptr && Struct->Struct->IsChildOf(FStateTreeBlueprintPropertyRef::StaticStruct());
+}
+
+// RefType always, the other fields when they differ from a new reference's.
+bool EncodeBlueprintPropertyRef(const void* RefMemory, FValue& Out)
+{
+	const FStateTreeBlueprintPropertyRef Default;
+	FObjectBuilder Fields;
+	for (TFieldIterator<FProperty> It(FStateTreeBlueprintPropertyRef::StaticStruct()); It; ++It)
+	{
+		if (!It->HasAnyPropertyFlags(CPF_Edit))
+		{
+			continue;
+		}
+		if (It->GetFName() != TEXT("RefType") && It->Identical_InContainer(RefMemory, &Default, 0, PPF_None))
+		{
+			continue;
+		}
+		FValue Value;
+		FString Code;
+		if (!EditorPropertyValueCodec::Encode(**It, It->ContainerPtrToValuePtr<void>(RefMemory), Value, Code))
+		{
+			return false;
+		}
+		Fields.Add(It->GetAuthoredName(), MoveTemp(Value));
+	}
+	Out = Fields.Build();
+	return true;
+}
+
+// The listed fields on a new reference: an omitted field is a new reference's.
+bool DecodeBlueprintPropertyRef(FReader& Reader, const FString& Name, const FValue& Value, void* RefMemory, UObject* Owner)
+{
+	if (Value.Kind != EAssetDocumentRuntimeValueKind::Object)
+	{
+		return Reader.Fail(TEXT("StateTree.InvalidValue"), FString::Printf(TEXT("'%s' is a property reference: its value is an object "
+			"with its type, e.g. {\"RefType\": \"Int32\"}."), *Name), Name);
+	}
+	UScriptStruct* RefStruct = FStateTreeBlueprintPropertyRef::StaticStruct();
+	const FStateTreeBlueprintPropertyRef Default;
+	RefStruct->CopyScriptStruct(RefMemory, &Default);
+	FReader Fields = Reader.Child(Name, Value);
+	for (int32 Index = 0; Index < Value.ObjectKeys.Num(); ++Index)
+	{
+		const FString& Field = Value.ObjectKeys[Index];
+		FProperty* Property = nullptr;
+		TArray<FString> Names;
+		for (TFieldIterator<FProperty> It(RefStruct); It; ++It)
+		{
+			if (It->HasAnyPropertyFlags(CPF_Edit))
+			{
+				Names.Add(It->GetAuthoredName());
+				if (FStringView(It->GetAuthoredName()).Equals(Field, ESearchCase::CaseSensitive))
+				{
+					Property = *It;
+				}
+			}
+		}
+		if (Property == nullptr)
+		{
+			return Fields.Fail(TEXT("StateTree.UnknownProperty"), FString::Printf(TEXT("A property reference has no field '%s'. Fields: %s."),
+				*Field, *FString::Join(Names, TEXT(", "))), Field);
+		}
+		FString Code;
+		if (!EditorPropertyValueCodec::Decode(*Property, Value.Elements[Index], Property->ContainerPtrToValuePtr<void>(RefMemory), Code, Owner))
+		{
+			return Fields.Fail(TEXT("StateTree.InvalidValue"), FString::Printf(TEXT("'%s' (%s) does not accept this value (%s)."),
+				*Field, *Property->GetCPPType(), *Code), Field);
+		}
+	}
+	return true;
+}
+
+// One authored value in its document form.
+bool EncodeAuthored(FProperty& Property, const void* ValueMemory, FValue& Out)
+{
+	if (IsBlueprintPropertyRef(Property))
+	{
+		return EncodeBlueprintPropertyRef(ValueMemory, Out);
+	}
+	FString CodecId;
+	FString Code;
+	if (!EditorPropertyValueCodec::Inspect(Property, CodecId) || !EditorPropertyValueCodec::Encode(Property, ValueMemory, Out, Code))
+	{
+		return false;
+	}
+	Walk(Property, Out, false, true);
+	return true;
+}
+
 bool IsAuthoredProperty(const FProperty& Property, EValueOwner Owner)
 {
 	if (Property.HasAnyPropertyFlags(CPF_Transient | CPF_Deprecated | CPF_EditConst))
@@ -498,7 +602,7 @@ bool IsAuthoredProperty(const FProperty& Property, EValueOwner Owner)
 	{
 		return true;
 	}
-	if (!Property.HasAnyPropertyFlags(CPF_Edit))
+	if (!Property.HasAnyPropertyFlags(CPF_Edit) || IsNativePropertyRef(Property))
 	{
 		return false;
 	}
@@ -535,16 +639,12 @@ FValue EncodeValues(const UStruct& Type, const void* Memory, const void* Default
 		{
 			continue;
 		}
-		FString CodecId;
 		FValue Value;
-		FString Code;
-		if (!EditorPropertyValueCodec::Inspect(*Property, CodecId)
-			|| !EditorPropertyValueCodec::Encode(*Property, Property->ContainerPtrToValuePtr<void>(Memory), Value, Code))
+		if (!EncodeAuthored(*Property, Property->ContainerPtrToValuePtr<void>(Memory), Value))
 		{
 			OutUnsupported.Add(Property->GetAuthoredName());
 			continue;
 		}
-		Walk(*Property, Value, false, true);
 		if (DefaultMemory != nullptr && Property->Identical_InContainer(Memory, DefaultMemory, 0, PPF_None))
 		{
 			OutDefaults.Add(Property->GetAuthoredName());
@@ -565,11 +665,8 @@ TArray<FString> MarkedValues(const UStruct& Type, const void* Memory, const void
 		{
 			continue;
 		}
-		FString CodecId;
 		FValue Value;
-		FString Code;
-		if (!EditorPropertyValueCodec::Inspect(*Property, CodecId)
-			|| !EditorPropertyValueCodec::Encode(*Property, Property->ContainerPtrToValuePtr<void>(Memory), Value, Code))
+		if (!EncodeAuthored(*Property, Property->ContainerPtrToValuePtr<void>(Memory), Value))
 		{
 			Out.Add(Property->GetAuthoredName());
 		}
@@ -591,15 +688,11 @@ FValue EncodeChangedDefaults(const UStruct& Type, const void* Memory, const void
 		{
 			continue;
 		}
-		FString CodecId;
 		FValue Value;
-		FString Code;
-		if (!EditorPropertyValueCodec::Inspect(*Property, CodecId)
-			|| !EditorPropertyValueCodec::Encode(*Property, Property->ContainerPtrToValuePtr<void>(DefaultMemory), Value, Code))
+		if (!EncodeAuthored(*Property, Property->ContainerPtrToValuePtr<void>(DefaultMemory), Value))
 		{
 			continue;
 		}
-		Walk(*Property, Value, false, true);
 		Values.Add(Property->GetAuthoredName(), MoveTemp(Value));
 	}
 	return Values.Build();
@@ -641,6 +734,18 @@ bool DecodeValues(FReader& Reader, FStringView Key, const UStruct& Type, void* M
 			}
 			return ValuesReader.Fail(TEXT("StateTree.UnknownProperty"), FString::Printf(TEXT("%s has no property '%s'. Properties: %s."),
 				*Type.GetName(), *Name, Names.IsEmpty() ? TEXT("(none)") : *FString::Join(Names, TEXT(", "))), Name);
+		}
+		if (IsBlueprintPropertyRef(*Property))
+		{
+			if (!DecodeBlueprintPropertyRef(ValuesReader, Name, Values->Elements[Index], Property->ContainerPtrToValuePtr<void>(Memory), Owner))
+			{
+				return false;
+			}
+			if (OutWritten != nullptr)
+			{
+				OutWritten->Add(Property);
+			}
+			continue;
 		}
 		FString CodecId;
 		if (!EditorPropertyValueCodec::Inspect(*Property, CodecId))
